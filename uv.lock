@@ -582,11 +582,13 @@ name = "goodomics-server"
 version = "0.1.0"
 source = { editable = "packages/goodomics-server" }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "alembic" },
     { name = "fastapi" },
     { name = "goodomics" },
     { name = "mcp" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "sqlalchemy" },
     { name = "typer" },
@@ -620,6 +622,7 @@ sqlite = [
 requires-dist = [
     { name = "aiomysql", marker = "extra == 'all-db'", specifier = ">=0.3.2" },
     { name = "aiomysql", marker = "extra == 'mysql'", specifier = ">=0.3.2" },
+    { name = "aiosqlite", specifier = ">=0.19" },
     { name = "aiosqlite", marker = "extra == 'all-db'", specifier = ">=0.19" },
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.19" },
     { name = "alembic", specifier = ">=1.13" },
@@ -633,6 +636,7 @@ requires-dist = [
     { name = "pyright", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sqlalchemy", specifier = ">=2" },

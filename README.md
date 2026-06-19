@@ -3,7 +3,7 @@
 Goodomics is a Python monorepo with:
 
 - `goodomics`: a lightweight SDK + CLI for cohort-aware QC
-- `goodomics-server`: an optional FastAPI + MCP + database server
+- `goodomics-server`: an optional FastAPI + MCP + database + React dashboard server
 
 ## Workspace
 
@@ -20,8 +20,14 @@ uv run --package goodomics goodomics report ./examples/rnaseq --out /tmp/goodomi
 
 ```bash
 uv run --package goodomics-server goodomics-server --help
-GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db uv run --package goodomics-server goodomics-server serve
+GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db uv run --package goodomics-server goodomics-server serve --reload
+cd packages/goodomics-server/dashboard && npm run dev
+cd packages/goodomics-server/dashboard && npm run build
 ```
+
+### Docs
+
+Docs are authored as portable Astro-compatible MDX in `docs/`. The Astro marketing site should import or sync these files into a `docs` content collection and render them at `/docs/*`.
 
 ## Development
 

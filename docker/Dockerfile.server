@@ -1,8 +1,18 @@
-FROM python:3.11-slim
+FROM node:24-slim AS dashboard
+
+WORKDIR /app/packages/goodomics-server/dashboard
+COPY packages/goodomics-server/dashboard/package*.json ./
+RUN npm ci
+COPY packages/goodomics-server/dashboard/ ./
+RUN npm run build
+
+FROM python:3.11-slim AS server
 
 WORKDIR /app
 
 COPY . /app
+COPY --from=dashboard /app/packages/goodomics-server/src/goodomics_server/web/static \
+  /app/packages/goodomics-server/src/goodomics_server/web/static
 
 RUN pip install uv && uv sync --all-packages --package goodomics-server
 

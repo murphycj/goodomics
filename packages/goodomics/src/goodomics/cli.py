@@ -6,12 +6,13 @@ import typer
 from rich.console import Console
 
 from goodomics.ingest.scanner import build_ingest_request
-from goodomics.report.html import write_report
+from goodomics.report.html import load_report_template, write_report
 
 app = typer.Typer(help="Cohort-aware QC for omics pipelines.")
 console = Console()
 RESULTS_ARGUMENT = typer.Argument(..., help="Pipeline results directory.")
 REPORT_OUT_OPTION = typer.Option(Path("goodomics_report.html"), "--out", "-o")
+TEMPLATE_OPTION = typer.Option(None, "--template", help="YAML or JSON report template config.")
 PROJECT_OPTION = typer.Option(None, "--project")
 REPORT_OPTION = typer.Option(None, "--report")
 COHORT_OPTION = typer.Option(None, "--cohort")
@@ -22,10 +23,11 @@ RUN_ID_OPTION = typer.Option(None, "--run-id")
 def report(
     results: Path = RESULTS_ARGUMENT,
     out: Path = REPORT_OUT_OPTION,
+    template: Path | None = TEMPLATE_OPTION,
 ) -> None:
     """Generate a standalone Goodomics HTML report."""
     console.print(f"Scanning [bold]{results}[/bold]")
-    write_report(results, out)
+    write_report(results, out, template=load_report_template(template))
     console.print(f"Writing report to [bold]{out}[/bold]")
 
 
