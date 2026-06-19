@@ -1,0 +1,73 @@
+[project]
+name = "goodomics"
+version = "0.1.0"
+description = "Cohort-aware QC for omics pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "Goodomics contributors" }
+]
+dependencies = [
+  "pydantic>=2",
+  "typer>=0.12",
+  "rich>=13",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+reports = [
+  "jinja2>=3",
+  "plotly>=5",
+]
+tables = [
+  "pandas>=2",
+]
+db = [
+  "sqlalchemy>=2",
+  "alembic>=1.13",
+]
+sqlite = [
+  "sqlalchemy>=2",
+  "alembic>=1.13",
+  "aiosqlite>=0.19",
+]
+postgres = [
+  "sqlalchemy>=2",
+  "alembic>=1.13",
+  "psycopg[binary]>=3.2",
+]
+mysql = [
+  "sqlalchemy>=2",
+  "alembic>=1.13",
+  "aiomysql>=0.3.2",
+]
+all = [
+  "jinja2>=3",
+  "plotly>=5",
+  "pandas>=2",
+  "sqlalchemy>=2",
+  "alembic>=1.13",
+  "aiosqlite>=0.19",
+  "psycopg[binary]>=3.2",
+  "aiomysql>=0.3.2",
+]
+dev = [
+  "pytest",
+  "ruff",
+  "pyright",
+]
+
+[project.urls]
+Homepage = "https://goodomics.com"
+Repository = "https://github.com/murphycj/goodomics"
+
+[project.scripts]
+goodomics = "goodomics.cli:app"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/goodomics"]
