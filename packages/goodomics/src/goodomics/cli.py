@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 
 import typer
@@ -17,6 +19,11 @@ PROJECT_OPTION = typer.Option(None, "--project")
 REPORT_OPTION = typer.Option(None, "--report")
 COHORT_OPTION = typer.Option(None, "--cohort")
 RUN_ID_OPTION = typer.Option(None, "--run-id")
+DATABASE_URL_OPTION = typer.Option(
+    None,
+    "--database-url",
+    help="Database URL for local Goodomics state.",
+)
 
 
 @app.command()
@@ -49,6 +56,65 @@ def ingest(
     )
     console.print("Ingesting run")
     console.print(payload)
+
+
+@app.command()
+def init(database_url: str | None = DATABASE_URL_OPTION) -> None:
+    """Initialize a local Goodomics database."""
+    resolved_url = database_url or os.environ.get(
+        "GOODOMICS_DATABASE_URL",
+        "sqlite+aiosqlite:///./goodomics.db",
+    )
+    try:
+        from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+    except ImportError as exc:
+        raise typer.BadParameter(
+            "Database support is not installed. Install `goodomics` for the full "
+            "distribution or `goodomics-core[sqlite]` for local SQLite support."
+        ) from exc
+
+    try:
+        asyncio.run(SQLModelGoodomicsStore(resolved_url).ensure_schema())
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(
+            f"Missing database driver `{exc.name}`. Install `goodomics` for the full "
+            "distribution or add the matching `goodomics-core` database extra."
+        ) from exc
+    console.print(f"Initialized Goodomics database at [bold]{resolved_url}[/bold]")
+
+
+@app.command()
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = False,
+) -> None:
+    """Run the Goodomics API, MCP server, and dashboard."""
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise typer.BadParameter(
+            "Server support is not installed. Install `goodomics` for the full "
+            "distribution or `goodomics-core[server]` for the server extra."
+        ) from exc
+
+    uvicorn.run(
+        "goodomics.server.app:create_app",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=True,
+    )
+
+
+@app.command()
+def ui(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = False,
+) -> None:
+    """Run the local Goodomics dashboard."""
+    serve(host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

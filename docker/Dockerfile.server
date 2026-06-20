@@ -1,9 +1,9 @@
 FROM node:24-slim AS dashboard
 
-WORKDIR /app/packages/goodomics-server/dashboard
-COPY packages/goodomics-server/dashboard/package*.json ./
+WORKDIR /app/packages/goodomics/dashboard
+COPY packages/goodomics/dashboard/package*.json ./
 RUN npm ci
-COPY packages/goodomics-server/dashboard/ ./
+COPY packages/goodomics/dashboard/ ./
 RUN npm run build
 
 FROM python:3.11-slim AS server
@@ -11,11 +11,11 @@ FROM python:3.11-slim AS server
 WORKDIR /app
 
 COPY . /app
-COPY --from=dashboard /app/packages/goodomics-server/src/goodomics_server/web/static \
-  /app/packages/goodomics-server/src/goodomics_server/web/static
+COPY --from=dashboard /app/packages/goodomics/src/goodomics/server/web/static \
+  /app/packages/goodomics/src/goodomics/server/web/static
 
-RUN pip install uv && uv sync --all-packages --package goodomics-server
+RUN pip install uv && uv sync --frozen --package goodomics
 
 EXPOSE 8000
 
-CMD ["uv", "run", "--package", "goodomics-server", "goodomics-server", "serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--package", "goodomics", "goodomics", "serve", "--host", "0.0.0.0", "--port", "8000"]

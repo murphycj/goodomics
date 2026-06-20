@@ -2,27 +2,34 @@
 
 Goodomics is a Python monorepo with:
 
-- `goodomics`: a lightweight SDK + CLI for cohort-aware QC
-- `goodomics-server`: an optional FastAPI + MCP + database + React dashboard server
+- `goodomics`: the default full install for reports, ingestion, local storage, API,
+  MCP, and the dashboard
+- `goodomics-core`: the lightweight SDK/CLI package for pipeline and report-only use
 
 ## Workspace
 
 This repository uses a root `uv` workspace with package members under `packages/`.
 
-### Core package
+### Full package
 
 ```bash
 uv run --package goodomics goodomics --help
 uv run --package goodomics goodomics report ./examples/rnaseq --out /tmp/goodomics_report.html
 ```
 
-### Server package
+### Server and dashboard
 
 ```bash
-uv run --package goodomics-server goodomics-server --help
-GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db uv run --package goodomics-server goodomics-server serve --reload
-cd packages/goodomics-server/dashboard && npm run dev
-cd packages/goodomics-server/dashboard && npm run build
+GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db uv run --package goodomics goodomics serve --reload
+cd packages/goodomics/dashboard && npm run dev
+cd packages/goodomics/dashboard && npm run build
+```
+
+### Lightweight package
+
+```bash
+uv run --package goodomics-core goodomics --help
+uv run --package goodomics-core goodomics report ./examples/rnaseq --out /tmp/goodomics_report.html
 ```
 
 ### Docs
@@ -37,10 +44,10 @@ uv run pytest
 uv run ruff check .
 uv run pyright
 uv run python -m build packages/goodomics
-uv run python -m build packages/goodomics-server
+uv run python -m build packages/goodomics-full
 ```
 
 ## Licensing
 
 - `goodomics`: Apache-2.0
-- `goodomics-server`: FSL-1.1-Apache-2.0
+- `goodomics-core`: Apache-2.0

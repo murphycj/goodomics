@@ -6,10 +6,10 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from goodomics_server.api.routes import router
-from goodomics_server.db.session import create_store
-from goodomics_server.mcp.server import mcp
-from goodomics_server.settings import Settings
+from goodomics.server.api.routes import router
+from goodomics.server.db.session import create_store
+from goodomics.server.mcp.server import mcp
+from goodomics.server.settings import Settings
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
@@ -21,7 +21,7 @@ def _dashboard_setup_response() -> HTMLResponse:
         content=(
             "<h1>Dashboard assets not found</h1>"
             "<p>Build the dashboard assets first:</p>"
-            "<pre>cd packages/goodomics-server/dashboard && npm run build</pre>"
+            "<pre>cd packages/goodomics/dashboard && npm run build</pre>"
             "<p>For live dashboard development, set "
             "<code>GOODOMICS_DASHBOARD_DEV_URL</code> (for example "
             "<code>http://127.0.0.1:5173</code>) and run <code>npm run dev</code>.</p>"

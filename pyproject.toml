@@ -6,12 +6,14 @@ description = "Workspace for Goodomics packages"
 readme = "README.md"
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/goodomics", "packages/goodomics-full"]
 
 [dependency-groups]
 dev = [
   "build",
+  "httpx",
   "pytest",
+  "pytest-asyncio",
   "pytest-cov",
   "ruff",
   "pyright",
@@ -28,8 +30,12 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
-include = ["packages"]
+include = [
+  "packages/goodomics/src",
+  "packages/goodomics/tests",
+  "packages/goodomics-full/src",
+]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/goodomics/tests", "packages/goodomics-server/tests"]
+testpaths = ["packages/goodomics/tests"]
 addopts = "-q"

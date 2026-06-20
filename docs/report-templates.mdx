@@ -13,9 +13,9 @@ Dashboard edits are stored in `report_templates` and `report_template_revisions`
 - Generate standalone HTML with `goodomics report ./results --template rnaseq-qc.yaml --out report.html`.
 - Use the SDK with `from goodomics import run` for lightweight instrumentation.
 - Run local database mode with `GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db`.
-- Start the server with `uv run --package goodomics-server goodomics-server serve --reload`.
-- Run the dashboard dev server with `cd packages/goodomics-server/dashboard && npm run dev`.
-- Build the dashboard with `cd packages/goodomics-server/dashboard && npm run build`.
+- Start the server with `uv run --package goodomics goodomics serve --reload`.
+- Run the dashboard dev server with `cd packages/goodomics/dashboard && npm run dev`.
+- Build the dashboard with `cd packages/goodomics/dashboard && npm run build`.
 - Validate Python changes with `uv run pytest`, `uv run ruff check .`, and `uv run pyright`.
 - Render docs from the Astro marketing site with `npm run dev` and `npm run build`.
 

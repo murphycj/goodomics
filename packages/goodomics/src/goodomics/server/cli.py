@@ -19,7 +19,7 @@ def serve(
 ) -> None:
     """Run the Goodomics API server."""
     uvicorn.run(
-        "goodomics_server.app:create_app",
+        "goodomics.server.app:create_app",
         host=host,
         port=port,
         reload=reload,

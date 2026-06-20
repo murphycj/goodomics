@@ -1,78 +1,76 @@
+# pyright: reportArgumentType=false, reportAssignmentType=false, reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
-from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import (
-    JSON,
-    DateTime,
-    ForeignKey,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    delete,
-    insert,
-    select,
-)
+from sqlalchemy import JSON
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.sql.schema import Column
+from sqlmodel import Field, SQLModel, delete, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.schemas.models import Metric, Run, Sample
 
-metadata = MetaData()
 
-runs_table = Table(
-    "runs",
-    metadata,
-    Column("run_id", String(length=255), primary_key=True),
-    Column("project", String(length=255), nullable=True),
-    Column("assay", String(length=255), nullable=True),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-)
+class RunRecord(SQLModel, table=True):
+    __tablename__ = "runs"
 
-samples_table = Table(
-    "samples",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False),
-    Column("sample_id", String(length=255), nullable=False),
-    Column("metadata", JSON, nullable=False),
-)
-
-metrics_table = Table(
-    "metrics",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False),
-    Column("sample_id", String(length=255), nullable=True),
-    Column("name", String(length=255), nullable=False),
-    Column("value", JSON, nullable=False),
-    Column("unit", String(length=255), nullable=True),
-)
-
-artifacts_table = Table(
-    "artifacts",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False),
-    Column("path", String(length=2048), nullable=False),
-)
-
-qc_decisions_table = Table(
-    "qc_decisions",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False),
-    Column("status", String(length=32), nullable=False),
-    Column("reasons", JSON, nullable=False),
-    Column("cohort", String(length=255), nullable=True),
-    Column("report_version", String(length=255), nullable=True),
-    Column("policy_version", String(length=255), nullable=True),
-)
+    run_id: str = Field(primary_key=True, max_length=255)
+    project: str | None = Field(default=None, max_length=255)
+    assay: str | None = Field(default=None, max_length=255)
+    created_at: datetime
 
 
-class SQLAlchemyGoodomicsStore:
+class SampleRecord(SQLModel, table=True):
+    __tablename__ = "samples"
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(foreign_key="runs.run_id", max_length=255, index=True)
+    sample_id: str = Field(max_length=255)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class MetricRecord(SQLModel, table=True):
+    __tablename__ = "metrics"
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(foreign_key="runs.run_id", max_length=255, index=True)
+    sample_id: str | None = Field(default=None, max_length=255)
+    name: str = Field(max_length=255)
+    value: Any = Field(sa_type=JSON)
+    unit: str | None = Field(default=None, max_length=255)
+
+
+class ArtifactRecord(SQLModel, table=True):
+    __tablename__ = "artifacts"
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(foreign_key="runs.run_id", max_length=255, index=True)
+    path: str = Field(max_length=2048)
+
+
+class QCDecisionRecord(SQLModel, table=True):
+    __tablename__ = "qc_decisions"
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(foreign_key="runs.run_id", max_length=255, index=True)
+    status: str = Field(max_length=32)
+    reasons: list[str] = Field(default_factory=list, sa_type=JSON)
+    cohort: str | None = Field(default=None, max_length=255)
+    report_version: str | None = Field(default=None, max_length=255)
+    policy_version: str | None = Field(default=None, max_length=255)
+
+
+metadata = SQLModel.metadata
+runs_table = RunRecord.__table__
+samples_table = SampleRecord.__table__
+metrics_table = MetricRecord.__table__
+artifacts_table = ArtifactRecord.__table__
+qc_decisions_table = QCDecisionRecord.__table__
+
+
+class SQLModelGoodomicsStore:
     def __init__(self, database_url: str, *, engine: AsyncEngine | None = None) -> None:
         self.database_url = database_url
         self.engine = engine
@@ -84,26 +82,30 @@ class SQLAlchemyGoodomicsStore:
 
     async def ensure_schema(self) -> None:
         async with self._get_engine().begin() as connection:
-            await connection.run_sync(metadata.create_all)
+            await connection.run_sync(SQLModel.metadata.create_all)
 
     async def save_run(self, run: Run) -> None:
         await self.ensure_schema()
-        async with self._get_engine().begin() as connection:
-            await connection.execute(
-                delete(qc_decisions_table).where(qc_decisions_table.c.run_id == run.run_id)
+        async with AsyncSession(self._get_engine()) as session:
+            await session.exec(
+                delete(QCDecisionRecord).where(QCDecisionRecord.run_id == run.run_id)
             )
-            await connection.execute(
-                delete(artifacts_table).where(artifacts_table.c.run_id == run.run_id)
+            await session.exec(
+                delete(ArtifactRecord).where(ArtifactRecord.run_id == run.run_id)
             )
-            await connection.execute(
-                delete(metrics_table).where(metrics_table.c.run_id == run.run_id)
+            await session.exec(
+                delete(MetricRecord).where(MetricRecord.run_id == run.run_id)
             )
-            await connection.execute(
-                delete(samples_table).where(samples_table.c.run_id == run.run_id)
+            await session.exec(
+                delete(SampleRecord).where(SampleRecord.run_id == run.run_id)
             )
-            await connection.execute(delete(runs_table).where(runs_table.c.run_id == run.run_id))
-            await connection.execute(
-                insert(runs_table).values(
+
+            existing = await session.get(RunRecord, run.run_id)
+            if existing is not None:
+                await session.delete(existing)
+
+            session.add(
+                RunRecord(
                     run_id=run.run_id,
                     project=run.project,
                     assay=run.assay,
@@ -111,86 +113,81 @@ class SQLAlchemyGoodomicsStore:
                 )
             )
             if run.samples:
-                await connection.execute(
-                    insert(samples_table),
+                session.add_all(
                     [
-                        {
-                            "run_id": run.run_id,
-                            "sample_id": sample.sample_id,
-                            "metadata": dict(sample.metadata),
-                        }
+                        SampleRecord(
+                            run_id=run.run_id,
+                            sample_id=sample.sample_id,
+                            metadata_json=dict(sample.metadata),
+                        )
                         for sample in run.samples
-                    ],
+                    ]
                 )
             if run.metrics:
-                await connection.execute(
-                    insert(metrics_table),
+                session.add_all(
                     [
-                        {
-                            "run_id": run.run_id,
-                            "sample_id": metric.sample_id,
-                            "name": metric.name,
-                            "value": metric.value,
-                            "unit": metric.unit,
-                        }
+                        MetricRecord(
+                            run_id=run.run_id,
+                            sample_id=metric.sample_id,
+                            name=metric.name,
+                            value=metric.value,
+                            unit=metric.unit,
+                        )
                         for metric in run.metrics
-                    ],
+                    ]
                 )
+            await session.commit()
 
     async def get_run(self, run_id: str) -> Run | None:
         await self.ensure_schema()
-        async with self._get_engine().connect() as connection:
-            run_row = (
-                await connection.execute(select(runs_table).where(runs_table.c.run_id == run_id))
-            ).mappings().first()
+        async with AsyncSession(self._get_engine()) as session:
+            run_row = await session.get(RunRecord, run_id)
             if run_row is None:
                 return None
             sample_rows = (
-                await connection.execute(
-                    select(samples_table).where(samples_table.c.run_id == run_id)
+                await session.exec(
+                    select(SampleRecord).where(SampleRecord.run_id == run_id)
                 )
-            ).mappings().all()
+            ).all()
             metric_rows = (
-                await connection.execute(
-                    select(metrics_table).where(metrics_table.c.run_id == run_id)
+                await session.exec(
+                    select(MetricRecord).where(MetricRecord.run_id == run_id)
                 )
-            ).mappings().all()
-        run_data = dict(run_row)
+            ).all()
         return Run(
-            run_id=str(run_data["run_id"]),
-            project=_optional_str(run_data, "project"),
-            assay=_optional_str(run_data, "assay"),
-            created_at=run_data["created_at"],
-            samples=[_sample_from_row(dict(row)) for row in sample_rows],
-            metrics=[_metric_from_row(dict(row)) for row in metric_rows],
+            run_id=run_row.run_id,
+            project=run_row.project,
+            assay=run_row.assay,
+            created_at=run_row.created_at,
+            samples=[_sample_from_row(row) for row in sample_rows],
+            metrics=[_metric_from_row(row) for row in metric_rows],
         )
 
     async def list_metrics(self, run_id: str) -> list[Metric]:
         await self.ensure_schema()
-        async with self._get_engine().connect() as connection:
+        async with AsyncSession(self._get_engine()) as session:
             metric_rows = (
-                await connection.execute(
-                    select(metrics_table).where(metrics_table.c.run_id == run_id)
+                await session.exec(
+                    select(MetricRecord).where(MetricRecord.run_id == run_id)
                 )
-            ).mappings().all()
-        return [_metric_from_row(dict(row)) for row in metric_rows]
+            ).all()
+        return [_metric_from_row(row) for row in metric_rows]
 
 
-def _sample_from_row(row: Mapping[str, Any]) -> Sample:
-    metadata_value = row["metadata"]
+def _sample_from_row(row: SampleRecord) -> Sample:
+    metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
-    return Sample(sample_id=str(row["sample_id"]), metadata=metadata_dict)
+    return Sample(sample_id=row.sample_id, metadata=metadata_dict)
 
 
-def _metric_from_row(row: Mapping[str, Any]) -> Metric:
+def _metric_from_row(row: MetricRecord) -> Metric:
     return Metric(
-        sample_id=_optional_str(row, "sample_id"),
-        name=str(row["name"]),
-        value=row["value"],
-        unit=_optional_str(row, "unit"),
+        sample_id=row.sample_id,
+        name=row.name,
+        value=row.value,
+        unit=row.unit,
     )
 
 
-def _optional_str(row: Mapping[str, Any], key: str) -> str | None:
-    value = row[key]
-    return value if isinstance(value, str) else None
+# Backward-compatible alias for existing imports.
+SQLAlchemyGoodomicsStore = SQLModelGoodomicsStore

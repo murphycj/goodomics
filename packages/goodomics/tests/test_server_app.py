@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import goodomics.server.app as server_app
 import pytest
 from fastapi.testclient import TestClient
-from goodomics_server.app import create_app
-import goodomics_server.app as server_app
+from goodomics.server.app import create_app
 
 
 @pytest.fixture
