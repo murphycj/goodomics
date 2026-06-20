@@ -1,0 +1,27 @@
+[project]
+name = "goodomics"
+version = "0.1.0"
+description = "Cohort-aware QC, reporting, storage, dashboard, API, and MCP for omics pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "Goodomics contributors" }
+]
+dependencies = [
+  "goodomics-core[server,reports,tables,sqlite]==0.1.0",
+]
+
+[project.urls]
+Homepage = "https://goodomics.com"
+Repository = "https://github.com/murphycj/goodomics"
+
+[tool.uv.sources]
+goodomics-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/goodomics_full"]

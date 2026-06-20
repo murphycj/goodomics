@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+.vscode/
 
 # Distribution / packaging
 .Python
@@ -216,3 +217,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# JavaScript dependencies
+node_modules/
+
+# Built dashboard assets
+packages/goodomics-server/src/goodomics_server/web/static/*
+!packages/goodomics-server/src/goodomics_server/web/static/.gitkeep
+
+# TypeScript build info
+*.tsbuildinfo

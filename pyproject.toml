@@ -1,0 +1,41 @@
+[project]
+name = "goodomics-workspace"
+version = "0.0.0"
+requires-python = ">=3.11"
+description = "Workspace for Goodomics packages"
+readme = "README.md"
+
+[tool.uv.workspace]
+members = ["packages/goodomics", "packages/goodomics-full"]
+
+[dependency-groups]
+dev = [
+  "build",
+  "httpx",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "ruff",
+  "pyright",
+  "twine",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = [
+  "packages/goodomics/src",
+  "packages/goodomics/tests",
+  "packages/goodomics-full/src",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/goodomics/tests"]
+addopts = "-q"
