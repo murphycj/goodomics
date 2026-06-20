@@ -16,6 +16,15 @@ cd packages/goodomics-server/dashboard && npm run dev
 cd packages/goodomics-server/dashboard && npm run build
 ```
 
+If dashboard assets are not built yet, `/` returns a setup page. For a one-command API+dashboard
+development flow, run Vite and set:
+
+```bash
+export GOODOMICS_DASHBOARD_DEV_URL=http://127.0.0.1:5173
+```
+
+Then requests to `/` and other dashboard SPA paths will redirect to the Vite dev server.
+
 ## Database bootstrap
 
 The initial scaffold uses the core SQLAlchemy storage implementation to create tables with
