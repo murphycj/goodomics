@@ -227,3 +227,12 @@ packages/goodomics-server/src/goodomics_server/web/static/*
 
 # TypeScript build info
 *.tsbuildinfo
+
+.nextflow/
+.nextflow.*
+work/
+results/
+*.html
+*.txt
+!packages/**/*.html
+!packages/**/*.txt
