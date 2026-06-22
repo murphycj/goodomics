@@ -31,6 +31,12 @@ engine, giant data lake, or blackbox AI decision-maker. It sits after whatever
 system already runs the workflow and helps teams preserve, query, compare, and
 review the outputs of computational work.
 
+Goodomics should make omics outputs agent-ready and MCP-ready by default: the
+same run history, metrics, files, templates, and policies that humans browse in
+the UI should also be available as structured context that agents can query,
+summarize, compare, and draft against through MCP and API access.
+Deterministic storage and reviewable provenance remain the trust layer.
+
 QC/reporting is the first concrete wedge. The long-term product is broader:
 structured context for production workflows, exploratory analyses, tool
 benchmarks, parameter sweeps, metrics, files, provenance, cohorts, policies,
