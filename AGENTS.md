@@ -28,8 +28,10 @@ operational, and focused on how to work in the repo.
   `packages/goodomics/src/goodomics/`.
 - API, MCP, server settings, and dashboard serving live under
   `packages/goodomics/src/goodomics/server/`.
-- React/Vite dashboard source lives in `packages/goodomics/dashboard/` and builds
-  into `packages/goodomics/src/goodomics/server/web/static/`.
+- React/Vite dashboard source lives in `packages/goodomics/dashboard/`.
+- Built dashboard assets are generated into
+  `packages/goodomics/src/goodomics/server/web/static/`, ignored by git, and
+  included in Python wheels when present during package build.
 - Docs are portable MDX files in `docs/`.
 - Server Dockerfile lives at `docker/Dockerfile.server`.
 
@@ -60,6 +62,12 @@ npm --prefix packages/goodomics/dashboard ci
 npm --prefix packages/goodomics/dashboard run build
 ```
 
+Package build with dashboard assets:
+
+```bash
+scripts/build-python-packages.sh
+```
+
 Docker build check:
 
 ```bash
@@ -82,9 +90,9 @@ feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
 - Use concrete, technical, approachable copy. Avoid generic SaaS language.
 - Do not rewrite unrelated copy, assets, formatting, lockfiles, generated
   dashboard assets, or docs.
-- Built dashboard assets under `goodomics/server/web/static` are served by the
-  Python package. If dashboard source changes, rebuild and intentionally include
-  any resulting static asset updates.
+- Dashboard build output under `goodomics/server/web/static` is generated and
+  ignored by git. If dashboard source changes, run the dashboard build for
+  verification, but do not commit hashed static assets.
 
 ## Product Guardrails
 

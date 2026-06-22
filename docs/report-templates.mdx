@@ -12,7 +12,7 @@ Dashboard edits are stored in `report_templates` and `report_template_revisions`
 - Install and inspect the CLI with `uv run --package goodomics goodomics --help`.
 - Generate standalone HTML with `goodomics report ./results --template rnaseq-qc.yaml --out report.html`.
 - Use the SDK with `from goodomics import run` for lightweight instrumentation.
-- Run local database mode with `GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///./goodomics.db`.
+- Run local database mode with `GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///.goodomics/goodomics.db`.
 - Start the server with `uv run --package goodomics goodomics serve --reload`.
 - Run the dashboard dev server with `cd packages/goodomics/dashboard && npm run dev`.
 - Build the dashboard with `cd packages/goodomics/dashboard && npm run build`.

@@ -6,7 +6,10 @@ from pathlib import Path
 import goodomics.server.app as server_app
 import pytest
 from fastapi.testclient import TestClient
+from fixtures import write_multiqc_fixture
+from goodomics.ingest.multiqc import ingest_multiqc
 from goodomics.server.app import create_app
+from goodomics.server.settings import Settings
 
 
 @pytest.fixture
@@ -23,6 +26,116 @@ def test_health_endpoint_reports_ok(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_runs_endpoint_paginates_results(client: TestClient) -> None:
+    for index in range(5):
+        client.post(
+            "/api/v1/runs",
+            json={"run_id": f"run-{index}", "project": "pagination"},
+        )
+
+    response = client.get("/api/v1/runs?limit=2&offset=2")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 5
+    assert body["limit"] == 2
+    assert body["offset"] == 2
+    assert len(body["items"]) == 2
+
+
+def test_run_analytics_and_file_content_endpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+    artifact_root = tmp_path / "state" / "artifacts"
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results")
+    ingest_multiqc(
+        multiqc_dir,
+        run_id="run-1",
+        database_url=database_url,
+        analytics_path=analytics_path,
+        artifact_root=artifact_root,
+    )
+    monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
+    monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
+    monkeypatch.setenv("GOODOMICS_ARTIFACT_ROOT", str(artifact_root))
+
+    with TestClient(create_app()) as test_client:
+        metrics = test_client.get("/api/v1/runs/run-1/analytics/metrics")
+        payloads = test_client.get("/api/v1/runs/run-1/analytics/payloads")
+        files = test_client.get("/api/v1/runs/run-1/files").json()
+        report = next(file for file in files if file["kind"] == "multiqc_report")
+        tables = test_client.get("/api/v1/database/tables").json()
+        file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
+        content = test_client.get(f"/api/v1/files/{report['file_id']}/content")
+        content_by_id = test_client.get(f"/api/v1/files/{report['id']}/content")
+
+    assert metrics.status_code == 200
+    assert any(
+        item["metric_key"] == "general_stats.salmon_percent_mapped"
+        for item in metrics.json()
+    )
+    assert payloads.status_code == 200
+    assert any(item["payload_name"] == "salmon_plot" for item in payloads.json())
+    assert "file_id" in report
+    assert "artifact_id" not in report
+    assert any(table["name"] == "files" for table in tables)
+    assert all(table["name"] != "artifacts" for table in tables)
+    assert "file_id" in file_rows[0]
+    assert "artifact_id" not in file_rows[0]
+    assert content.status_code == 200
+    assert "MultiQC" in content.text
+    assert content_by_id.status_code == 200
+    assert "MultiQC" in content_by_id.text
+
+
+def test_database_summary_reports_control_and_analytics_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+    artifact_root = tmp_path / "state" / "artifacts"
+    ingest_multiqc(
+        write_multiqc_fixture(tmp_path / "results"),
+        run_id="run-1",
+        database_url=database_url,
+        analytics_path=analytics_path,
+        artifact_root=artifact_root,
+    )
+    monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
+    monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
+    monkeypatch.setenv("GOODOMICS_ARTIFACT_ROOT", str(artifact_root))
+
+    with TestClient(create_app()) as test_client:
+        response = test_client.get("/api/v1/database/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sqlite_size_bytes"] > 0
+    assert body["duckdb_size_bytes"] > 0
+    assert body["file_size_bytes"] > 0
+    assert body["total_runs"] == 1
+    assert body["total_scalar_metrics"] > 0
+    assert body["total_payloads"] > 0
+
+
+def test_missing_file_content_returns_404(client: TestClient) -> None:
+    response = client.get("/api/v1/files/missing/content")
+
+    assert response.status_code == 404
+
+
+def test_server_default_database_matches_cli_local_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GOODOMICS_DATABASE_URL", raising=False)
+
+    assert Settings().database_url == "sqlite+aiosqlite:///.goodomics/goodomics.db"
 
 
 def test_report_template_round_trips_to_yaml_and_json(client: TestClient) -> None:
