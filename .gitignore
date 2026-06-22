@@ -221,9 +221,21 @@ __marimo__/
 # JavaScript dependencies
 node_modules/
 
-# Built dashboard assets
-packages/goodomics-server/src/goodomics_server/web/static/*
-!packages/goodomics-server/src/goodomics_server/web/static/.gitkeep
-
 # TypeScript build info
 *.tsbuildinfo
+
+.nextflow/
+.nextflow.*
+work/
+results/
+*.html
+*.txt
+!packages/**/*.html
+!packages/**/*.txt
+*.db
+*.duckdb
+*.goodomics/
+
+# Built dashboard assets
+packages/goodomics/src/goodomics/server/web/static/*
+!packages/goodomics/src/goodomics/server/web/static/.gitkeep
