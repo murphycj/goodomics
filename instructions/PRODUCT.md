@@ -13,6 +13,14 @@ goodomics report ./results
 Start with a folder of pipeline outputs. Get a clear QC report. Add durable
 context over time.
 
+## Related Source Of Truth
+
+Use `instructions/DATA_MODEL.md` for detailed data model terminology, SQL
+control table direction, DuckDB analytical table direction, data profiles,
+processed samples, files, and MCP/data-query concepts. Keep this file focused
+on product direction, user-facing framing, adoption path, boundaries, and
+priorities.
+
 The broader product direction:
 
 > Goodomics is an open, deploy-anywhere context layer for omics computational
@@ -25,8 +33,14 @@ review the outputs of computational work.
 
 QC/reporting is the first concrete wedge. The long-term product is broader:
 structured context for production workflows, exploratory analyses, tool
-benchmarks, parameter sweeps, metrics, artifacts, provenance, cohorts, policies,
+benchmarks, parameter sweeps, metrics, files, provenance, cohorts, policies,
 references, reports, and decisions.
+
+The default storage path should stay boring and easy: SQLite for product and
+project metadata, DuckDB for local analytical tables, and ordinary filesystem
+paths or object storage for files. As teams grow, Goodomics should be able to swap
+SQLite for Postgres/MySQL and optionally add larger analytical backends, without
+changing the basic adoption path.
 
 ## Package Contract
 
@@ -73,7 +87,7 @@ Goodomics should help users answer questions like:
 - What did this workflow, analysis, or benchmark produce?
 - Does this sample look normal compared with previous samples?
 - Which metrics are outliers?
-- Which artifacts, logs, parameters, references, and tool versions were attached
+- Which files, logs, parameters, references, and tool versions were attached
   to this output?
 - What cohort, report template, or QC policy was active?
 - Can this review or decision be reproduced later?
@@ -109,9 +123,13 @@ goodomics ingest ./results --project my-project
 goodomics ui
 ```
 
-Uses SQLite by default and should also support Postgres for more durable local
-or team deployments. Runs locally, in Docker, on HPC, or in private
-infrastructure.
+Uses SQLite by default for the control plane and DuckDB for project-level
+analytics. The control plane stores users, projects, runs, samples, permissions,
+reports, cohorts, policies, and file metadata. Each project can have its own
+DuckDB analytical store for metrics and omics-shaped tables.
+
+Goodomics should also support Postgres or MySQL for more durable local or team
+deployments. Runs locally, in Docker, on HPC, or in private infrastructure.
 
 ### Pipeline Integration Mode
 
@@ -126,7 +144,7 @@ goodomics ingest ./results \
 ```
 
 Goodomics should be useful as a final workflow step that emits a report, stores
-metrics and artifacts, or sends run context to a local or remote Goodomics
+metrics and files, or sends run context to a local or remote Goodomics
 server.
 
 ### API, Dashboard, And MCP Mode
@@ -139,7 +157,7 @@ goodomics serve
 
 The server should expose:
 
-- API routes for runs, samples, metrics, artifacts, reports, report templates,
+- API routes for runs, samples, metrics, files, reports, report templates,
   cohorts, and QC policies
 - a dashboard for browsing and editing stored context
 - MCP access so agents can query structured run history instead of scraping
@@ -148,42 +166,61 @@ The server should expose:
 ### Future Hosted Mode
 
 Hosted or managed Goodomics may add auth, sharing, backups, scheduled imports,
-artifact storage, alerting, managed databases, and team workflows.
+file storage, alerting, managed databases, and team workflows.
 
 Keep this as a future direction. The open, deploy-anywhere Python package should
 remain the core product surface.
 
+## Storage And Data Model Direction
+
+Goodomics should keep a layered storage model: a control store for product
+metadata, a file store for original and derived evidence, and a project-level
+analytical store for queryable metrics and omics-shaped data. SQLite should
+remain the default control store, DuckDB should be the default local analytical
+store, and ordinary files or object storage should hold reports, logs, pipeline
+outputs, BAM/VCF files, notebooks, plots, and other evidence.
+
+The analytical model should be modular rather than one universal table. Generic
+metrics should remain the lowest-friction target for arbitrary QC and pipeline
+outputs, while richer data profiles can unlock typed storage, validation, query
+performance, UI behavior, and MCP/agent understanding for variants, expression,
+copy-number calls, genomic intervals, methylation, annotations, and future data
+families.
+
+The ingestion and analytical storage hierarchy should stay explicit:
+
+- Generic metrics are the default target for arbitrary QC and pipeline outputs.
+- Array, matrix, or blob-like payloads are supported when a result is naturally
+  consumed as one logical object.
+- Typed omics tables exist for data families with distinct shapes and access
+  patterns, such as variants, gene or transcript expression, genomic intervals,
+  copy-number alterations, methylation, and annotations.
+- Derived tables or views may duplicate and reshape canonical data for common
+  queries, such as sample-centric browsing, metric-centric comparison,
+  gene-centric lookup, or region-centric lookup.
+
+Use `instructions/DATA_MODEL.md` as the canonical reference for data model terms
+and table direction, including processed samples, data profiles, observations,
+SQL control tables, DuckDB analytical tables, and derived query layouts.
+
 ## Core Concepts
 
-Suggested object model:
-
-- Project
-- Assay
-- Run
-- Sample
-- Metric
-- Artifact
-- Cohort
-- Reference set
-- QC policy
-- Threshold rule
-- Report template
-- Report version
-- QC decision
-- Parser plugin
-- Agent or MCP tool
-- Interpretation note
-
-Suggested hierarchy:
+The user-facing model should stay approachable:
 
 ```text
-Project
-  Assay
-    Batch / sequencing run / workflow run
-      Sample
-        Library / lane / replicate / modality
-          Metrics / files / calls / artifacts
+Sample = what was processed.
+Run = what happened.
+Processed sample = that sample in that run.
+Data profile = what kind of data was produced.
+Observation = a value, call, or measurement inside that profile.
+Cohort or reference set = selected processed samples.
 ```
+
+Goodomics should expose bioinformatics-shaped concepts without becoming a LIMS.
+Projects, runs, samples, optional subjects, files, data profiles, cohorts,
+reference sets, QC policies, report templates, review decisions, parser plugins,
+and MCP tools should work together as one product surface. Detailed terminology
+and schema direction live in `instructions/DATA_MODEL.md`.
 
 Suggested bundle format:
 
@@ -203,12 +240,17 @@ goodomics_bundle/
 
 - Auto-discover common pipeline outputs
 - Ingest MultiQC output, Nextflow trace files, logs, custom CSV/TSV/JSON/YAML,
-  and common artifacts
+  and common output files
 - Generate standalone HTML reports
-- Store runs, samples, metrics, logs, reports, references, provenance, and
-  artifacts
+- Store runs, samples, metrics, logs, reports, references, provenance, and file
+  metadata while preserving pointers to original files
+- Store project-level analytical data in DuckDB by default
+- Support generic metrics, matrix-like payloads, and typed omics tables for
+  variants, expression, genomic intervals, CNAs, and related data families
+- Add derived analytical tables or views for common sample-, metric-, gene-, and
+  region-centric queries when useful
 - Create and export report templates for workflow integration
-- Create cohorts from previous runs and samples
+- Create cohorts from previous processed samples
 - Compare new runs against historical cohorts and trusted references
 - Define visual thresholds for metrics
 - Version QC policies, report templates, cohorts, references, and review
@@ -235,7 +277,7 @@ with go.run(name="rnaseq_batch_042", assay="bulk_rnaseq") as run:
     run.log_sample("S1", sample_type="tumor", batch="B42")
     run.log_metric("S1", "pct_mapped", 91.2, unit="percent")
     run.log_metric("S1", "duplication_rate", 38.4, unit="percent")
-    run.log_artifact("multiqc_report.html")
+    run.log_file("multiqc_report.html")
     run.evaluate(reference_set="last_100_passed_runs")
 ```
 
@@ -247,8 +289,21 @@ with go.run(name="variant_caller_benchmark_v12", assay="germline_wgs") as run:
     run.log_context(tool="new-caller", version="0.8.1", truth_set="GIAB-HG002")
     run.log_metric("HG002", "precision", 0.992)
     run.log_metric("HG002", "recall", 0.987)
-    run.log_artifact("benchmark_plots/pr_curve.png")
+    run.log_file("benchmark_plots/pr_curve.png")
 ```
+
+The API should also support progressively more structured data when users have
+well-shaped omics outputs:
+
+```python
+with go.run(name="rnaseq_batch_042", assay="bulk_rnaseq") as run:
+    run.log_table("counts", "counts.tsv", data_type="expression_matrix")
+    run.log_table("variants", "calls.vcf.gz", data_type="small_variants")
+```
+
+Generic metrics and files should remain the lowest-friction path. Typed
+data should add validation, better query performance, and richer UI behavior
+without becoming mandatory for basic reporting.
 
 ## Config Direction
 
@@ -265,6 +320,13 @@ inputs:
     path: trace.txt
   - type: custom_table
     path: qc/custom_metrics.tsv
+    data_type: generic_metrics
+  - type: table
+    path: quant/gene_counts.tsv
+    data_type: expression_matrix
+  - type: vcf
+    path: variants/calls.vcf.gz
+    data_type: small_variants
 
 metrics:
   pct_mapped:
