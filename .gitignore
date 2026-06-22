@@ -236,3 +236,6 @@ results/
 *.txt
 !packages/**/*.html
 !packages/**/*.txt
+*.db
+*.duckdb
+*.goodomics/
