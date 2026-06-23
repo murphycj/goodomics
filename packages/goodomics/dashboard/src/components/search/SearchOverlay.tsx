@@ -6,6 +6,7 @@ import type { SearchResult } from "../../api";
 import { searchSamples } from "../../api";
 import { cn, titleCase } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "../ui/dialog";
 
 const ENTITY_LABELS: Record<string, string> = {
   run: "Runs",
@@ -13,22 +14,26 @@ const ENTITY_LABELS: Record<string, string> = {
 };
 
 export function SearchOverlay({
+  defaultProjectId,
+  defaultProjectName,
   onClose,
   open,
-  projectId,
 }: {
+  defaultProjectId?: string;
+  defaultProjectName?: string;
   onClose: () => void;
   open: boolean;
-  projectId?: string;
 }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [projectScopeEnabled, setProjectScopeEnabled] = useState(false);
   const [selectedKind, setSelectedKind] = useState("all");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const effectiveProjectId = projectScopeEnabled ? defaultProjectId : undefined;
   const results = useQuery({
-    queryKey: ["search", projectId ?? "global", query],
-    queryFn: () => searchSamples({ projectId, query }),
+    queryKey: ["search", effectiveProjectId ?? "global", query],
+    queryFn: () => searchSamples({ projectId: effectiveProjectId, query }),
     enabled: open && query.trim().length > 0,
   });
   const items = results.data ?? [];
@@ -67,16 +72,18 @@ export function SearchOverlay({
 
   useEffect(() => {
     if (open) {
+      setProjectScopeEnabled(Boolean(defaultProjectId));
       setTimeout(() => inputRef.current?.focus(), 0);
     } else {
       setQuery("");
+      setProjectScopeEnabled(Boolean(defaultProjectId));
       setSelectedKind("all");
     }
-  }, [open]);
+  }, [defaultProjectId, open]);
 
   useEffect(() => {
     setActiveIndex(0);
-  }, [query, projectId, selectedKind]);
+  }, [effectiveProjectId, query, selectedKind]);
 
   useEffect(() => {
     if (selectedKind !== "all" && (countsByKind[selectedKind] ?? 0) === 0) {
@@ -109,19 +116,14 @@ export function SearchOverlay({
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/42 px-4 pt-[15vh] backdrop-blur-[4px]"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="h-[520px] w-[620px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-[#3a3a3a] bg-[#242424] text-[#f3f3f3] shadow-[0_28px_80px_rgb(0_0_0/0.30)]"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent
+        className="top-[15vh] h-[520px] w-[620px] max-w-[calc(100vw-2rem)] translate-y-0 gap-0 overflow-hidden border-[#3a3a3a] bg-[#242424] p-0 text-[#f3f3f3] shadow-[0_28px_80px_rgb(0_0_0/0.30)]"
+        overlayClassName="backdrop-blur-[4px]"
+        showCloseButton={false}
       >
+        <DialogTitle className="sr-only">Search runs or samples</DialogTitle>
         <div className="flex h-[58px] items-center gap-3 border-b border-[#353535] px-4">
           <Search size={18} className="shrink-0" />
           <input
@@ -148,20 +150,38 @@ export function SearchOverlay({
             placeholder="Search runs or samples..."
             value={query}
           />
-          <Button
-            className="border-[#444444] bg-[#2d2d2d] text-[#cfcfcf] hover:border-[#565656] hover:bg-[#333333] hover:text-white"
-            onClick={onClose}
-            size="icon"
-            type="button"
-            variant="outline"
-          >
-            <X size={16} />
-          </Button>
+          <DialogClose asChild>
+            <Button
+              aria-label="Close search"
+              className="border-[#444444] bg-[#2d2d2d] text-[#cfcfcf] hover:border-[#565656] hover:bg-[#333333] hover:text-white"
+              size="icon"
+              type="button"
+              variant="outline"
+            >
+              <X size={16} />
+            </Button>
+          </DialogClose>
         </div>
         <div
           className="flex h-[50px] items-center gap-2 overflow-x-auto border-b border-[#353535] px-3"
           aria-label="Search result filters"
         >
+          {defaultProjectId && (
+            <button
+              className={cn(
+                "h-[30px] shrink-0 cursor-pointer rounded-full border px-3 text-[0.82rem] transition-colors",
+                projectScopeEnabled
+                  ? "border-[#58c98a] bg-[#e8f8ef] text-[#102017]"
+                  : "border-[#434343] bg-[#2c2c2c] text-[#c5cbd3] hover:border-[#58c98a] hover:bg-[#e8f8ef] hover:text-[#102017]",
+              )}
+              onClick={() => setProjectScopeEnabled((value) => !value)}
+              type="button"
+            >
+              {projectScopeEnabled
+                ? defaultProjectName || "This project"
+                : "All projects"}
+            </button>
+          )}
           {query.trim() &&
             items.length > 0 &&
             filters.map((filter) => (
@@ -204,8 +224,8 @@ export function SearchOverlay({
             />
           ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

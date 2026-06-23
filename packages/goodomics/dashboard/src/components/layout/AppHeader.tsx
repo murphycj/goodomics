@@ -1,17 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { Activity, Search } from "lucide-react";
 import type { GoodomicsProject } from "../../api";
+import { useSearch } from "../search/SearchProvider";
 import { ProjectSwitcherMenu } from "./ProjectSwitcherMenu";
 
 export function AppHeader({
-  onOpenSearch,
   project,
   projects,
 }: {
-  onOpenSearch: () => void;
   project?: GoodomicsProject;
   projects: GoodomicsProject[];
 }) {
+  const { openSearch } = useSearch();
+
   return (
     <header className="fixed left-0 right-0 top-0 z-30 flex h-12 items-center justify-between gap-4 border-b border-[#2a2a2a] bg-[#111111] px-4 text-[#f6f6f6]">
       <div className="flex min-w-0 items-center gap-3">
@@ -30,7 +31,7 @@ export function AppHeader({
       </div>
       <button
         className="inline-flex h-[34px] min-w-[44px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-[#343434] bg-[#1b1b1b] px-3 py-0 text-[#a8adb4] transition-colors hover:border-[#4a4a4a] hover:text-white md:min-w-[260px]"
-        onClick={onOpenSearch}
+        onClick={openSearch}
         type="button"
       >
         <Search size={16} />

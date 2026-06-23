@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Search } from "lucide-react";
-import { useState } from "react";
 import { listProjects } from "../api";
 import { CreateProjectButton } from "../components/projects/CreateProjectModal";
-import { SearchOverlay } from "../components/search/SearchOverlay";
+import { useSearch } from "../components/search/SearchProvider";
 import {
   AsyncBlock,
   Table,
@@ -18,8 +17,8 @@ import {
 import { formatDate } from "../lib/utils";
 
 export function HomePage() {
-  const [searchOpen, setSearchOpen] = useState(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const { openSearch } = useSearch();
   const navigate = useNavigate();
 
   const openProject = (projectId: string) => {
@@ -34,7 +33,7 @@ export function HomePage() {
         </h1>
         <button
           className="mt-6 flex h-[54px] w-full max-w-[720px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#d8dee7] bg-white px-4 text-[#657082] shadow-[0_16px_42px_rgb(25_32_43/0.08)] transition-colors hover:border-[#c9d1dc] hover:text-[#1d2430]"
-          onClick={() => setSearchOpen(true)}
+          onClick={openSearch}
           type="button"
         >
           <Search size={18} />
@@ -108,7 +107,6 @@ export function HomePage() {
           )}
         </AsyncBlock>
       </section>
-      <SearchOverlay onClose={() => setSearchOpen(false)} open={searchOpen} />
     </div>
   );
 }
