@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { GoodomicsSample } from "../api";
 import { getProjectSample } from "../api";
 import { AsyncBlock, Detail, Page } from "../components/ui";
 
@@ -20,7 +21,7 @@ export function SampleDetailPage({
       subtitle="Sample identity and stored metadata."
     >
       <AsyncBlock query={sample} empty="Sample not found.">
-        {(data) => (
+        {(data: GoodomicsSample) => (
           <>
             <div className="details-grid">
               <Detail label="Sample ID" value={data.sample_id} />

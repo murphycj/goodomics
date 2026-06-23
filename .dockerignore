@@ -1,0 +1,11 @@
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+**/.DS_Store
+**/__pycache__
+**/node_modules
+packages/goodomics/dashboard/tsconfig.tsbuildinfo
+packages/goodomics/src/goodomics/server/web/static

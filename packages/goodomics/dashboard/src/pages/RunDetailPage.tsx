@@ -2,7 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ExternalLink } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { AnalyticsMetric, AnalyticsPayload, GoodomicsRun } from "../api";
+import type {
+  AnalyticsMetric,
+  AnalyticsPayload,
+  GoodomicsRun,
+  StoredFile,
+} from "../api";
 import {
   fileContentUrl,
   getProjectRun,
@@ -299,7 +304,7 @@ function FilesTable({
 }) {
   return (
     <AsyncBlock query={query} empty="No files were stored.">
-      {(files) => (
+      {(files: StoredFile[]) => (
         <div className="table-wrap">
           <table>
             <thead>
