@@ -25,6 +25,18 @@ export { Input } from "./input";
 export { Label } from "./label";
 export { Page } from "./Page";
 export { SearchBox } from "./SearchBox";
+export {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectScrollDownButton,
+  SelectScrollUpButton,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "./select";
 export { SummaryTile } from "./SummaryTile";
 export {
   Table,
