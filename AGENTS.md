@@ -94,6 +94,29 @@ feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
   ignored by git. If dashboard source changes, run the dashboard build for
   verification, but do not commit hashed static assets.
 
+## Frontend And Reporting Stack
+
+- Prefer shadcn/ui-style components with Tailwind, Radix primitives, and
+  `lucide-react` icons for dashboard UI. Keep components editable and consistent
+  with Goodomics' biotech/R&D product feel.
+- Use TanStack primitives for dashboard data workflows already in the app.
+  Reach for TanStack Table and virtualization for large tabular views.
+- Use Apache ECharts as the default report and dashboard charting engine.
+  Prefer a Goodomics-owned chart/spec layer that compiles to ECharts options
+  instead of exposing raw ECharts config as the primary user interface.
+- Default reports should be self-contained offline HTML artifacts: no CDN
+  dependencies, no required internet access, and no required external JS/CSS
+  assets for the normal `goodomics report` path.
+- YAML or JSON report templates should be the portable template format for the
+  CLI and dashboard. The dashboard report builder should edit the same model
+  rather than introducing a separate dashboard-only template format.
+- For large chart payloads, prefer summary views, downsampling, static SVG/PNG
+  output, or explicit opt-in expansion instead of embedding huge raw datasets in
+  report HTML.
+- Do not add Plotly, Observable, Vega-Lite, uPlot, or another charting stack
+  unless a concrete report/dashboard feature clearly requires it. If one is
+  added, keep it behind the Goodomics report/chart abstraction.
+
 ## Product Guardrails
 
 - Lead with a concrete adoption path: point Goodomics at outputs, generate a
