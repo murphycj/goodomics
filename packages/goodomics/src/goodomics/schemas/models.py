@@ -19,6 +19,7 @@ class MutableGoodomicsModel(BaseModel):
 
 class Project(GoodomicsModel):
     project_id: str
+    slug: str | None = None
     name: str
     description: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)

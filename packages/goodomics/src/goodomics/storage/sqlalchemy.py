@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from goodomics.schemas.models import Metric, Run, Sample
+from goodomics.projects import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_PROJECT_NAME,
+    DEFAULT_PROJECT_SLUG,
+    display_name_from_slug,
+    new_project_id,
+    validate_project_slug,
+)
+from goodomics.schemas.models import Metric, Project, Run, Sample
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,7 @@ class ProjectRecord(SQLModel, table=True):
     __tablename__ = "projects"
 
     project_id: str = Field(primary_key=True, max_length=255)
+    slug: str | None = Field(default=None, max_length=255, index=True)
     name: str = Field(max_length=255)
     description: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
@@ -226,9 +235,51 @@ class SQLModelGoodomicsStore:
     async def ensure_schema(self) -> None:
         async with self._get_engine().begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
+            await _ensure_compatible_schema(connection)
+
+    async def ensure_default_project(self) -> Project:
+        return await self.ensure_project(DEFAULT_PROJECT_SLUG)
+
+    async def ensure_project(self, reference: str | None = None) -> Project:
+        await self.ensure_schema()
+        raw_reference = (reference or DEFAULT_PROJECT_SLUG).strip()
+        slug = (
+            DEFAULT_PROJECT_SLUG
+            if raw_reference in {"", DEFAULT_PROJECT_ID, DEFAULT_PROJECT_SLUG}
+            else validate_project_slug(raw_reference)
+        )
+        async with AsyncSession(self._get_engine()) as session:
+            row = await _resolve_project_row(session, raw_reference)
+            if row is None and slug != raw_reference:
+                row = await _resolve_project_row(session, slug)
+            if row is None:
+                project_id = (
+                    DEFAULT_PROJECT_ID if slug == DEFAULT_PROJECT_SLUG else new_project_id()
+                )
+                row = ProjectRecord(
+                    project_id=project_id,
+                    slug=slug,
+                    name=(
+                        DEFAULT_PROJECT_NAME
+                        if slug == DEFAULT_PROJECT_SLUG
+                        else display_name_from_slug(slug)
+                    ),
+                    created_at=datetime.now(UTC),
+                )
+                session.add(row)
+                await session.commit()
+                await session.refresh(row)
+        return _project_from_row(row)
+
+    async def get_project(self, project_id: str) -> Project | None:
+        await self.ensure_schema()
+        async with AsyncSession(self._get_engine()) as session:
+            row = await session.get(ProjectRecord, project_id)
+        return _project_from_row(row) if row is not None else None
 
     async def save_run(self, run: Run) -> None:
         await self.ensure_schema()
+        project = await self.ensure_project(run.project_id or run.project)
         async with AsyncSession(self._get_engine()) as session:
             await session.exec(
                 delete(QCDecisionRecord).where(QCDecisionRecord.run_id == run.run_id)
@@ -244,8 +295,8 @@ class SQLModelGoodomicsStore:
             session.add(
                 RunRecord(
                     run_id=run.run_id,
-                    project_id=run.project_id or run.project,
-                    project=run.project,
+                    project_id=project.project_id,
+                    project=run.project or project.slug or project.name,
                     name=run.name,
                     run_kind=run.run_kind,
                     assay=run.assay,
@@ -265,7 +316,7 @@ class SQLModelGoodomicsStore:
                     if sample_row is None:
                         sample_row = SampleRecord(
                             sample_id=sample.sample_id,
-                            project_id=sample.project_id or run.project_id or run.project,
+                            project_id=sample.project_id or project.project_id,
                             subject_id=sample.subject_id,
                             external_id=sample.external_id,
                             sample_name=sample.sample_name,
@@ -275,8 +326,7 @@ class SQLModelGoodomicsStore:
                         sample_row.project_id = (
                             sample.project_id
                             or sample_row.project_id
-                            or run.project_id
-                            or run.project
+                            or project.project_id
                         )
                         sample_row.subject_id = sample.subject_id
                         sample_row.external_id = sample.external_id
@@ -287,7 +337,7 @@ class SQLModelGoodomicsStore:
                     [
                         RunSampleRecord(
                             run_sample_id=f"{run.run_id}:{sample.sample_id}",
-                            project_id=run.project_id or run.project,
+                            project_id=project.project_id,
                             run_id=run.run_id,
                             sample_id=sample.sample_id,
                             assay=run.assay,
@@ -396,6 +446,32 @@ def _sample_from_row(row: SampleRecord) -> Sample:
     )
 
 
+async def _resolve_project_row(
+    session: AsyncSession, reference: str | None
+) -> ProjectRecord | None:
+    if reference is None or reference == "":
+        reference = DEFAULT_PROJECT_SLUG
+    row = await session.get(ProjectRecord, reference)
+    if row is not None:
+        return row
+    return (
+        await session.exec(select(ProjectRecord).where(ProjectRecord.slug == reference))
+    ).first()
+
+
+def _project_from_row(row: ProjectRecord) -> Project:
+    metadata_value = row.metadata_json
+    metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
+    return Project(
+        project_id=row.project_id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        metadata_json=metadata_dict,
+        created_at=row.created_at,
+    )
+
+
 def _metric_from_row(row: MetricRecord) -> Metric:
     return Metric(
         sample_id=row.sample_id,
@@ -407,6 +483,19 @@ def _metric_from_row(row: MetricRecord) -> Metric:
 
 # Backward-compatible alias for existing imports.
 SQLAlchemyGoodomicsStore = SQLModelGoodomicsStore
+
+
+async def _ensure_compatible_schema(connection: Any) -> None:
+    dialect_name = connection.dialect.name
+    if dialect_name != "sqlite":
+        return
+    result = await connection.exec_driver_sql("PRAGMA table_info(projects)")
+    columns = {str(row[1]) for row in result.fetchall()}
+    if "slug" not in columns:
+        await connection.exec_driver_sql("ALTER TABLE projects ADD COLUMN slug VARCHAR(255)")
+        await connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_projects_slug ON projects (slug)"
+        )
 
 
 def _ensure_sqlite_parent(database_url: str) -> None:

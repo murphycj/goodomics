@@ -2,8 +2,12 @@ import { z } from 'zod';
 
 const runSchema = z.object({
   run_id: z.string(),
+  project_id: z.string().nullable(),
   project: z.string().nullable(),
+  name: z.string().nullable(),
+  run_kind: z.string().default('pipeline_run'),
   assay: z.string().nullable(),
+  status: z.string().default('unknown'),
   created_at: z.string(),
   samples: z.array(z.unknown()).default([]),
   metrics: z.array(z.unknown()).default([]),
@@ -14,6 +18,36 @@ const runPageSchema = z.object({
   total: z.number(),
   limit: z.number(),
   offset: z.number(),
+});
+
+const projectSchema = z.object({
+  project_id: z.string(),
+  slug: z.string().nullable(),
+  name: z.string(),
+  description: z.string().nullable(),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+  created_at: z.string(),
+  run_count: z.number(),
+  sample_count: z.number(),
+  latest_activity_at: z.string().nullable(),
+});
+
+const sampleSchema = z.object({
+  sample_id: z.string(),
+  project_id: z.string().nullable(),
+  subject_id: z.string().nullable(),
+  external_id: z.string().nullable(),
+  sample_name: z.string().nullable(),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+});
+
+const searchResultSchema = z.object({
+  kind: z.string(),
+  project_id: z.string().nullable(),
+  project_name: z.string().nullable(),
+  run_id: z.string().nullable().optional(),
+  sample_id: z.string().nullable().optional(),
+  sample_name: z.string().nullable(),
 });
 
 const fileSchema = z.object({
@@ -30,29 +64,26 @@ const fileSchema = z.object({
 
 const analyticsMetricSchema = z.object({
   run_id: z.string(),
-  sample_id: z.string().nullable(),
+  data_profile_key: z.string(),
+  run_sample_key: z.string().nullable(),
+  sample_key: z.string().nullable(),
   metric_key: z.string(),
-  tool: z.string().nullable(),
-  module: z.string().nullable(),
-  stage: z.string().nullable(),
-  value_num: z.number().nullable(),
-  value_text: z.string().nullable(),
-  unit: z.string().nullable(),
-  source_file: z.string(),
+  value: z.union([z.number(), z.string()]),
+  source_file_id: z.string().nullable(),
 });
 
 const analyticsPayloadSchema = z.object({
   run_id: z.string(),
-  sample_id: z.string().nullable(),
-  tool: z.string().nullable(),
-  module: z.string().nullable(),
+  data_profile_key: z.string(),
+  run_sample_key: z.string().nullable(),
   payload_name: z.string(),
   payload_kind: z.string(),
+  storage_format: z.string(),
   columns: z.array(z.string()),
   rows: z.array(z.record(z.string(), z.unknown())),
   row_count: z.number(),
-  source_file: z.string(),
-  source_hash: z.string(),
+  source_file_id: z.string().nullable(),
+  source_hash: z.string().nullable(),
 });
 
 const tableCountSchema = z.object({
@@ -83,6 +114,9 @@ const templateSchema = z.object({
 
 export type GoodomicsRun = z.infer<typeof runSchema>;
 export type RunsPage = z.infer<typeof runPageSchema>;
+export type GoodomicsProject = z.infer<typeof projectSchema>;
+export type GoodomicsSample = z.infer<typeof sampleSchema>;
+export type SearchResult = z.infer<typeof searchResultSchema>;
 export type StoredFile = z.infer<typeof fileSchema>;
 export type AnalyticsMetric = z.infer<typeof analyticsMetricSchema>;
 export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
@@ -97,7 +131,10 @@ async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   return schema.parse(await response.json());
 }
 
-export function fileContentUrl(file: Pick<StoredFile, 'file_id' | 'id'>) {
+export function fileContentUrl(file: Pick<StoredFile, 'file_id' | 'id'>, projectId?: string) {
+  if (projectId) {
+    return `/api/v1/projects/${encodeURIComponent(projectId)}/files/${file.id}/content`;
+  }
   return `/api/v1/files/${file.id}/content`;
 }
 
@@ -106,30 +143,94 @@ export function listRuns({ limit, offset }: { limit: number; offset: number }) {
   return getJson(`/api/v1/runs?${params.toString()}`, runPageSchema);
 }
 
-export function getRun(runId: string) {
-  return getJson(`/api/v1/runs/${encodeURIComponent(runId)}`, runSchema);
-}
-
-export function listRunFiles(runId: string) {
-  return getJson(`/api/v1/runs/${encodeURIComponent(runId)}/files`, z.array(fileSchema));
-}
-
-export function listRunMetrics(runId: string) {
+export function listProjectRuns({
+  limit,
+  offset,
+  projectId,
+}: {
+  limit: number;
+  offset: number;
+  projectId: string;
+}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return getJson(
-    `/api/v1/runs/${encodeURIComponent(runId)}/analytics/metrics`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/runs?${params.toString()}`,
+    runPageSchema,
+  );
+}
+
+export function listProjects() {
+  return getJson('/api/v1/projects', z.array(projectSchema));
+}
+
+export function getProject(projectId: string) {
+  return getJson(`/api/v1/projects/${encodeURIComponent(projectId)}`, projectSchema);
+}
+
+export function getProjectSample(projectId: string, sampleId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/samples/${encodeURIComponent(sampleId)}`,
+    sampleSchema,
+  );
+}
+
+export async function createProject(payload: {
+  name: string;
+  slug?: string;
+  description?: string;
+}) {
+  const response = await fetch('/api/v1/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return projectSchema.parse(await response.json());
+}
+
+export function searchSamples({ projectId, query }: { projectId?: string; query: string }) {
+  const params = new URLSearchParams({ q: query });
+  if (projectId) params.set('project_id', projectId);
+  return getJson(`/api/v1/search?${params.toString()}`, z.array(searchResultSchema));
+}
+
+export function getProjectRun(projectId: string, runId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
+    runSchema,
+  );
+}
+
+export function listProjectRunFiles(projectId: string, runId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/files`,
+    z.array(fileSchema),
+  );
+}
+
+export function listProjectRunMetrics(projectId: string, runId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/analytics/metrics`,
     z.array(analyticsMetricSchema),
   );
 }
 
-export function listRunPayloads(runId: string) {
+export function listProjectRunPayloads(projectId: string, runId: string) {
   return getJson(
-    `/api/v1/runs/${encodeURIComponent(runId)}/analytics/payloads`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/analytics/payloads`,
     z.array(analyticsPayloadSchema),
   );
 }
 
 export function getDatabaseSummary() {
   return getJson('/api/v1/database/summary', databaseSummarySchema);
+}
+
+export function getProjectDatabaseSummary(projectId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(`/api/v1/database/summary?${params.toString()}`, databaseSummarySchema);
 }
 
 export function listTemplates() {

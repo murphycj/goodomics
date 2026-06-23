@@ -10,7 +10,6 @@ from goodomics.server.api.routes import router
 from goodomics.server.db.session import create_store
 from goodomics.server.mcp.server import mcp
 from goodomics.server.settings import Settings
-from goodomics.storage.duckdb import DuckDBAnalyticsStore
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
@@ -53,7 +52,6 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
     app.state.store = create_store(settings.database_url)
-    app.state.analytics_store = DuckDBAnalyticsStore(settings.analytics_path)
     app.include_router(router)
     app.mount("/mcp", mcp.streamable_http_app(), name="mcp")
 

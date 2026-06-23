@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from fixtures import write_multiqc_fixture
 from goodomics.ingest.multiqc import ingest_multiqc
+from goodomics.projects import DEFAULT_PROJECT_ID, new_project_id
 from goodomics.server.app import create_app
 from goodomics.server.settings import Settings
 
@@ -26,6 +29,104 @@ def test_health_endpoint_reports_ok(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_project_id_generator_uses_prefixed_lowercase_ref() -> None:
+    assert re.fullmatch(r"prj_[a-z]{20}", new_project_id())
+
+
+def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> None:
+    default_projects = client.get("/api/v1/projects")
+    assert default_projects.status_code == 200
+    assert any(
+        project["project_id"] == DEFAULT_PROJECT_ID
+        for project in default_projects.json()
+    )
+
+    created = client.post(
+        "/api/v1/projects",
+        json={"name": "RNA-seq Core", "slug": "rnaseq-core"},
+    )
+    assert created.status_code == 201
+    project = created.json()
+    assert re.fullmatch(r"prj_[a-z]{20}", project["project_id"])
+    assert project["slug"] == "rnaseq-core"
+
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "rna-run",
+            "project": "rnaseq-core",
+            "samples": [{"sample_id": "S1", "sample_name": "Tumor RNA"}],
+        },
+    )
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "default-run",
+            "samples": [{"sample_id": "S2", "sample_name": "Control DNA"}],
+        },
+    )
+
+    scoped_runs = client.get(f"/api/v1/projects/{project['project_id']}/runs")
+    assert scoped_runs.status_code == 200
+    assert [run["run_id"] for run in scoped_runs.json()["items"]] == ["rna-run"]
+
+    scoped_run = client.get(f"/api/v1/projects/{project['project_id']}/runs/rna-run")
+    assert scoped_run.status_code == 200
+    assert scoped_run.json()["project_id"] == project["project_id"]
+
+    search = client.get(
+        "/api/v1/search",
+        params={"project_id": project["project_id"], "q": "rna"},
+    )
+    assert search.status_code == 200
+    search_body = search.json()
+    assert search_body[0]["kind"] == "run"
+    assert search_body[0]["run_id"] == "rna-run"
+    assert any(item["kind"] == "sample" and item["sample_id"] == "S1" for item in search_body)
+
+    sample = client.get(f"/api/v1/projects/{project['project_id']}/samples/S1")
+    assert sample.status_code == 200
+    assert sample.json()["sample_name"] == "Tumor RNA"
+
+    renamed = client.patch(
+        f"/api/v1/projects/{project['project_id']}",
+        json={"name": "RNA-seq Production Core"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["project_id"] == project["project_id"]
+    assert renamed.json()["name"] == "RNA-seq Production Core"
+
+
+def test_projects_endpoint_upgrades_legacy_project_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE projects (
+                project_id VARCHAR(255) NOT NULL,
+                name VARCHAR(255) NOT NULL,
+                description VARCHAR,
+                metadata_json JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY (project_id)
+            )
+            """
+        )
+
+    monkeypatch.setenv("GOODOMICS_DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+    with TestClient(create_app()) as test_client:
+        response = test_client.get("/api/v1/projects")
+
+    assert response.status_code == 200
+    assert any(project["project_id"] == DEFAULT_PROJECT_ID for project in response.json())
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
+    assert "slug" in columns
 
 
 def test_runs_endpoint_paginates_results(client: TestClient) -> None:
@@ -68,11 +169,23 @@ def test_run_analytics_and_file_content_endpoints(
         metrics = test_client.get("/api/v1/runs/run-1/analytics/metrics")
         payloads = test_client.get("/api/v1/runs/run-1/analytics/payloads")
         files = test_client.get("/api/v1/runs/run-1/files").json()
+        project_metrics = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/analytics/metrics"
+        )
+        project_payloads = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/analytics/payloads"
+        )
+        project_files = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/files"
+        )
         report = next(file for file in files if file["kind"] == "multiqc_report")
         tables = test_client.get("/api/v1/database/tables").json()
         file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
         content = test_client.get(f"/api/v1/files/{report['file_id']}/content")
         content_by_id = test_client.get(f"/api/v1/files/{report['id']}/content")
+        project_content = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['id']}/content"
+        )
 
     assert metrics.status_code == 200
     assert any(
@@ -81,6 +194,12 @@ def test_run_analytics_and_file_content_endpoints(
     )
     assert payloads.status_code == 200
     assert any(item["payload_name"] == "salmon_plot" for item in payloads.json())
+    assert project_metrics.status_code == 200
+    assert project_metrics.json() == metrics.json()
+    assert project_payloads.status_code == 200
+    assert project_payloads.json() == payloads.json()
+    assert project_files.status_code == 200
+    assert project_files.json() == files
     assert "file_id" in report
     assert "artifact_id" not in report
     assert any(table["name"] == "files" for table in tables)
@@ -91,6 +210,8 @@ def test_run_analytics_and_file_content_endpoints(
     assert "MultiQC" in content.text
     assert content_by_id.status_code == 200
     assert "MultiQC" in content_by_id.text
+    assert project_content.status_code == 200
+    assert "MultiQC" in project_content.text
 
 
 def test_database_summary_reports_control_and_analytics_counts(

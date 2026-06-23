@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fixtures import write_multiqc_fixture
 from goodomics.cli import app
+from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -22,6 +25,25 @@ def test_report_command_writes_html(tmp_path: Path) -> None:
     assert "Writing report" in result.stdout
     assert output_path.exists()
     assert "Goodomics Report" in output_path.read_text(encoding="utf-8")
+
+
+def test_init_creates_default_project(tmp_path: Path) -> None:
+    database_path = tmp_path / "state" / "goodomics.db"
+
+    result = runner.invoke(
+        app,
+        ["init", "--database-url", f"sqlite+aiosqlite:///{database_path}"],
+    )
+
+    assert result.exit_code == 0
+    project = asyncio.run(
+        SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}").get_project(
+            DEFAULT_PROJECT_ID
+        )
+    )
+    assert project is not None
+    assert project.slug == "default"
+    assert project.name == "Default Project"
 
 
 def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
