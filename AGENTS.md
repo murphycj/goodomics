@@ -22,7 +22,8 @@ operational, and focused on how to work in the repo.
 - `packages/goodomics` builds the `goodomics-core` distribution and provides the
   canonical `goodomics` Python import package.
 - `packages/goodomics-full` builds the default `goodomics` distribution, which
-  depends on `goodomics-core` with the full server/report/dashboard extras.
+  depends on `goodomics-core` with the `server`, `reports`, `tables`, and `sqlite`
+  extras.
 - Main CLI entry point: `packages/goodomics/src/goodomics/cli.py`.
 - Core schemas, parsing, ingest, reporting, SDK, and storage live under
   `packages/goodomics/src/goodomics/`.
