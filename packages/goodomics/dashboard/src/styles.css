@@ -29,10 +29,6 @@
   --destructive-foreground: 255 255 255;
   --ring: #21a66a;
   --radius: 0.5rem;
-  --sidebar-bg: #151515;
-  --sidebar-border: #2a2a2a;
-  --header-bg: #111111;
-  --header-border: #2a2a2a;
 }
 
 * {

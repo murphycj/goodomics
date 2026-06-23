@@ -83,7 +83,7 @@ function ProjectSwitcher({
           {projects.map((project) => (
             <DropdownMenuItem key={project.project_id} asChild>
               <Link
-                className="no-underline text-[#1d2430]"
+                className="text-[#1d2430] no-underline"
                 to="/project/$projectId"
                 params={{ projectId: project.project_id }}
               >
