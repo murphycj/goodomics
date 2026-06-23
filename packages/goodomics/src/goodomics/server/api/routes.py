@@ -32,12 +32,12 @@ from goodomics.server.db.models import (
 )
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    ArtifactRecord,
     MetricRecord,
     ProjectRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
+    StoredFileRecord,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -88,6 +88,8 @@ class ProjectRead(SQLModel):
     created_at: datetime
     run_count: int = 0
     sample_count: int = 0
+    file_count: int = 0
+    file_size_bytes: int = 0
     latest_activity_at: datetime | None = None
 
 
@@ -250,7 +252,7 @@ EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     "runs": (RunRecord, "run_id", {"project", "assay"}),
     "samples": (SampleRecord, "sample_id", {"sample_name", "metadata_json"}),
     "metrics": (MetricRecord, "id", {"sample_id", "name", "value", "unit"}),
-    "files": (ArtifactRecord, "id", {"kind", "path", "source_path"}),
+    "files": (StoredFileRecord, "id", {"kind", "path", "source_path"}),
     "report_templates": (
         ReportTemplateRecord,
         "template_id",
@@ -619,9 +621,9 @@ async def _list_run_files(run_id: str, request: Request) -> list[FileRead]:
     await _ensure_schema(request)
     async with _session(request) as session:
         rows = (
-            await session.exec(select(ArtifactRecord).where(ArtifactRecord.run_id == run_id))
+            await session.exec(select(StoredFileRecord).where(StoredFileRecord.run_id == run_id))
         ).all()
-    return [_file_from_artifact(row) for row in rows]
+    return [_file_from_stored_file(row) for row in rows]
 
 
 @router.get(
@@ -659,11 +661,11 @@ async def _file_content_response(
     async with _session(request) as session:
         row = (
             await session.exec(
-                select(ArtifactRecord).where(ArtifactRecord.artifact_id == file_id)
+                select(StoredFileRecord).where(StoredFileRecord.file_id == file_id)
             )
         ).first()
         if row is None and file_id.isdigit():
-            row = await session.get(ArtifactRecord, int(file_id))
+            row = await session.get(StoredFileRecord, int(file_id))
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
     if project_id is not None:
@@ -878,7 +880,7 @@ async def get_database_summary(
     return DatabaseSummaryRead(
         sqlite_size_bytes=_sqlite_size_bytes(request.app.state.settings.database_url),
         duckdb_size_bytes=analytics_store.database_size_bytes(),
-        file_size_bytes=_path_size(Path(request.app.state.settings.artifact_root)),
+        file_size_bytes=_path_size(Path(request.app.state.settings.file_root)),
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
         total_scalar_metrics=analytics_counts.get("sample_metric_numeric", 0)
@@ -989,11 +991,34 @@ async def _project_read(
             select(func.max(RunRecord.created_at)).where(RunRecord.project_id == row.project_id)
         )
     ).one()
+    file_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(StoredFileRecord)
+                .join(RunRecord, cast(Any, StoredFileRecord.run_id) == RunRecord.run_id)
+                .where(RunRecord.project_id == row.project_id)
+            )
+        ).one()
+    )
+    file_size_bytes = int(
+        (
+            await session.exec(
+                select(func.coalesce(func.sum(StoredFileRecord.size_bytes), 0))
+                .select_from(StoredFileRecord)
+                .join(RunRecord, cast(Any, StoredFileRecord.run_id) == RunRecord.run_id)
+                .where(RunRecord.project_id == row.project_id)
+            )
+        ).one()
+        or 0
+    )
     data = row.model_dump()
     return ProjectRead(
         **data,
         run_count=run_count,
         sample_count=sample_count,
+        file_count=file_count,
+        file_size_bytes=file_size_bytes,
         latest_activity_at=latest_activity_at,
     )
 
@@ -1247,15 +1272,11 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     data = row.model_dump(mode="json")
     if isinstance(row, SampleRecord) and "metadata_json" in data:
         data["metadata"] = data.pop("metadata_json")
-    if isinstance(row, ArtifactRecord) and "artifact_id" in data:
-        data["file_id"] = data.pop("artifact_id")
     return data
 
 
-def _file_from_artifact(row: ArtifactRecord) -> FileRead:
-    data = row.model_dump()
-    data["file_id"] = data.pop("artifact_id", None)
-    return FileRead.model_validate(data)
+def _file_from_stored_file(row: StoredFileRecord) -> FileRead:
+    return FileRead.model_validate(row.model_dump())
 
 
 def _model_field_name(model: type[SQLModel], requested_name: str) -> str:

@@ -104,7 +104,7 @@ feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
 - Use Apache ECharts as the default report and dashboard charting engine.
   Prefer a Goodomics-owned chart/spec layer that compiles to ECharts options
   instead of exposing raw ECharts config as the primary user interface.
-- Default reports should be self-contained offline HTML artifacts: no CDN
+- Default reports should be self-contained offline HTML files: no CDN
   dependencies, no required internet access, and no required external JS/CSS
   assets for the normal `goodomics report` path.
 - YAML or JSON report templates should be the portable template format for the

@@ -129,7 +129,7 @@ The report renderer should support YAML or JSON templates that can be passed to
 the CLI and later edited in the dashboard. Goodomics should compile those
 templates into a normalized report model, load local input data, and render the
 same model to HTML and, when requested, PDF. PDF export may use a local browser
-renderer against the self-contained HTML artifact; it should not require server
+renderer against the self-contained HTML file; it should not require server
 hosting or internet access.
 
 Apache ECharts should be the default charting engine for reports and dashboard

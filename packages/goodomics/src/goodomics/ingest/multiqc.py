@@ -21,8 +21,8 @@ from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import Run, Sample
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    ArtifactMetadata,
     SQLModelGoodomicsStore,
+    StoredFileMetadata,
 )
 
 
@@ -32,10 +32,10 @@ class MultiQCIngestResult:
     outputs_found: int
     metrics_ingested: int
     payloads_ingested: int
-    artifacts_stored: int
+    files_stored: int
     database_url: str
     analytics_path: Path
-    artifact_root: Path
+    file_root: Path
 
 
 def default_run_id(results: Path) -> str:
@@ -65,7 +65,7 @@ def ingest_multiqc_runs(
     assay: str | None = None,
     database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
     analytics_path: Path | None = None,
-    artifact_root: Path = Path(".goodomics/artifacts"),
+    file_root: Path = Path(".goodomics/files"),
 ) -> list[MultiQCIngestResult]:
     outputs = discover_multiqc_outputs(results)
     if not outputs:
@@ -79,7 +79,7 @@ def ingest_multiqc_runs(
                 assay=assay,
                 database_url=database_url,
                 analytics_path=analytics_path,
-                artifact_root=artifact_root,
+                file_root=file_root,
             )
         ]
 
@@ -95,7 +95,7 @@ def ingest_multiqc_runs(
             assay=assay,
             database_url=database_url,
             analytics_path=analytics_path,
-            artifact_root=artifact_root,
+            file_root=file_root,
         )
         for group_run_id, grouped in sorted(grouped_outputs.items())
     ]
@@ -109,7 +109,7 @@ def ingest_multiqc(
     assay: str | None = None,
     database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
     analytics_path: Path | None = None,
-    artifact_root: Path = Path(".goodomics/artifacts"),
+    file_root: Path = Path(".goodomics/files"),
 ) -> MultiQCIngestResult:
     resolved_run_id = run_id or default_run_id(results)
     parsed = parse_multiqc_bundle(results, run_id=resolved_run_id)
@@ -123,7 +123,7 @@ def ingest_multiqc(
         assay=assay,
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
 
@@ -135,7 +135,7 @@ def _ingest_multiqc_outputs(
     assay: str | None,
     database_url: str,
     analytics_path: Path | None,
-    artifact_root: Path,
+    file_root: Path,
 ) -> MultiQCIngestResult:
     parsed = parse_multiqc_outputs(outputs, run_id=run_id)
     return _save_multiqc_parse_result(
@@ -145,7 +145,7 @@ def _ingest_multiqc_outputs(
         assay=assay,
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
 
@@ -157,10 +157,10 @@ def _save_multiqc_parse_result(
     assay: str | None,
     database_url: str,
     analytics_path: Path | None,
-    artifact_root: Path,
+    file_root: Path,
 ) -> MultiQCIngestResult:
     _ensure_sqlite_parent(database_url)
-    artifact_root.mkdir(parents=True, exist_ok=True)
+    file_root.mkdir(parents=True, exist_ok=True)
 
     control_store = SQLModelGoodomicsStore(database_url)
     project_record = asyncio.run(control_store.ensure_project(project))
@@ -179,12 +179,12 @@ def _save_multiqc_parse_result(
     )
     asyncio.run(control_store.save_run(run))
 
-    artifacts = _copy_multiqc_artifacts(
+    files = _copy_multiqc_files(
         parsed.outputs,
         run_id=run_id,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
-    asyncio.run(_replace_artifacts(database_url, run_id, artifacts))
+    asyncio.run(_replace_files(database_url, run_id, files))
 
     DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
         run_id,
@@ -196,25 +196,25 @@ def _save_multiqc_parse_result(
         outputs_found=len(parsed.outputs),
         metrics_ingested=len(parsed.metrics),
         payloads_ingested=len(parsed.payloads),
-        artifacts_stored=len(artifacts),
+        files_stored=len(files),
         database_url=database_url,
         analytics_path=resolved_analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
 
-def _copy_multiqc_artifacts(
+def _copy_multiqc_files(
     outputs: list[MultiQCOutput],
     *,
     run_id: str,
-    artifact_root: Path,
-) -> list[ArtifactMetadata]:
-    destination_root = artifact_root / run_id / "multiqc"
+    file_root: Path,
+) -> list[StoredFileMetadata]:
+    destination_root = file_root / run_id / "multiqc"
     if destination_root.exists():
         shutil.rmtree(destination_root)
     destination_root.mkdir(parents=True, exist_ok=True)
 
-    artifacts: list[ArtifactMetadata] = []
+    files: list[StoredFileMetadata] = []
     for index, output in enumerate(outputs, start=1):
         output_destination = (
             destination_root if len(outputs) == 1 else destination_root / str(index)
@@ -223,8 +223,8 @@ def _copy_multiqc_artifacts(
         if output.report_html is not None:
             report_destination = output_destination / output.report_html.name
             shutil.copy2(output.report_html, report_destination)
-            artifacts.append(
-                _artifact_metadata(
+            files.append(
+                _file_metadata(
                     run_id=run_id,
                     kind="multiqc_report",
                     source=output.report_html,
@@ -234,26 +234,26 @@ def _copy_multiqc_artifacts(
 
         data_destination = output_destination / output.data_dir.name
         shutil.copytree(output.data_dir, data_destination)
-        artifacts.append(
-            _artifact_metadata(
+        files.append(
+            _file_metadata(
                 run_id=run_id,
                 kind="multiqc_data",
                 source=output.data_dir,
                 destination=data_destination,
             )
         )
-    return artifacts
+    return files
 
 
-def _artifact_metadata(
+def _file_metadata(
     *,
     run_id: str,
     kind: str,
     source: Path,
     destination: Path,
-) -> ArtifactMetadata:
-    return ArtifactMetadata(
-        artifact_id=f"{run_id}:{kind}:{destination.name}",
+) -> StoredFileMetadata:
+    return StoredFileMetadata(
+        file_id=f"{run_id}:{kind}:{destination.name}",
         run_id=run_id,
         kind=kind,
         path=str(destination),
@@ -296,16 +296,16 @@ def _ensure_sqlite_parent(database_url: str) -> None:
             db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-async def _replace_artifacts(
+async def _replace_files(
     database_url: str,
     run_id: str,
-    artifacts: list[ArtifactMetadata],
+    files: list[StoredFileMetadata],
 ) -> None:
     engine = create_async_engine(database_url)
     try:
         store = SQLModelGoodomicsStore(database_url, engine=engine)
         await store.ensure_schema()
         async with AsyncSession(engine) as session:
-            await store.replace_artifacts(session, run_id, artifacts)
+            await store.replace_files(session, run_id, files)
     finally:
         await engine.dispose()

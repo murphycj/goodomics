@@ -9,7 +9,7 @@ from goodomics.ingest.multiqc import ingest_multiqc, ingest_multiqc_runs
 from goodomics.parsers.multiqc import discover_multiqc_outputs, parse_multiqc_bundle
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import ArtifactRecord, SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore, StoredFileRecord
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -85,11 +85,11 @@ def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(tmp_path: Pat
     )
 
 
-def test_ingest_multiqc_creates_control_analytics_and_artifacts(tmp_path: Path) -> None:
+def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> None:
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = ingest_multiqc(
         multiqc_dir,
@@ -98,29 +98,30 @@ def test_ingest_multiqc_creates_control_analytics_and_artifacts(tmp_path: Path) 
         assay="rnaseq",
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
     assert result.metrics_ingested > 0
+    assert result.files_stored == 2
     assert analytics_path.exists()
-    assert (artifact_root / "run-1" / "multiqc").exists()
+    assert (file_root / "run-1" / "multiqc").exists()
 
     control_store = SQLModelGoodomicsStore(database_url)
     run = asyncio.run(control_store.get_run("run-1"))
     assert run is not None
     assert run.project == "demo"
 
-    async def load_artifacts() -> list[ArtifactRecord]:
+    async def load_files() -> list[StoredFileRecord]:
         async with AsyncSession(control_store._get_engine()) as session:
             rows = (
                 await session.exec(
-                    select(ArtifactRecord).where(ArtifactRecord.run_id == "run-1")
+                    select(StoredFileRecord).where(StoredFileRecord.run_id == "run-1")
                 )
             ).all()
         return list(rows)
 
-    artifacts = asyncio.run(load_artifacts())
-    assert {artifact.kind for artifact in artifacts} == {"multiqc_data", "multiqc_report"}
+    files = asyncio.run(load_files())
+    assert {file.kind for file in files} == {"multiqc_data", "multiqc_report"}
 
 
 def test_ingest_multiqc_defaults_to_project_analytics_path(
@@ -129,13 +130,13 @@ def test_ingest_multiqc_defaults_to_project_analytics_path(
     monkeypatch.chdir(tmp_path)
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = ingest_multiqc(
         multiqc_dir,
         run_id="run-default-project",
         database_url=database_url,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
     expected_path = Path(".goodomics") / "projects" / DEFAULT_PROJECT_ID / "analytics.duckdb"
@@ -150,14 +151,14 @@ def test_ingest_multiqc_project_slug_uses_generated_project_ref(
     monkeypatch.chdir(tmp_path)
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = ingest_multiqc(
         multiqc_dir,
         run_id="run-project-slug",
         project="rnaseq-core",
         database_url=database_url,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
     control_store = SQLModelGoodomicsStore(database_url)
@@ -185,7 +186,7 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     )
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     results = ingest_multiqc_runs(
         results_dir,
@@ -193,7 +194,7 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
         assay="rnaseq",
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
     run_ids = {result.run_id for result in results}
@@ -209,5 +210,5 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     assert "RAP1_IAA_30M_REP1" in {sample.sample_id for sample in rap1_run.samples}
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP1")
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("RAP1_IAA_30M_REP1")
-    assert (artifact_root / "WT_REP1" / "multiqc").exists()
-    assert (artifact_root / "RAP1_IAA_30M_REP1" / "multiqc").exists()
+    assert (file_root / "WT_REP1" / "multiqc").exists()
+    assert (file_root / "RAP1_IAA_30M_REP1" / "multiqc").exists()

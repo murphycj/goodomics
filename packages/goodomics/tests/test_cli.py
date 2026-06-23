@@ -50,7 +50,7 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
     results_dir = write_multiqc_fixture(tmp_path / "results")
     database_path = tmp_path / "state" / "goodomics.db"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = runner.invoke(
         app,
@@ -67,8 +67,8 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
             f"sqlite+aiosqlite:///{database_path}",
             "--analytics-path",
             str(analytics_path),
-            "--artifact-root",
-            str(artifact_root),
+            "--file-root",
+            str(file_root),
         ],
     )
 
@@ -77,7 +77,7 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
     assert "run-1" in result.stdout
     assert database_path.exists()
     assert analytics_path.exists()
-    assert (artifact_root / "run-1" / "multiqc").exists()
+    assert (file_root / "run-1" / "multiqc").exists()
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("run-1")
 
 
@@ -85,7 +85,7 @@ def test_default_path_argument_ingests_multiqc_output(tmp_path: Path) -> None:
     results_dir = write_multiqc_fixture(tmp_path / "results")
     database_path = tmp_path / "state" / "goodomics.db"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = runner.invoke(
         app,
@@ -97,8 +97,8 @@ def test_default_path_argument_ingests_multiqc_output(tmp_path: Path) -> None:
             f"sqlite+aiosqlite:///{database_path}",
             "--analytics-path",
             str(analytics_path),
-            "--artifact-root",
-            str(artifact_root),
+            "--file-root",
+            str(file_root),
         ],
     )
 
@@ -124,7 +124,7 @@ def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -
     )
     database_path = tmp_path / "state" / "goodomics.db"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
 
     result = runner.invoke(
         app,
@@ -134,8 +134,8 @@ def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -
             f"sqlite+aiosqlite:///{database_path}",
             "--analytics-path",
             str(analytics_path),
-            "--artifact-root",
-            str(artifact_root),
+            "--file-root",
+            str(file_root),
         ],
     )
 
@@ -145,5 +145,5 @@ def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -
     assert "WT_REP2" in result.stdout
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP1")
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP2")
-    assert (artifact_root / "WT_REP1" / "multiqc").exists()
-    assert (artifact_root / "WT_REP2" / "multiqc").exists()
+    assert (file_root / "WT_REP1" / "multiqc").exists()
+    assert (file_root / "WT_REP2" / "multiqc").exists()

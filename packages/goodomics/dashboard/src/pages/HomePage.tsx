@@ -15,7 +15,7 @@ import {
   TableRow,
   TableWrap,
 } from "../components/ui";
-import { formatDate } from "../lib/utils";
+import { formatBytes, formatDate } from "../lib/utils";
 
 export function HomePage() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
@@ -67,6 +67,8 @@ export function HomePage() {
                     <TableHead>Project ID</TableHead>
                     <TableHead className="text-right">Runs</TableHead>
                     <TableHead className="text-right">Samples</TableHead>
+                    <TableHead className="text-right">Files</TableHead>
+                    <TableHead className="text-right">Size</TableHead>
                     <TableHead>Latest activity</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -100,6 +102,12 @@ export function HomePage() {
                       </TableCell>
                       <TableCell className="text-right">
                         {project.sample_count.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {project.file_count.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatBytes(project.file_size_bytes)}
                       </TableCell>
                       <TableCell>
                         {project.latest_activity_at
