@@ -5,7 +5,16 @@ import { useState } from "react";
 import { listProjects } from "../api";
 import { CreateProjectButton } from "../components/projects/CreateProjectModal";
 import { SearchOverlay } from "../components/search/SearchOverlay";
-import { AsyncBlock } from "../components/ui";
+import {
+  AsyncBlock,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableWrap,
+} from "../components/ui";
 import { formatDate } from "../lib/utils";
 
 export function HomePage() {
@@ -18,24 +27,30 @@ export function HomePage() {
   };
 
   return (
-    <div className="home-page">
-      <section className="home-intro">
-        <h1>Goodomics</h1>
+    <div className="grid gap-8">
+      <section className="pb-3 pt-6 md:pt-13">
+        <h1 className="m-0 text-[clamp(2.25rem,5vw,4.2rem)] font-semibold leading-none tracking-normal text-[#1d2430]">
+          Goodomics
+        </h1>
         <button
-          className="home-search"
+          className="mt-6 flex h-[54px] w-full max-w-[720px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#d8dee7] bg-white px-4 text-[#657082] shadow-[0_16px_42px_rgb(25_32_43/0.08)] transition-colors hover:border-[#c9d1dc] hover:text-[#1d2430]"
           onClick={() => setSearchOpen(true)}
           type="button"
         >
           <Search size={18} />
-          <span>Search samples across the database...</span>
-          <kbd>⌘K</kbd>
+          <span className="flex-1 text-left">Search samples across the database...</span>
+          <kbd className="rounded border border-[#dce3eb] bg-[#f8fafb] px-1.5 py-0.5 text-[0.72rem] text-[#657082]">
+            ⌘K
+          </kbd>
         </button>
       </section>
-      <section className="home-projects">
-        <div className="section-heading">
+      <section className="min-w-0">
+        <div className="mb-3 flex min-w-0 flex-col items-start justify-between gap-4 md:flex-row md:items-center">
           <div>
-            <h2>Projects</h2>
-            <p>
+            <h2 className="m-0 text-[1.5rem] font-semibold tracking-normal text-[#1d2430]">
+              Projects
+            </h2>
+            <p className="mb-0 mt-1 text-[#657082]">
               Choose a workspace to inspect runs, samples, reports, and data
               stores.
             </p>
@@ -44,22 +59,22 @@ export function HomePage() {
         </div>
         <AsyncBlock query={projects} empty="No projects have been created yet.">
           {(items) => (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Slug</th>
-                    <th>Project ref</th>
-                    <th className="right">Runs</th>
-                    <th className="right">Samples</th>
-                    <th>Latest activity</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <TableWrap>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Slug</TableHead>
+                    <TableHead>Project ref</TableHead>
+                    <TableHead className="text-right">Runs</TableHead>
+                    <TableHead className="text-right">Samples</TableHead>
+                    <TableHead>Latest activity</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {items.map((project) => (
-                    <tr
-                      className="clickable-row"
+                    <TableRow
+                      className="cursor-pointer hover:!bg-[#eef8f2] focus-visible:outline-2 focus-visible:outline-[#8edeb4] focus-visible:outline-offset-[-2px]"
                       key={project.project_id}
                       onClick={() => openProject(project.project_id)}
                       onKeyDown={(event) => {
@@ -71,25 +86,25 @@ export function HomePage() {
                       role="link"
                       tabIndex={0}
                     >
-                      <td className="strong">{project.name}</td>
-                      <td>{project.slug ?? "—"}</td>
-                      <td className="mono">{project.project_id}</td>
-                      <td className="right">
+                      <TableCell className="font-bold">{project.name}</TableCell>
+                      <TableCell>{project.slug ?? "—"}</TableCell>
+                      <TableCell className="font-mono">{project.project_id}</TableCell>
+                      <TableCell className="text-right">
                         {project.run_count.toLocaleString()}
-                      </td>
-                      <td className="right">
+                      </TableCell>
+                      <TableCell className="text-right">
                         {project.sample_count.toLocaleString()}
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         {project.latest_activity_at
                           ? formatDate(project.latest_activity_at)
                           : "—"}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+              </Table>
+            </TableWrap>
           )}
         </AsyncBlock>
       </section>

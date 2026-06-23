@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SidebarMode } from "../../lib/types";
-import { titleCase } from "../../lib/utils";
+import { cn, titleCase } from "../../lib/utils";
 
 const navItems = [
   { suffix: "", label: "Runs", icon: FlaskConical },
@@ -35,12 +35,7 @@ export function Sidebar({
 }) {
   const [controlOpen, setControlOpen] = useState(false);
   const controlRef = useRef<HTMLDivElement | null>(null);
-  const sidebarClass =
-    mode === "expanded"
-      ? "expanded"
-      : mode === "collapsed"
-        ? "collapsed"
-        : "hover";
+  const isExpanded = mode === "expanded";
 
   useEffect(() => {
     if (!controlOpen) return;
@@ -54,40 +49,69 @@ export function Sidebar({
   }, [controlOpen]);
 
   return (
-    <aside className={`sidebar ${sidebarClass}`}>
-      <nav className="sidebar-nav">
+    <aside
+      className={cn(
+        "fixed bottom-0 left-0 top-12 z-20 hidden flex-col justify-between overflow-visible border-r border-[#2a2a2a] bg-[#151515] p-[0.65rem_0.45rem] text-[#f6f6f6] transition-[width] duration-[170ms] md:flex",
+        isExpanded ? "w-[232px]" : "w-[58px]",
+        mode === "hover" && "group/sidebar hover:w-[232px]",
+      )}
+    >
+      <nav className="grid gap-1">
         {navItems.map(({ suffix, label, icon: Icon }) => {
           const to = `/project/${projectId}${suffix}`;
           return (
             <Link
-              activeProps={{ className: "active" }}
-              className="sidebar-link"
+              activeProps={{ className: "!bg-[#2b2b2b] !text-white" }}
+              className="flex h-[38px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-[7px] border-0 bg-transparent px-[0.72rem] text-[#b7bdc5] no-underline transition-colors hover:bg-[#2b2b2b] hover:text-white"
               key={label}
               title={label}
               to={to}
             >
-              <Icon size={18} />
-              <span>{label}</span>
+              <Icon className="h-[18px] w-[18px] shrink-0" />
+              <span
+                className={cn(
+                  "max-w-0 overflow-hidden text-ellipsis whitespace-nowrap opacity-0 transition-[opacity,max-width] duration-[170ms]",
+                  isExpanded && "max-w-[150px] opacity-100",
+                  mode === "hover" &&
+                    "group-hover/sidebar:max-w-[150px] group-hover/sidebar:opacity-100",
+                )}
+              >
+                {label}
+              </span>
             </Link>
           );
         })}
       </nav>
-      <div className="sidebar-footer" ref={controlRef}>
+      <div className="relative" ref={controlRef}>
         <button
-          className="sidebar-control-button"
+          className="flex h-[38px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-[7px] border-0 bg-transparent px-[0.72rem] text-[#b7bdc5] transition-colors hover:bg-[#2b2b2b] hover:text-white"
           onClick={() => setControlOpen((value) => !value)}
           title="Sidebar control"
           type="button"
         >
-          <PanelLeft size={18} />
-          <span>Sidebar</span>
+          <PanelLeft className="h-[18px] w-[18px] shrink-0" />
+          <span
+            className={cn(
+              "max-w-0 overflow-hidden text-ellipsis whitespace-nowrap opacity-0 transition-[opacity,max-width] duration-[170ms]",
+              isExpanded && "max-w-[150px] opacity-100",
+              mode === "hover" &&
+                "group-hover/sidebar:max-w-[150px] group-hover/sidebar:opacity-100",
+            )}
+          >
+            Sidebar
+          </span>
         </button>
         {controlOpen && (
-          <div className="sidebar-control-menu">
-            <div className="sidebar-control-title">Sidebar control</div>
+          <div className="absolute bottom-11 left-[0.2rem] z-40 grid min-w-[230px] gap-1 rounded-lg border border-[#3a3a3a] bg-[#232323] p-[0.55rem] text-[#d6d6d6] shadow-[0_18px_42px_rgb(0_0_0/0.28)]">
+            <div className="border-b border-[#383838] px-2 pb-2.5 pt-1 text-[0.85rem] text-[#9f9f9f]">
+              Sidebar control
+            </div>
             {(["expanded", "collapsed", "hover"] as const).map((item) => (
               <button
-                className={mode === item ? "selected" : ""}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-md border-0 bg-transparent px-2 py-2 text-left text-[#d6d6d6] transition-colors hover:bg-[#303030] hover:text-white",
+                  mode === item && "bg-[#303030] text-white",
+                )}
                 key={item}
                 onClick={() => {
                   onModeChange(item);

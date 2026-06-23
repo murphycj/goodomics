@@ -1,16 +1,17 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import tailwindcss from "@tailwindcss/vite";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
-    outDir: '../src/goodomics/server/web/static',
+    outDir: "../src/goodomics/server/web/static",
     emptyOutDir: true,
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/mcp': 'http://127.0.0.1:8000',
+      "/api": "http://127.0.0.1:8000",
+      "/mcp": "http://127.0.0.1:8000",
     },
   },
 });

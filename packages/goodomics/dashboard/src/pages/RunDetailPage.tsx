@@ -17,10 +17,26 @@ import {
 } from "../api";
 import {
   AsyncBlock,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
   Detail,
   Page,
   SearchBox,
   SummaryTile,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableWrap,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "../components/ui";
 import type { QueryState } from "../lib/types";
 import {
@@ -31,6 +47,8 @@ import {
   titleCase,
 } from "../lib/utils";
 
+const tabs = ["overview", "metrics", "payloads", "files"] as const;
+
 export function RunDetailPage({
   projectId,
   runId,
@@ -38,9 +56,6 @@ export function RunDetailPage({
   projectId: string;
   runId: string;
 }) {
-  const [tab, setTab] = useState<"overview" | "metrics" | "payloads" | "files">(
-    "overview",
-  );
   const run = useQuery({
     queryKey: ["project-run", projectId, runId],
     queryFn: () => getProjectRun(projectId, runId),
@@ -63,52 +78,53 @@ export function RunDetailPage({
       title={run.data?.name ?? runId}
       subtitle="Run-level metrics, payloads, and stored files."
     >
-      <div className="topbar">
-        <Link
-          className="button secondary"
-          to="/project/$projectId"
-          params={{ projectId }}
-        >
-          Back to runs
-        </Link>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Button asChild variant="secondary">
+          <Link to="/project/$projectId" params={{ projectId }}>
+            Back to runs
+          </Link>
+        </Button>
         {files.data
           ?.filter((file) => file.kind === "multiqc_report")
           .slice(0, 1)
           .map((file) => (
-            <a
-              className="button"
-              href={fileContentUrl(file, projectId)}
-              key={file.id}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <ExternalLink size={16} /> MultiQC report
-            </a>
+            <Button asChild key={file.id}>
+              <a
+                href={fileContentUrl(file, projectId)}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink size={16} /> MultiQC report
+              </a>
+            </Button>
           ))}
       </div>
-      <div className="tabs">
-        {(["overview", "metrics", "payloads", "files"] as const).map((item) => (
-          <button
-            className={tab === item ? "active" : ""}
-            key={item}
-            onClick={() => setTab(item)}
-            type="button"
-          >
-            {titleCase(item)}
-          </button>
-        ))}
-      </div>
-      {tab === "overview" && (
-        <RunOverview
-          files={files.data?.length ?? 0}
-          metrics={metrics.data?.length ?? 0}
-          payloads={payloads.data?.length ?? 0}
-          query={run}
-        />
-      )}
-      {tab === "metrics" && <MetricsTable query={metrics} />}
-      {tab === "payloads" && <PayloadsTable query={payloads} />}
-      {tab === "files" && <FilesTable projectId={projectId} query={files} />}
+      <Tabs className="w-full" defaultValue="overview">
+        <TabsList>
+          {tabs.map((item) => (
+            <TabsTrigger key={item} value={item}>
+              {titleCase(item)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <TabsContent value="overview">
+          <RunOverview
+            files={files.data?.length ?? 0}
+            metrics={metrics.data?.length ?? 0}
+            payloads={payloads.data?.length ?? 0}
+            query={run}
+          />
+        </TabsContent>
+        <TabsContent value="metrics">
+          <MetricsTable query={metrics} />
+        </TabsContent>
+        <TabsContent value="payloads">
+          <PayloadsTable query={payloads} />
+        </TabsContent>
+        <TabsContent value="files">
+          <FilesTable projectId={projectId} query={files} />
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }
@@ -128,13 +144,13 @@ function RunOverview({
     <AsyncBlock query={query} empty="Run not found.">
       {(run) => (
         <>
-          <div className="summary-grid">
+          <div className="my-4 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
             <SummaryTile label="Scalar metrics" value={metrics} />
             <SummaryTile label="Payloads" value={payloads} />
             <SummaryTile label="Files" value={files} />
             <SummaryTile label="Samples" value={run.samples.length} />
           </div>
-          <div className="details-grid">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
             <Detail label="Run ID" value={run.run_id} />
             <Detail label="Project ref" value={run.project_id ?? "—"} />
             <Detail label="Assay" value={run.assay ?? "—"} />
@@ -177,32 +193,32 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
             onChange={setSearch}
             placeholder="Filter metrics"
           />
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Sample</th>
-                  <th>Profile</th>
-                  <th>Metric</th>
-                  <th>Value</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
+          <TableWrap>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Sample</TableHead>
+                  <TableHead>Profile</TableHead>
+                  <TableHead>Metric</TableHead>
+                  <TableHead>Value</TableHead>
+                  <TableHead>Source</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {metrics.map((metric, index) => (
-                  <tr
-                    key={`${metric.metric_key}-${metric.run_sample_key}-${index}`}
-                  >
-                    <td>{metric.sample_key ?? metric.run_sample_key ?? "—"}</td>
-                    <td>{metric.data_profile_key}</td>
-                    <td className="mono">{metric.metric_key}</td>
-                    <td>{formatMetricValue(metric)}</td>
-                    <td className="truncate">{metric.source_file_id ?? "—"}</td>
-                  </tr>
+                  <TableRow key={`${metric.metric_key}-${metric.run_sample_key}-${index}`}>
+                    <TableCell>{metric.sample_key ?? metric.run_sample_key ?? "—"}</TableCell>
+                    <TableCell>{metric.data_profile_key}</TableCell>
+                    <TableCell className="font-mono">{metric.metric_key}</TableCell>
+                    <TableCell>{formatMetricValue(metric)}</TableCell>
+                    <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
+                      {metric.source_file_id ?? "—"}
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </TableWrap>
         </>
       )}
     </AsyncBlock>
@@ -215,42 +231,36 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
     <AsyncBlock query={query} empty="No table payloads were stored.">
       {(payloads) => (
         <>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Payload</th>
-                  <th>Sample</th>
-                  <th>Profile</th>
-                  <th>Rows</th>
-                  <th>Columns</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
+          <TableWrap>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Payload</TableHead>
+                  <TableHead>Sample</TableHead>
+                  <TableHead>Profile</TableHead>
+                  <TableHead>Rows</TableHead>
+                  <TableHead>Columns</TableHead>
+                  <TableHead className="text-right" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {payloads.map((payload) => (
-                  <tr
-                    key={`${payload.payload_name}-${payload.run_sample_key ?? "run"}`}
-                  >
-                    <td className="strong">{payload.payload_name}</td>
-                    <td>{payload.run_sample_key ?? "—"}</td>
-                    <td>{payload.data_profile_key}</td>
-                    <td>{payload.row_count}</td>
-                    <td>{payload.columns.length}</td>
-                    <td className="right">
-                      <button
-                        className="button compact"
-                        onClick={() => setSelected(payload)}
-                        type="button"
-                      >
+                  <TableRow key={`${payload.payload_name}-${payload.run_sample_key ?? "run"}`}>
+                    <TableCell className="font-bold">{payload.payload_name}</TableCell>
+                    <TableCell>{payload.run_sample_key ?? "—"}</TableCell>
+                    <TableCell>{payload.data_profile_key}</TableCell>
+                    <TableCell>{payload.row_count}</TableCell>
+                    <TableCell>{payload.columns.length}</TableCell>
+                    <TableCell className="text-right">
+                      <Button onClick={() => setSelected(payload)} size="sm" type="button">
                         View
-                      </button>
-                    </td>
-                  </tr>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </TableWrap>
           {selected && <PayloadPreview payload={selected} />}
         </>
       )}
@@ -261,37 +271,38 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
   return (
-    <section className="panel">
-      <div className="panel-heading">
+    <Card>
+      <CardHeader>
         <div>
-          <h3>{payload.payload_name}</h3>
-          <p>
-            {payload.row_count} rows from{" "}
-            {payload.source_file_id ?? "stored payload"}
+          <CardTitle>{payload.payload_name}</CardTitle>
+          <p className="mb-0 mt-1 text-[#657082]">
+            {payload.row_count} rows from {payload.source_file_id ?? "stored payload"}
           </p>
         </div>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {payload.columns.slice(0, 40).map((column) => (
-                <th key={column}>{column}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={index}>
+      </CardHeader>
+      <CardContent>
+        <TableWrap className="mt-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
                 {payload.columns.slice(0, 40).map((column) => (
-                  <td key={column}>{String(row[column] ?? "—")}</td>
+                  <TableHead key={column}>{column}</TableHead>
                 ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row, index) => (
+                <TableRow key={index}>
+                  {payload.columns.slice(0, 40).map((column) => (
+                    <TableCell key={column}>{String(row[column] ?? "—")}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableWrap>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -305,41 +316,46 @@ function FilesTable({
   return (
     <AsyncBlock query={query} empty="No files were stored.">
       {(files: StoredFile[]) => (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Kind</th>
-                <th>Path</th>
-                <th>Size</th>
-                <th>SHA256</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
+        <TableWrap>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Kind</TableHead>
+                <TableHead>Path</TableHead>
+                <TableHead>Size</TableHead>
+                <TableHead>SHA256</TableHead>
+                <TableHead className="text-right" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {files.map((file) => (
-                <tr key={file.id}>
-                  <td>{file.kind}</td>
-                  <td className="truncate">{shortPath(file.path)}</td>
-                  <td>{formatBytes(file.size_bytes ?? 0)}</td>
-                  <td className="mono">{file.sha256?.slice(0, 12) ?? "—"}</td>
-                  <td className="right">
+                <TableRow key={file.id}>
+                  <TableCell>{file.kind}</TableCell>
+                  <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
+                    {shortPath(file.path)}
+                  </TableCell>
+                  <TableCell>{formatBytes(file.size_bytes ?? 0)}</TableCell>
+                  <TableCell className="font-mono">
+                    {file.sha256?.slice(0, 12) ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
                     {file.kind.endsWith("report") && (
-                      <a
-                        className="button compact"
-                        href={fileContentUrl(file, projectId)}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        <ExternalLink size={14} /> Open
-                      </a>
+                      <Button asChild size="sm">
+                        <a
+                          href={fileContentUrl(file, projectId)}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <ExternalLink size={14} /> Open
+                        </a>
+                      </Button>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </TableWrap>
       )}
     </AsyncBlock>
   );

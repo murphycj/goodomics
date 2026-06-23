@@ -1,4 +1,10 @@
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 import type { AnalyticsMetric } from "../api";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
 
 export function projectIdFromPath(pathname: string) {
   return pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;

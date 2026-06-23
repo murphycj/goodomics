@@ -3,7 +3,7 @@ import { Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { getProject, listProjects } from "../../api";
 import type { SidebarMode } from "../../lib/types";
-import { projectIdFromPath } from "../../lib/utils";
+import { cn, projectIdFromPath } from "../../lib/utils";
 import { SearchOverlay } from "../search/SearchOverlay";
 import { AppHeader } from "./AppHeader";
 import { Sidebar } from "./Sidebar";
@@ -33,12 +33,8 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const shellClass = projectId
-    ? `app-shell has-project sidebar-${sidebarMode}`
-    : "app-shell";
-
   return (
-    <main className={shellClass}>
+    <main className="min-h-screen bg-[#f7f8fa]">
       <AppHeader
         onOpenSearch={() => setSearchOpen(true)}
         project={selectedProject.data}
@@ -52,7 +48,12 @@ export function Layout() {
         />
       )}
       <section
-        className={projectId ? "content with-sidebar" : "content home-content"}
+        className={cn(
+          "px-4 pb-8 pt-[72px] md:px-8",
+          projectId && "transition-[margin-left] duration-[170ms] md:ml-[58px]",
+          projectId && sidebarMode === "expanded" && "md:ml-[232px]",
+          !projectId && "mx-auto max-w-[1160px]",
+        )}
       >
         <Outlet />
       </section>
