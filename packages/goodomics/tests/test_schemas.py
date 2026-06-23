@@ -6,15 +6,15 @@ from goodomics import run
 from goodomics.schemas.models import Metric, QCDecision, Run, Sample
 
 
-def test_sdk_run_collects_metrics_and_artifacts() -> None:
+def test_sdk_run_collects_metrics_and_files() -> None:
     qc_run = run("demo", assay="rnaseq")
     qc_run.log_metric("sample-1", "reads", 42, unit="count")
-    qc_run.log_artifact(Path("results") / "multiqc.html")
+    qc_run.log_file(Path("results") / "multiqc.html")
 
     assert qc_run.name == "demo"
     assert qc_run.assay == "rnaseq"
     assert qc_run.metrics[0]["name"] == "reads"
-    assert qc_run.artifacts == [Path("results") / "multiqc.html"]
+    assert qc_run.files == [Path("results") / "multiqc.html"]
 
 
 def test_schema_models_have_expected_defaults() -> None:

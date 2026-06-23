@@ -4,7 +4,9 @@ import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchResult } from "../../api";
 import { searchSamples } from "../../api";
-import { titleCase } from "../../lib/utils";
+import { cn, titleCase } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "../ui/dialog";
 
 const ENTITY_LABELS: Record<string, string> = {
   run: "Runs",
@@ -12,22 +14,26 @@ const ENTITY_LABELS: Record<string, string> = {
 };
 
 export function SearchOverlay({
+  defaultProjectId,
+  defaultProjectName,
   onClose,
   open,
-  projectId,
 }: {
+  defaultProjectId?: string;
+  defaultProjectName?: string;
   onClose: () => void;
   open: boolean;
-  projectId?: string;
 }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [projectScopeEnabled, setProjectScopeEnabled] = useState(false);
   const [selectedKind, setSelectedKind] = useState("all");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const effectiveProjectId = projectScopeEnabled ? defaultProjectId : undefined;
   const results = useQuery({
-    queryKey: ["search", projectId ?? "global", query],
-    queryFn: () => searchSamples({ projectId, query }),
+    queryKey: ["search", effectiveProjectId ?? "global", query],
+    queryFn: () => searchSamples({ projectId: effectiveProjectId, query }),
     enabled: open && query.trim().length > 0,
   });
   const items = results.data ?? [];
@@ -66,16 +72,18 @@ export function SearchOverlay({
 
   useEffect(() => {
     if (open) {
+      setProjectScopeEnabled(Boolean(defaultProjectId));
       setTimeout(() => inputRef.current?.focus(), 0);
     } else {
       setQuery("");
+      setProjectScopeEnabled(Boolean(defaultProjectId));
       setSelectedKind("all");
     }
-  }, [open]);
+  }, [defaultProjectId, open]);
 
   useEffect(() => {
     setActiveIndex(0);
-  }, [query, projectId, selectedKind]);
+  }, [effectiveProjectId, query, selectedKind]);
 
   useEffect(() => {
     if (selectedKind !== "all" && (countsByKind[selectedKind] ?? 0) === 0) {
@@ -108,19 +116,19 @@ export function SearchOverlay({
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div className="search-backdrop" onClick={onClose} role="presentation">
-      <div
-        className="search-dialog"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent
+        className="top-[15vh] h-[520px] w-[620px] max-w-[calc(100vw-2rem)] translate-y-0 gap-0 overflow-hidden border-[#3a3a3a] bg-[#242424] p-0 text-[#f3f3f3] shadow-[0_28px_80px_rgb(0_0_0/0.30)]"
+        overlayClassName="backdrop-blur-[4px]"
+        showCloseButton={false}
       >
-        <div className="search-input-row">
-          <Search size={18} />
+        <DialogTitle className="sr-only">Search runs or samples</DialogTitle>
+        <div className="flex h-[58px] items-center gap-3 border-b border-[#353535] px-4">
+          <Search size={18} className="shrink-0" />
           <input
             ref={inputRef}
+            className="flex-1 border-0 bg-transparent text-[#f3f3f3] outline-none placeholder:text-[#aeb4bd]"
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") onClose();
@@ -142,20 +150,48 @@ export function SearchOverlay({
             placeholder="Search runs or samples..."
             value={query}
           />
-          <button className="icon-button" onClick={onClose} type="button">
-            <X size={16} />
-          </button>
+          <DialogClose asChild>
+            <Button
+              aria-label="Close search"
+              className="border-[#444444] bg-[#2d2d2d] text-[#cfcfcf] hover:border-[#565656] hover:bg-[#333333] hover:text-white"
+              size="icon"
+              type="button"
+              variant="outline"
+            >
+              <X size={16} />
+            </Button>
+          </DialogClose>
         </div>
-        <div className="search-filters" aria-label="Search result filters">
+        <div
+          className="flex h-[50px] items-center gap-2 overflow-x-auto border-b border-[#353535] px-3"
+          aria-label="Search result filters"
+        >
+          {defaultProjectId && (
+            <button
+              className={cn(
+                "h-[30px] shrink-0 cursor-pointer rounded-full border px-3 text-[0.82rem] transition-colors",
+                projectScopeEnabled
+                  ? "border-[#58c98a] bg-[#e8f8ef] text-[#102017]"
+                  : "border-[#434343] bg-[#2c2c2c] text-[#c5cbd3] hover:border-[#58c98a] hover:bg-[#e8f8ef] hover:text-[#102017]",
+              )}
+              onClick={() => setProjectScopeEnabled((value) => !value)}
+              type="button"
+            >
+              {projectScopeEnabled
+                ? defaultProjectName || "This project"
+                : "All projects"}
+            </button>
+          )}
           {query.trim() &&
             items.length > 0 &&
             filters.map((filter) => (
               <button
-                className={
-                  selectedKind === filter.kind
-                    ? "search-filter-pill active"
-                    : "search-filter-pill"
-                }
+                className={cn(
+                  "h-[30px] shrink-0 cursor-pointer rounded-full border border-[#434343] bg-[#2c2c2c] px-3 text-[0.82rem] text-[#c5cbd3] transition-colors",
+                  "hover:border-[#58c98a] hover:bg-[#e8f8ef] hover:text-[#102017]",
+                  selectedKind === filter.kind &&
+                    "border-[#58c98a] bg-[#e8f8ef] text-[#102017]",
+                )}
                 key={filter.kind}
                 onClick={() => setSelectedKind(filter.kind)}
                 type="button"
@@ -164,22 +200,20 @@ export function SearchOverlay({
               </button>
             ))}
         </div>
-        <div className="search-results">
+        <div className="h-[412px] overflow-auto p-2.5">
           {!query.trim() && (
-            <div className="search-empty">
+            <div className="p-4 text-[#aeb4bd]">
               Start typing a run or sample name.
             </div>
           )}
           {query.trim() && results.isLoading && (
-            <div className="search-empty">Searching...</div>
+            <div className="p-4 text-[#aeb4bd]">Searching...</div>
           )}
           {query.trim() && results.error && (
-            <div className="search-empty error-text">
-              {results.error.message}
-            </div>
+            <div className="p-4 text-[#b42318]">{results.error.message}</div>
           )}
           {query.trim() && results.data?.length === 0 && (
-            <div className="search-empty">No runs or samples found.</div>
+            <div className="p-4 text-[#aeb4bd]">No runs or samples found.</div>
           )}
           {filteredItems.map((result, index) => (
             <SearchResultRow
@@ -190,8 +224,8 @@ export function SearchOverlay({
             />
           ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -211,13 +245,16 @@ function SearchResultRow({
   const detail = result.kind === "run" ? result.project_name : result.sample_id;
   return (
     <button
-      className={active ? "search-result-row active" : "search-result-row"}
+      className={cn(
+        "grid w-full cursor-pointer gap-1 rounded-[7px] border-0 bg-transparent px-3 py-3 text-left text-[#f3f3f3] transition-colors",
+        active ? "bg-[#303030]" : "hover:bg-[#303030]",
+      )}
       onClick={onClick}
       type="button"
     >
-      <span className="search-result-kind">{titleCase(result.kind)}</span>
+      <span className="text-xs text-[#aeb4bd]">{titleCase(result.kind)}</span>
       <strong>{label}</strong>
-      <small>
+      <small className="text-xs text-[#aeb4bd]">
         {detail}
         {result.kind === "sample" && result.project_name
           ? ` · ${result.project_name}`

@@ -50,10 +50,10 @@ ANALYTICS_PATH_OPTION = typer.Option(
     "--analytics-path",
     help="DuckDB analytics database path. Defaults to the selected project's analytics store.",
 )
-ARTIFACT_ROOT_OPTION = typer.Option(
-    Path(".goodomics/artifacts"),
-    "--artifact-root",
-    help="Local artifact storage root.",
+FILE_ROOT_OPTION = typer.Option(
+    Path(".goodomics/files"),
+    "--file-root",
+    help="Local file storage root.",
 )
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///.goodomics/goodomics.db"
 
@@ -72,7 +72,7 @@ def _run_multiqc_ingest(
     run_id: str | None,
     database_url: str | None,
     analytics_path: Path | None,
-    artifact_root: Path,
+    file_root: Path,
 ) -> None:
     resolved_database_url = database_url or os.environ.get(
         "GOODOMICS_DATABASE_URL",
@@ -86,7 +86,7 @@ def _run_multiqc_ingest(
             run_id=run_id,
             database_url=resolved_database_url,
             analytics_path=analytics_path,
-            artifact_root=artifact_root,
+            file_root=file_root,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -102,10 +102,10 @@ def _run_multiqc_ingest(
                 "outputs_found": result.outputs_found,
                 "metrics_ingested": result.metrics_ingested,
                 "payloads_ingested": result.payloads_ingested,
-                "artifacts_stored": result.artifacts_stored,
+                "files_stored": result.files_stored,
                 "database_url": result.database_url,
                 "analytics_path": str(result.analytics_path),
-                "artifact_root": str(result.artifact_root),
+                "file_root": str(result.file_root),
             }
         )
 
@@ -118,7 +118,7 @@ def default_ingest(
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
     analytics_path: Path | None = ANALYTICS_PATH_OPTION,
-    artifact_root: Path = ARTIFACT_ROOT_OPTION,
+    file_root: Path = FILE_ROOT_OPTION,
 ) -> None:
     """Search a results directory for MultiQC output and ingest it."""
     _run_multiqc_ingest(
@@ -128,7 +128,7 @@ def default_ingest(
         run_id=run_id,
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
 
@@ -154,7 +154,7 @@ def ingest(
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
     analytics_path: Path | None = ANALYTICS_PATH_OPTION,
-    artifact_root: Path = ARTIFACT_ROOT_OPTION,
+    file_root: Path = FILE_ROOT_OPTION,
 ) -> None:
     """Ingest a run into a local or remote Goodomics store."""
     if report_name:
@@ -168,7 +168,7 @@ def ingest(
         run_id=run_id,
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
 
 @app.command()

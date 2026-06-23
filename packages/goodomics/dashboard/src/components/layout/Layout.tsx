@@ -3,8 +3,9 @@ import { Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { getProject, listProjects } from "../../api";
 import type { SidebarMode } from "../../lib/types";
-import { projectIdFromPath } from "../../lib/utils";
-import { SearchOverlay } from "../search/SearchOverlay";
+import { cn, projectIdFromPath } from "../../lib/utils";
+import { SearchProvider, useSearch } from "../search/SearchProvider";
+import { Toaster } from "../ui/sonner";
 import { AppHeader } from "./AppHeader";
 import { Sidebar } from "./Sidebar";
 
@@ -13,7 +14,6 @@ export function Layout() {
     select: (state) => state.location.pathname,
   });
   const projectId = projectIdFromPath(pathname);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("hover");
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const selectedProject = useQuery({
@@ -22,27 +22,53 @@ export function Layout() {
     enabled: Boolean(projectId),
   });
 
+  return (
+    <SearchProvider
+      defaultProjectId={projectId ?? undefined}
+      defaultProjectName={selectedProject.data?.name}
+    >
+      <LayoutContent
+        projectId={projectId}
+        projects={projects.data ?? []}
+        selectedProject={selectedProject.data}
+        sidebarMode={sidebarMode}
+        setSidebarMode={setSidebarMode}
+      />
+    </SearchProvider>
+  );
+}
+
+function LayoutContent({
+  projectId,
+  projects,
+  selectedProject,
+  setSidebarMode,
+  sidebarMode,
+}: {
+  projectId: string | null;
+  projects: Awaited<ReturnType<typeof listProjects>>;
+  selectedProject?: Awaited<ReturnType<typeof getProject>>;
+  setSidebarMode: (mode: SidebarMode) => void;
+  sidebarMode: SidebarMode;
+}) {
+  const { openSearch } = useSearch();
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setSearchOpen(true);
+        openSearch();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  const shellClass = projectId
-    ? `app-shell has-project sidebar-${sidebarMode}`
-    : "app-shell";
+  }, [openSearch]);
 
   return (
-    <main className={shellClass}>
+    <main className="min-h-screen bg-[#f7f8fa]">
       <AppHeader
-        onOpenSearch={() => setSearchOpen(true)}
-        project={selectedProject.data}
-        projects={projects.data ?? []}
+        project={selectedProject}
+        projects={projects}
       />
       {projectId && (
         <Sidebar
@@ -52,15 +78,16 @@ export function Layout() {
         />
       )}
       <section
-        className={projectId ? "content with-sidebar" : "content home-content"}
+        className={cn(
+          "px-4 pb-8 pt-[72px] md:px-8",
+          projectId && "transition-[margin-left] duration-[170ms] md:ml-[58px]",
+          projectId && sidebarMode === "expanded" && "md:ml-[232px]",
+          !projectId && "mx-auto max-w-[1160px]",
+        )}
       >
         <Outlet />
       </section>
-      <SearchOverlay
-        onClose={() => setSearchOpen(false)}
-        open={searchOpen}
-        projectId={projectId ?? undefined}
-      />
+      <Toaster />
     </main>
   );
 }

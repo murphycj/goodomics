@@ -14,7 +14,7 @@ INITIAL_TABLES = (
     "runs",
     "samples",
     "metrics",
-    "artifacts",
+    "stored_files",
     "qc_decisions",
     "report_templates",
     "report_template_revisions",

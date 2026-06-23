@@ -9,7 +9,7 @@ class GoodomicsRun:
     name: str
     assay: str | None = None
     metrics: list[dict[str, object]] = field(default_factory=list)
-    artifacts: list[Path] = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
 
     def log_metric(
         self,
@@ -28,8 +28,8 @@ class GoodomicsRun:
             }
         )
 
-    def log_artifact(self, path: str | Path) -> None:
-        self.artifacts.append(Path(path))
+    def log_file(self, path: str | Path) -> None:
+        self.files.append(Path(path))
 
 
 def run(name: str, assay: str | None = None) -> GoodomicsRun:

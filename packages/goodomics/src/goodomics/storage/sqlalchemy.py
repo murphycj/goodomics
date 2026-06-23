@@ -24,8 +24,8 @@ from goodomics.schemas.models import Metric, Project, Run, Sample
 
 
 @dataclass(frozen=True)
-class ArtifactMetadata:
-    artifact_id: str
+class StoredFileMetadata:
+    file_id: str
     run_id: str
     kind: str
     path: str
@@ -179,13 +179,13 @@ class MetricRecord(SQLModel, table=True):
     unit: str | None = Field(default=None, max_length=255)
 
 
-class ArtifactRecord(SQLModel, table=True):
-    __tablename__ = "artifacts"
+class StoredFileRecord(SQLModel, table=True):
+    __tablename__ = "stored_files"
 
     id: int | None = Field(default=None, primary_key=True)
-    artifact_id: str | None = Field(default=None, max_length=512, index=True)
+    file_id: str | None = Field(default=None, max_length=512, index=True)
     run_id: str = Field(foreign_key="runs.run_id", max_length=255, index=True)
-    kind: str = Field(default="artifact", max_length=255)
+    kind: str = Field(default="file", max_length=255)
     path: str = Field(max_length=2048)
     size_bytes: int | None = None
     sha256: str | None = Field(default=None, max_length=64)
@@ -217,7 +217,7 @@ file_links_table = FileLinkRecord.__table__
 sample_sets_table = SampleSetRecord.__table__
 sample_set_members_table = SampleSetMemberRecord.__table__
 metrics_table = MetricRecord.__table__
-artifacts_table = ArtifactRecord.__table__
+stored_files_table = StoredFileRecord.__table__
 qc_decisions_table = QCDecisionRecord.__table__
 
 
@@ -284,7 +284,9 @@ class SQLModelGoodomicsStore:
             await session.exec(
                 delete(QCDecisionRecord).where(QCDecisionRecord.run_id == run.run_id)
             )
-            await session.exec(delete(ArtifactRecord).where(ArtifactRecord.run_id == run.run_id))
+            await session.exec(
+                delete(StoredFileRecord).where(StoredFileRecord.run_id == run.run_id)
+            )
             await session.exec(delete(MetricRecord).where(MetricRecord.run_id == run.run_id))
             await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run.run_id))
 
@@ -407,27 +409,27 @@ class SQLModelGoodomicsStore:
             ).all()
         return [_metric_from_row(row) for row in metric_rows]
 
-    async def replace_artifacts(
+    async def replace_files(
         self,
         session: AsyncSession,
         run_id: str,
-        artifacts: list[ArtifactMetadata],
+        files: list[StoredFileMetadata],
     ) -> None:
-        await session.exec(delete(ArtifactRecord).where(ArtifactRecord.run_id == run_id))
-        if artifacts:
+        await session.exec(delete(StoredFileRecord).where(StoredFileRecord.run_id == run_id))
+        if files:
             session.add_all(
                 [
-                    ArtifactRecord(
-                        artifact_id=artifact.artifact_id,
-                        run_id=artifact.run_id,
-                        kind=artifact.kind,
-                        path=artifact.path,
-                        size_bytes=artifact.size_bytes,
-                        sha256=artifact.sha256,
-                        source_path=artifact.source_path,
-                        created_at=artifact.created_at,
+                    StoredFileRecord(
+                        file_id=file.file_id,
+                        run_id=file.run_id,
+                        kind=file.kind,
+                        path=file.path,
+                        size_bytes=file.size_bytes,
+                        sha256=file.sha256,
+                        source_path=file.source_path,
+                        created_at=file.created_at,
                     )
-                    for artifact in artifacts
+                    for file in files
                 ]
             )
         await session.commit()

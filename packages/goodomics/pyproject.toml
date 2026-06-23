@@ -87,13 +87,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/goodomics"]
-artifacts = [
-  "src/goodomics/server/web/static/*",
-  "src/goodomics/server/web/static/**/*",
-]
 
 [tool.hatch.build.targets.sdist]
-artifacts = [
-  "src/goodomics/server/web/static/*",
-  "src/goodomics/server/web/static/**/*",
-]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/goodomics/server/web/static" = "src/goodomics/server/web/static"

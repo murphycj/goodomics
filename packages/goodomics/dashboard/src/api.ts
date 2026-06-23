@@ -29,6 +29,8 @@ const projectSchema = z.object({
   created_at: z.string(),
   run_count: z.number(),
   sample_count: z.number(),
+  file_count: z.number(),
+  file_size_bytes: z.number(),
   latest_activity_at: z.string().nullable(),
 });
 

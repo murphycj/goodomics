@@ -152,18 +152,18 @@ def test_run_analytics_and_file_content_endpoints(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     ingest_multiqc(
         multiqc_dir,
         run_id="run-1",
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
-    monkeypatch.setenv("GOODOMICS_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
 
     with TestClient(create_app()) as test_client:
         metrics = test_client.get("/api/v1/runs/run-1/analytics/metrics")
@@ -201,11 +201,8 @@ def test_run_analytics_and_file_content_endpoints(
     assert project_files.status_code == 200
     assert project_files.json() == files
     assert "file_id" in report
-    assert "artifact_id" not in report
     assert any(table["name"] == "files" for table in tables)
-    assert all(table["name"] != "artifacts" for table in tables)
     assert "file_id" in file_rows[0]
-    assert "artifact_id" not in file_rows[0]
     assert content.status_code == 200
     assert "MultiQC" in content.text
     assert content_by_id.status_code == 200
@@ -220,17 +217,17 @@ def test_database_summary_reports_control_and_analytics_counts(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
-    artifact_root = tmp_path / "state" / "artifacts"
+    file_root = tmp_path / "state" / "files"
     ingest_multiqc(
         write_multiqc_fixture(tmp_path / "results"),
         run_id="run-1",
         database_url=database_url,
         analytics_path=analytics_path,
-        artifact_root=artifact_root,
+        file_root=file_root,
     )
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
-    monkeypatch.setenv("GOODOMICS_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
 
     with TestClient(create_app()) as test_client:
         response = test_client.get("/api/v1/database/summary")
