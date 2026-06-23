@@ -2,6 +2,7 @@ export { AsyncBlock } from "./AsyncBlock";
 export { Badge } from "./badge";
 export { Button, buttonVariants } from "./button";
 export { Card, CardContent, CardHeader, CardTitle } from "./card";
+export { CopyButton } from "./CopyButton";
 export { Detail } from "./Detail";
 export {
   Dialog,
@@ -48,3 +49,4 @@ export {
   TableWrap,
 } from "./table";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
+export { Toaster } from "./sonner";

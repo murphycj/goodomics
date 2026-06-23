@@ -5,6 +5,7 @@ import { getProject, listProjects } from "../../api";
 import type { SidebarMode } from "../../lib/types";
 import { cn, projectIdFromPath } from "../../lib/utils";
 import { SearchProvider, useSearch } from "../search/SearchProvider";
+import { Toaster } from "../ui/sonner";
 import { AppHeader } from "./AppHeader";
 import { Sidebar } from "./Sidebar";
 
@@ -86,6 +87,7 @@ function LayoutContent({
       >
         <Outlet />
       </section>
+      <Toaster />
     </main>
   );
 }

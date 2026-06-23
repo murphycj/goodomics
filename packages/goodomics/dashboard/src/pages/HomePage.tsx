@@ -6,6 +6,7 @@ import { CreateProjectButton } from "../components/projects/CreateProjectModal";
 import { useSearch } from "../components/search/SearchProvider";
 import {
   AsyncBlock,
+  CopyButton,
   Table,
   TableBody,
   TableCell,
@@ -63,8 +64,7 @@ export function HomePage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
-                    <TableHead>Slug</TableHead>
-                    <TableHead>Project ref</TableHead>
+                    <TableHead>Project ID</TableHead>
                     <TableHead className="text-right">Runs</TableHead>
                     <TableHead className="text-right">Samples</TableHead>
                     <TableHead>Latest activity</TableHead>
@@ -86,8 +86,15 @@ export function HomePage() {
                       tabIndex={0}
                     >
                       <TableCell className="font-bold">{project.name}</TableCell>
-                      <TableCell>{project.slug ?? "—"}</TableCell>
-                      <TableCell className="font-mono">{project.project_id}</TableCell>
+                      <TableCell>
+                        <div className="inline-flex items-center gap-1.5">
+                          <span className="font-mono">{project.project_id}</span>
+                          <CopyButton
+                            label={`Copy project ref ${project.project_id}`}
+                            value={project.project_id}
+                          />
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right">
                         {project.run_count.toLocaleString()}
                       </TableCell>
