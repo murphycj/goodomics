@@ -119,6 +119,32 @@ goodomics report ./results
 Outputs a shareable HTML report. This is the initial adoption path and should
 stay as easy to try as MultiQC.
 
+Standalone reports should be self-contained offline HTML files by default. A
+user should be able to generate `report.html`, move it to another machine, open
+it without internet access, and still see the report structure, styles,
+tables, and charts. Do not rely on CDN-hosted JavaScript, CSS, fonts, or
+images for the normal report path.
+
+The report renderer should support YAML or JSON templates that can be passed to
+the CLI and later edited in the dashboard. Goodomics should compile those
+templates into a normalized report model, load local input data, and render the
+same model to HTML and, when requested, PDF. PDF export may use a local browser
+renderer against the self-contained HTML artifact; it should not require server
+hosting or internet access.
+
+Apache ECharts should be the default charting engine for reports and dashboard
+visualizations because it covers the common MultiQC- and cBioPortal-like chart
+families Goodomics needs: bars, lines, scatter plots, heatmaps, boxplots,
+matrix-like views, custom series, legends, tooltips, and zooming. Goodomics
+should expose its own report/chart grammar first and compile that grammar to
+ECharts options internally. Raw ECharts options can be an advanced escape
+hatch, but they should not be the primary user-facing template model.
+
+Self-contained reports should avoid embedding huge raw datasets when a smaller
+representation is enough. Prefer summary tables, downsampled chart data, binned
+distributions, static SVG or PNG chart output, or explicit opt-in expansion for
+large payloads.
+
 ### Local Database Mode
 
 For individuals and small teams.
@@ -358,6 +384,13 @@ reports:
       - duplication
       - expression_complexity
 ```
+
+Report templates should stay declarative and portable. The dashboard report
+builder should edit the same YAML/JSON-compatible model that the CLI consumes,
+including sections, layout metadata, data bindings, chart types, thresholds,
+tables, text blocks, and export settings. Drag-and-drop editing in the
+dashboard should update this model rather than creating a separate visual-only
+format.
 
 ## AI And MCP Trust Boundary
 

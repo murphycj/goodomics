@@ -7,6 +7,34 @@ description: "Browse and edit stored Goodomics data in the React dashboard."
 
 The dashboard is a Vite React TypeScript app under `packages/goodomics/dashboard` and builds into `goodomics/server/web/static` for FastAPI to serve.
 
+## UI stack
+
+Dashboard UI should use editable shadcn/ui-style components with Tailwind,
+Radix primitives, and `lucide-react` icons. Keep the interface credible for
+biotech/R&D work: dense enough for repeated review, clear enough for new users,
+and consistent with the existing Goodomics product language.
+
+The dashboard already uses TanStack Query and TanStack Router. Prefer TanStack
+Table and virtualization for large tabular views so sample, metric, file, and
+run data can scale without changing the visual system.
+
+## Report builder
+
+The report builder should edit the same YAML/JSON-compatible report template
+model used by `goodomics report`. Drag-and-drop layout, chart resizing, section
+ordering, data bindings, thresholds, and export settings should persist as
+template metadata that the CLI can consume.
+
+Apache ECharts is the default charting engine for dashboard previews and
+generated reports. Dashboard chart controls should manipulate Goodomics chart
+specs first; Goodomics can compile those specs to ECharts options internally.
+Avoid adding another charting stack unless a concrete report feature requires
+it and the integration can remain behind the Goodomics chart abstraction.
+
+Dashboard previews and CLI exports should share report primitives wherever
+practical. The default exported report should remain a self-contained offline
+HTML artifact with embedded runtime, styles, and display data.
+
 ## Core workflows
 
 - Install and inspect the CLI with `uv run --package goodomics goodomics --help`.
@@ -22,4 +50,3 @@ The dashboard is a Vite React TypeScript app under `packages/goodomics/dashboard
 ## Astro hosting model
 
 Keep `docs/*.mdx` in this app monorepo as the open-source source of truth. The Astro marketing site should add or reuse a `docs` content collection, render pages from `/docs/[...slug]`, provide a docs layout with sidebar navigation, keep pages indexed for SEO, and link the marketing navigation to `/docs`. Start by copying or syncing these MDX files during deployment; use a submodule, subtree, CI sync, or npm workspace package later if the repositories split.
-
