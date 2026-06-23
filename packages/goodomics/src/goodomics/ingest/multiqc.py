@@ -17,6 +17,7 @@ from goodomics.parsers.multiqc import (
     parse_multiqc_bundle,
     parse_multiqc_outputs,
 )
+from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import Run, Sample
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
@@ -63,7 +64,7 @@ def ingest_multiqc_runs(
     project: str | None = None,
     assay: str | None = None,
     database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
-    analytics_path: Path = Path(".goodomics/analytics.duckdb"),
+    analytics_path: Path | None = None,
     artifact_root: Path = Path(".goodomics/artifacts"),
 ) -> list[MultiQCIngestResult]:
     outputs = discover_multiqc_outputs(results)
@@ -107,7 +108,7 @@ def ingest_multiqc(
     project: str | None = None,
     assay: str | None = None,
     database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
-    analytics_path: Path = Path(".goodomics/analytics.duckdb"),
+    analytics_path: Path | None = None,
     artifact_root: Path = Path(".goodomics/artifacts"),
 ) -> MultiQCIngestResult:
     resolved_run_id = run_id or default_run_id(results)
@@ -133,7 +134,7 @@ def _ingest_multiqc_outputs(
     project: str | None,
     assay: str | None,
     database_url: str,
-    analytics_path: Path,
+    analytics_path: Path | None,
     artifact_root: Path,
 ) -> MultiQCIngestResult:
     parsed = parse_multiqc_outputs(outputs, run_id=run_id)
@@ -155,18 +156,26 @@ def _save_multiqc_parse_result(
     project: str | None,
     assay: str | None,
     database_url: str,
-    analytics_path: Path,
+    analytics_path: Path | None,
     artifact_root: Path,
 ) -> MultiQCIngestResult:
     _ensure_sqlite_parent(database_url)
     artifact_root.mkdir(parents=True, exist_ok=True)
 
     control_store = SQLModelGoodomicsStore(database_url)
+    project_record = asyncio.run(control_store.ensure_project(project))
+    resolved_analytics_path = analytics_path or analytics_path_for_project(
+        Path(".goodomics"), project_record.project_id
+    )
     run = Run(
         run_id=run_id,
-        project=project,
+        project_id=project_record.project_id,
+        project=project_record.slug,
         assay=assay,
-        samples=[Sample(sample_id=sample_id) for sample_id in sorted(parsed.sample_ids)],
+        samples=[
+            Sample(sample_id=sample_id, project_id=project_record.project_id)
+            for sample_id in sorted(parsed.sample_ids)
+        ],
     )
     asyncio.run(control_store.save_run(run))
 
@@ -177,7 +186,7 @@ def _save_multiqc_parse_result(
     )
     asyncio.run(_replace_artifacts(database_url, run_id, artifacts))
 
-    DuckDBAnalyticsStore(analytics_path).replace_run_data(
+    DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
         run_id,
         parsed.to_batch(run_id=run_id),
     )
@@ -189,7 +198,7 @@ def _save_multiqc_parse_result(
         payloads_ingested=len(parsed.payloads),
         artifacts_stored=len(artifacts),
         database_url=database_url,
-        analytics_path=analytics_path,
+        analytics_path=resolved_analytics_path,
         artifact_root=artifact_root,
     )
 

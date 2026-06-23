@@ -5,8 +5,9 @@ from pathlib import Path
 from time import perf_counter
 
 import duckdb
+from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 
-DEFAULT_DB_PATH = Path(".goodomics/analytics.duckdb")
+DEFAULT_DB_PATH = analytics_path_for_project(Path(".goodomics"), DEFAULT_PROJECT_ID)
 WARMUP_RUNS = 1
 MEASURED_RUNS = 5
 

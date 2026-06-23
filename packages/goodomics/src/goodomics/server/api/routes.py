@@ -13,6 +13,14 @@ from sqlalchemy import func
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.projects import (
+    DEFAULT_PROJECT_ID,
+    analytics_path_for_project,
+    display_name_from_slug,
+    is_project_id,
+    new_project_id,
+    validate_project_slug,
+)
 from goodomics.report.html import render_report
 from goodomics.schemas.models import Metric, Run, Sample
 from goodomics.server.db.models import (
@@ -22,12 +30,14 @@ from goodomics.server.db.models import (
     ReportTemplateRecord,
     ReportTemplateRevisionRecord,
 )
+from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     ArtifactRecord,
     MetricRecord,
+    ProjectRecord,
     RunRecord,
+    RunSampleRecord,
     SampleRecord,
-    metadata,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -36,6 +46,7 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 class RunCreate(SQLModel):
     run_id: str | None = None
+    project_id: str | None = None
     project: str | None = None
     assay: str | None = None
     samples: list[Sample] = Field(default_factory=list)
@@ -52,6 +63,41 @@ class RunPageRead(SQLModel):
     total: int
     limit: int
     offset: int
+
+
+class ProjectCreate(SQLModel):
+    name: str
+    slug: str | None = None
+    description: str | None = None
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class ProjectPatch(SQLModel):
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    metadata_json: dict[str, JsonValue] | None = None
+
+
+class ProjectRead(SQLModel):
+    project_id: str
+    slug: str | None = None
+    name: str
+    description: str | None = None
+    metadata_json: dict[str, JsonValue]
+    created_at: datetime
+    run_count: int = 0
+    sample_count: int = 0
+    latest_activity_at: datetime | None = None
+
+
+class SearchResultRead(SQLModel):
+    kind: str
+    project_id: str | None = None
+    project_name: str | None = None
+    run_id: str | None = None
+    sample_id: str | None = None
+    sample_name: str | None = None
 
 
 class FileRead(SQLModel):
@@ -196,6 +242,11 @@ class DatabaseRowPatch(SQLModel):
 
 
 EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
+    "projects": (
+        ProjectRecord,
+        "project_id",
+        {"name", "slug", "description", "metadata_json"},
+    ),
     "runs": (RunRecord, "run_id", {"project", "assay"}),
     "samples": (SampleRecord, "sample_id", {"sample_name", "metadata_json"}),
     "metrics": (MetricRecord, "id", {"sample_id", "name", "value", "unit"}),
@@ -216,46 +267,308 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/runs", response_model=RunPageRead)
-async def list_runs(
+@router.get("/projects", response_model=list[ProjectRead])
+async def list_projects(request: Request) -> list[ProjectRead]:
+    await _ensure_default_project(request)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        rows = (
+            await session.exec(
+                select(ProjectRecord).order_by(
+                    cast(Any, ProjectRecord.created_at), ProjectRecord.name
+                )
+            )
+        ).all()
+        return [await _project_read(row, session=session) for row in rows]
+
+
+@router.post("/projects", response_model=ProjectRead, status_code=201)
+async def create_project(payload: ProjectCreate, request: Request) -> ProjectRead:
+    await _ensure_schema(request)
+    slug = validate_project_slug(payload.slug or payload.name)
+    async with _session(request) as session:
+        existing = (
+            await session.exec(select(ProjectRecord).where(ProjectRecord.slug == slug))
+        ).first()
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Project slug already exists")
+        project = ProjectRecord(
+            project_id=_new_project_id(),
+            slug=slug,
+            name=payload.name.strip() or display_name_from_slug(slug),
+            description=payload.description,
+            metadata_json=json.loads(json.dumps(payload.metadata_json)),
+            created_at=datetime.now(UTC),
+        )
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+        return await _project_read(project, session=session)
+
+
+@router.get("/projects/{project_id}", response_model=ProjectRead)
+async def get_project(project_id: str, request: Request) -> ProjectRead:
+    return await _get_project_read(request, project_id)
+
+
+@router.get("/projects/{project_id}/runs/{run_id}", response_model=Run)
+async def get_project_run(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> Run:
+    return await _get_project_run(request, project_id, run_id)
+
+
+@router.get("/projects/{project_id}/runs/{run_id}/samples", response_model=list[Sample])
+async def list_project_run_samples(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> list[Sample]:
+    run = await _get_project_run(request, project_id, run_id)
+    return run.samples
+
+
+@router.get("/projects/{project_id}/runs/{run_id}/metrics", response_model=list[Metric])
+async def list_project_run_metrics(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> list[Metric]:
+    await _get_project_run(request, project_id, run_id)
+    return await request.app.state.store.list_metrics(run_id)
+
+
+@router.get("/projects/{project_id}/runs/{run_id}/files", response_model=list[FileRead])
+async def list_project_run_files(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> list[FileRead]:
+    await _get_project_run(request, project_id, run_id)
+    return await _list_run_files(run_id, request)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/analytics/metrics",
+    response_model=list[AnalyticsMetricRead],
+)
+async def list_project_run_analytics_metrics(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> list[AnalyticsMetricRead]:
+    run = await _get_project_run(request, project_id, run_id)
+    return _analytics_metric_reads(
+        _analytics_store_for_project(request, run.project_id).list_metric_values(run_id)
+    )
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/analytics/payloads",
+    response_model=list[AnalyticsPayloadRead],
+)
+async def list_project_run_analytics_payloads(
+    project_id: str,
+    run_id: str,
+    request: Request,
+) -> list[AnalyticsPayloadRead]:
+    run = await _get_project_run(request, project_id, run_id)
+    return _analytics_payload_reads(
+        _analytics_store_for_project(request, run.project_id).list_profile_payloads(run_id)
+    )
+
+
+@router.get("/projects/{project_id}/files/{file_id}/content")
+async def get_project_file_content(
+    project_id: str,
+    file_id: str,
+    request: Request,
+) -> FileResponse:
+    return await _file_content_response(file_id, request, project_id=project_id)
+
+
+@router.get("/projects/{project_id}/samples/{sample_id}", response_model=Sample)
+async def get_project_sample(
+    project_id: str,
+    sample_id: str,
+    request: Request,
+) -> Sample:
+    await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = (
+            await session.exec(
+                select(SampleRecord).where(
+                    SampleRecord.project_id == project_id,
+                    SampleRecord.sample_id == sample_id,
+                )
+            )
+        ).first()
+        if row is None:
+            row = (
+                await session.exec(
+                    select(SampleRecord)
+                    .join(
+                        RunSampleRecord,
+                        cast(Any, RunSampleRecord.sample_id) == SampleRecord.sample_id,
+                    )
+                    .where(
+                        RunSampleRecord.project_id == project_id,
+                        RunSampleRecord.sample_id == sample_id,
+                    )
+                )
+            ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    return _sample_from_row(row)
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectRead)
+async def patch_project(
+    project_id: str, payload: ProjectPatch, request: Request
+) -> ProjectRead:
+    await _ensure_schema(request)
+    values = payload.model_dump(exclude_unset=True)
+    async with _session(request) as session:
+        row = await session.get(ProjectRecord, project_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if "slug" in values and values["slug"] is not None:
+            slug = validate_project_slug(str(values["slug"]))
+            existing = (
+                await session.exec(
+                    select(ProjectRecord).where(
+                        ProjectRecord.slug == slug,
+                        ProjectRecord.project_id != project_id,
+                    )
+                )
+            ).first()
+            if existing is not None:
+                raise HTTPException(status_code=409, detail="Project slug already exists")
+            row.slug = slug
+        if "name" in values and values["name"] is not None:
+            row.name = str(values["name"]).strip() or row.name
+        if "description" in values:
+            row.description = values["description"]
+        if "metadata_json" in values and values["metadata_json"] is not None:
+            row.metadata_json = json.loads(json.dumps(values["metadata_json"]))
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return await _project_read(row, session=session)
+
+
+@router.get("/projects/{project_id}/runs", response_model=RunPageRead)
+async def list_project_runs(
+    project_id: str,
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> RunPageRead:
+    await _require_project(request, project_id)
+    return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
+
+
+@router.get("/search", response_model=list[SearchResultRead])
+async def search_samples(
+    request: Request,
+    q: str = Query(default="", max_length=255),
+    project_id: str | None = Query(default=None),
+    limit: int = Query(default=12, ge=1, le=50),
+) -> list[SearchResultRead]:
     await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
+    term = q.strip().lower()
+    if not term:
+        return []
+    pattern = f"%{term}%"
     async with _session(request) as session:
-        total = int((await session.exec(select(func.count()).select_from(RunRecord))).one())
-        rows = (
-            await session.exec(
-                select(RunRecord)
-                .order_by(cast(Any, RunRecord.created_at).desc(), RunRecord.run_id)
-                .offset(offset)
-                .limit(limit)
-            )
-        ).all()
-    return RunPageRead(
-        items=[
-            Run(
-                run_id=row.run_id,
-                project=row.project,
-                assay=row.assay,
-                created_at=row.created_at,
-            )
-            for row in rows
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+        run_statement = select(RunRecord).where(
+            (func.lower(RunRecord.run_id).like(pattern))
+            | (func.lower(RunRecord.name).like(pattern))
+        )
+        if project_id is not None:
+            run_statement = run_statement.where(RunRecord.project_id == project_id)
+        run_rows = (await session.exec(run_statement.limit(limit))).all()
+
+        sample_statement = select(SampleRecord).where(
+            (func.lower(SampleRecord.sample_id).like(pattern))
+            | (func.lower(SampleRecord.sample_name).like(pattern))
+        )
+        if project_id is not None:
+            sample_statement = sample_statement.where(SampleRecord.project_id == project_id)
+        remaining = max(limit - len(run_rows), 0)
+        sample_rows = (
+            (await session.exec(sample_statement.limit(remaining))).all()
+            if remaining
+            else []
+        )
+        project_ids = {
+            row.project_id
+            for row in [*run_rows, *sample_rows]
+            if row.project_id is not None
+        }
+        project_rows: dict[str, ProjectRecord] = {}
+        if project_ids:
+            project_rows = {
+                project.project_id: project
+                for project in (
+                    await session.exec(
+                        select(ProjectRecord).where(
+                            cast(Any, ProjectRecord.project_id).in_(project_ids)
+                        )
+                    )
+                ).all()
+            }
+    return [
+        SearchResultRead(
+            kind="run",
+            project_id=row.project_id,
+            project_name=project_rows[row.project_id].name
+            if row.project_id in project_rows
+            else None,
+            run_id=row.run_id,
+        )
+        for row in run_rows
+    ] + [
+        SearchResultRead(
+            kind="sample",
+            project_id=row.project_id,
+            project_name=project_rows[row.project_id].name
+            if row.project_id in project_rows
+            else None,
+            sample_id=row.sample_id,
+            sample_name=row.sample_name,
+        )
+        for row in sample_rows
+    ]
+
+
+@router.get("/runs", response_model=RunPageRead)
+async def list_runs(
+    request: Request,
+    project_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> RunPageRead:
+    return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
 
 
 @router.post("/runs", response_model=Run, status_code=201)
 async def create_run(payload: RunCreate, request: Request) -> Run:
+    project = await request.app.state.store.ensure_project(payload.project_id or payload.project)
     run = Run(
         run_id=payload.run_id or _new_id("run"),
-        project=payload.project,
+        project_id=project.project_id,
+        project=project.slug,
         assay=payload.assay,
-        samples=payload.samples,
+        samples=[
+            sample.model_copy(update={"project_id": sample.project_id or project.project_id})
+            for sample in payload.samples
+        ],
         metrics=payload.metrics,
     )
     await request.app.state.store.save_run(run)
@@ -299,6 +612,10 @@ async def list_run_metrics(run_id: str, request: Request) -> list[Metric]:
 
 @router.get("/runs/{run_id}/files", response_model=list[FileRead])
 async def list_run_files(run_id: str, request: Request) -> list[FileRead]:
+    return await _list_run_files(run_id, request)
+
+
+async def _list_run_files(run_id: str, request: Request) -> list[FileRead]:
     await _ensure_schema(request)
     async with _session(request) as session:
         rows = (
@@ -312,19 +629,9 @@ async def list_run_files(run_id: str, request: Request) -> list[FileRead]:
     response_model=list[AnalyticsMetricRead],
 )
 async def list_run_analytics_metrics(run_id: str, request: Request) -> list[AnalyticsMetricRead]:
-    await get_run(run_id, request)
-    return [
-        AnalyticsMetricRead(
-            run_id=metric.run_id,
-            data_profile_key=metric.data_profile_key,
-            run_sample_key=metric.run_sample_key,
-            sample_key=metric.sample_key,
-            metric_key=metric.metric_key,
-            value=metric.value,
-            source_file_id=metric.source_file_id,
-        )
-        for metric in request.app.state.analytics_store.list_metric_values(run_id)
-    ]
+    run = await get_run(run_id, request)
+    analytics_store = _analytics_store_for_project(request, run.project_id)
+    return _analytics_metric_reads(analytics_store.list_metric_values(run_id))
 
 
 @router.get(
@@ -332,23 +639,9 @@ async def list_run_analytics_metrics(run_id: str, request: Request) -> list[Anal
     response_model=list[AnalyticsPayloadRead],
 )
 async def list_run_analytics_payloads(run_id: str, request: Request) -> list[AnalyticsPayloadRead]:
-    await get_run(run_id, request)
-    return [
-        AnalyticsPayloadRead(
-            run_id=payload.run_id,
-            data_profile_key=payload.data_profile_key,
-            run_sample_key=payload.run_sample_key,
-            payload_name=payload.payload_name,
-            payload_kind=payload.payload_kind,
-            storage_format=payload.storage_format,
-            columns=_payload_columns(payload.metadata_json),
-            rows=_payload_rows(payload.metadata_json),
-            row_count=payload.row_count or len(_payload_rows(payload.metadata_json)),
-            source_file_id=payload.source_file_id,
-            source_hash=_payload_source_hash(payload.metadata_json),
-        )
-        for payload in request.app.state.analytics_store.list_profile_payloads(run_id)
-    ]
+    run = await get_run(run_id, request)
+    analytics_store = _analytics_store_for_project(request, run.project_id)
+    return _analytics_payload_reads(analytics_store.list_profile_payloads(run_id))
 
 
 @router.get("/files/{file_id}/content")
@@ -356,7 +649,12 @@ async def get_file_content(file_id: str, request: Request) -> FileResponse:
     return await _file_content_response(file_id, request)
 
 
-async def _file_content_response(file_id: str, request: Request) -> FileResponse:
+async def _file_content_response(
+    file_id: str,
+    request: Request,
+    *,
+    project_id: str | None = None,
+) -> FileResponse:
     await _ensure_schema(request)
     async with _session(request) as session:
         row = (
@@ -368,6 +666,10 @@ async def _file_content_response(file_id: str, request: Request) -> FileResponse
             row = await session.get(ArtifactRecord, int(file_id))
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
+    if project_id is not None:
+        run = await request.app.state.store.get_run(row.run_id)
+        if run is None or run.project_id != project_id:
+            raise HTTPException(status_code=404, detail="File not found")
     path = Path(row.path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file not found")
@@ -564,12 +866,18 @@ async def list_database_tables() -> list[DatabaseTableRead]:
 
 
 @router.get("/database/summary", response_model=DatabaseSummaryRead)
-async def get_database_summary(request: Request) -> DatabaseSummaryRead:
-    control_counts = await _control_table_counts(request)
-    analytics_counts = request.app.state.analytics_store.row_counts()
+async def get_database_summary(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> DatabaseSummaryRead:
+    if project_id is not None:
+        await _require_project(request, project_id)
+    control_counts = await _control_table_counts(request, project_id=project_id)
+    analytics_store = _analytics_store_for_project(request, project_id)
+    analytics_counts = analytics_store.row_counts()
     return DatabaseSummaryRead(
         sqlite_size_bytes=_sqlite_size_bytes(request.app.state.settings.database_url),
-        duckdb_size_bytes=request.app.state.analytics_store.database_size_bytes(),
+        duckdb_size_bytes=analytics_store.database_size_bytes(),
         file_size_bytes=_path_size(Path(request.app.state.settings.artifact_root)),
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
@@ -611,8 +919,7 @@ async def patch_database_row(
 
 
 async def _ensure_schema(request: Request) -> None:
-    async with _engine(request).begin() as connection:
-        await connection.run_sync(metadata.create_all)
+    await request.app.state.store.ensure_schema()
 
 
 def _engine(request: Request):
@@ -621,6 +928,186 @@ def _engine(request: Request):
 
 def _session(request: Request) -> AsyncSession:
     return AsyncSession(_engine(request))
+
+
+async def _ensure_default_project(request: Request) -> ProjectRead:
+    project = await request.app.state.store.ensure_default_project()
+    return await _get_project_read(request, project.project_id)
+
+
+async def _require_project(request: Request, project_id: str) -> ProjectRecord:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = await session.get(ProjectRecord, project_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return row
+
+
+async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = await session.get(ProjectRecord, project_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return await _project_read(row, session=session)
+
+
+async def _get_project_run(request: Request, project_id: str, run_id: str) -> Run:
+    await _require_project(request, project_id)
+    run = await request.app.state.store.get_run(run_id)
+    if run is None or run.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+async def _project_read(
+    row: ProjectRecord,
+    *,
+    session: AsyncSession,
+) -> ProjectRead:
+    run_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(RunRecord)
+                .where(RunRecord.project_id == row.project_id)
+            )
+        ).one()
+    )
+    sample_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(SampleRecord)
+                .where(SampleRecord.project_id == row.project_id)
+            )
+        ).one()
+    )
+    latest_activity_at = (
+        await session.exec(
+            select(func.max(RunRecord.created_at)).where(RunRecord.project_id == row.project_id)
+        )
+    ).one()
+    data = row.model_dump()
+    return ProjectRead(
+        **data,
+        run_count=run_count,
+        sample_count=sample_count,
+        latest_activity_at=latest_activity_at,
+    )
+
+
+async def _list_runs(
+    request: Request,
+    *,
+    project_id: str | None,
+    limit: int,
+    offset: int,
+) -> RunPageRead:
+    await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
+    async with _session(request) as session:
+        count_statement = select(func.count()).select_from(RunRecord)
+        rows_statement = select(RunRecord).order_by(
+            cast(Any, RunRecord.created_at).desc(), RunRecord.run_id
+        )
+        if project_id is not None:
+            count_statement = count_statement.where(RunRecord.project_id == project_id)
+            rows_statement = rows_statement.where(RunRecord.project_id == project_id)
+        total = int((await session.exec(count_statement)).one())
+        rows = (await session.exec(rows_statement.offset(offset).limit(limit))).all()
+    return RunPageRead(
+        items=[_run_from_row(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _run_from_row(row: RunRecord) -> Run:
+    return Run(
+        run_id=row.run_id,
+        project_id=row.project_id,
+        project=row.project,
+        name=row.name,
+        run_kind=row.run_kind,
+        assay=row.assay,
+        pipeline_name=row.pipeline_name,
+        pipeline_version=row.pipeline_version,
+        parameters_json=row.parameters_json,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        status=row.status,
+        metadata_json=row.metadata_json,
+        created_at=row.created_at,
+    )
+
+
+def _sample_from_row(row: SampleRecord) -> Sample:
+    metadata_value = row.metadata_json
+    metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
+    return Sample(
+        sample_id=row.sample_id,
+        project_id=row.project_id,
+        subject_id=row.subject_id,
+        external_id=row.external_id,
+        sample_name=row.sample_name,
+        metadata_json=metadata_dict,
+    )
+
+
+def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
+    return [
+        AnalyticsMetricRead(
+            run_id=metric.run_id,
+            data_profile_key=metric.data_profile_key,
+            run_sample_key=metric.run_sample_key,
+            sample_key=metric.sample_key,
+            metric_key=metric.metric_key,
+            value=metric.value,
+            source_file_id=metric.source_file_id,
+        )
+        for metric in metrics
+    ]
+
+
+def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
+    return [
+        AnalyticsPayloadRead(
+            run_id=payload.run_id,
+            data_profile_key=payload.data_profile_key,
+            run_sample_key=payload.run_sample_key,
+            payload_name=payload.payload_name,
+            payload_kind=payload.payload_kind,
+            storage_format=payload.storage_format,
+            columns=_payload_columns(payload.metadata_json),
+            rows=_payload_rows(payload.metadata_json),
+            row_count=payload.row_count or len(_payload_rows(payload.metadata_json)),
+            source_file_id=payload.source_file_id,
+            source_hash=_payload_source_hash(payload.metadata_json),
+        )
+        for payload in payloads
+    ]
+
+
+def _analytics_store_for_project(
+    request: Request, project_id: str | None
+) -> DuckDBAnalyticsStore:
+    settings = request.app.state.settings
+    if settings.analytics_path:
+        return DuckDBAnalyticsStore(settings.analytics_path)
+    return DuckDBAnalyticsStore(
+        analytics_path_for_project(settings.analytics_root, project_id or DEFAULT_PROJECT_ID)
+    )
+
+
+def _new_project_id() -> str:
+    project_id = new_project_id()
+    if not is_project_id(project_id):
+        raise RuntimeError("Generated invalid project id")
+    return project_id
 
 
 def _new_id(prefix: str) -> str:
@@ -663,19 +1150,30 @@ async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]
         return list((await session.exec(select(model))).all())
 
 
-async def _control_table_counts(request: Request) -> dict[str, int]:
+async def _control_table_counts(
+    request: Request, project_id: str | None = None
+) -> dict[str, int]:
     await _ensure_schema(request)
     async with _session(request) as session:
-        return {
-            name: int(
+        counts: dict[str, int] = {}
+        project_run_ids: list[str] | None = None
+        if project_id is not None:
+            project_run_ids = list(
                 (
                     await session.exec(
-                        select(func.count()).select_from(model)  # type: ignore[arg-type]
+                        select(RunRecord.run_id).where(RunRecord.project_id == project_id)
                     )
-                ).one()
+                ).all()
             )
-            for name, (model, _, _) in EDITABLE_TABLES.items()
-        }
+        for name, (model, _, _) in EDITABLE_TABLES.items():
+            statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
+            model_any = cast(Any, model)
+            if project_id is not None and "project_id" in model.model_fields:
+                statement = statement.where(model_any.project_id == project_id)
+            elif project_run_ids is not None and "run_id" in model.model_fields:
+                statement = statement.where(model_any.run_id.in_(project_run_ids))
+            counts[name] = int((await session.exec(statement)).one())
+        return counts
 
 
 async def _insert_values(request: Request, model: type[SQLModel], values: dict[str, Any]) -> None:

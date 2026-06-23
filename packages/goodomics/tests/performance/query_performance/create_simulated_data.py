@@ -8,15 +8,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
+from goodomics.projects import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_PROJECT_NAME,
+    analytics_path_for_project,
+)
 from goodomics.storage.duckdb import ANALYTICS_TABLES, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import ProjectRecord, RunRecord, SQLModelGoodomicsStore
 from sqlmodel import delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-DEFAULT_ANALYTICS_PATH = Path(".goodomics/analytics.duckdb")
+DEFAULT_GOODOMICS_ROOT = Path(".goodomics")
+DEFAULT_ANALYTICS_PATH = analytics_path_for_project(
+    DEFAULT_GOODOMICS_ROOT,
+    DEFAULT_PROJECT_ID,
+)
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///.goodomics/goodomics.db"
-PROJECT_ID = "perf-cancer-project"
-PROJECT_NAME = "Goodomics synthetic cancer query performance project"
 GENE_COUNT = 20_000
 VARIANT_COUNT = 1_000
 STRUCTURAL_VARIANT_COUNT = 300
@@ -86,28 +93,25 @@ async def _write_control_database(runs: int, samples: int) -> None:
     print("writing minimal UI control database...")
     store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
     await store.ensure_schema()
+    await store.ensure_default_project()
     now = datetime.now(UTC)
     async with AsyncSession(store._get_engine()) as session:
         await session.exec(delete(RunRecord))
-        await session.exec(delete(ProjectRecord))
-        session.add(
-            ProjectRecord(
-                project_id=PROJECT_ID,
-                name=PROJECT_NAME,
-                description="Minimal control metadata for the DuckDB query pressure test.",
-                metadata_json={
-                    "purpose": "query_performance_pressure_test",
-                    "analytics_path": str(DEFAULT_ANALYTICS_PATH),
-                },
-                created_at=now,
+        project = await session.get(ProjectRecord, DEFAULT_PROJECT_ID)
+        if project is not None:
+            project.description = (
+                "Minimal control metadata for the DuckDB query pressure test."
             )
-        )
+            project.metadata_json = {
+                "purpose": "query_performance_pressure_test",
+                "analytics_path": str(DEFAULT_ANALYTICS_PATH),
+            }
         session.add_all(
             [
                 RunRecord(
                     run_id=f"run_{run_index + 1:04d}",
-                    project_id=PROJECT_ID,
-                    project=PROJECT_NAME,
+                    project_id=DEFAULT_PROJECT_ID,
+                    project=DEFAULT_PROJECT_NAME,
                     name=f"Synthetic cancer performance run {run_index + 1}",
                     run_kind="query_performance_fixture",
                     assay="synthetic_multiomic_cancer",
@@ -328,7 +332,7 @@ def _insert_duckdb_metadata(connection: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO duckdb_metadata
         SELECT
             ?,
-            'Goodomics synthetic cancer query performance project',
+            'Default Project',
             'analytics-v1',
             current_timestamp,
             current_timestamp,
@@ -339,7 +343,7 @@ def _insert_duckdb_metadata(connection: duckdb.DuckDBPyConnection) -> None:
                 'structural_variant_count', ?
             )
         """,
-        [PROJECT_ID, GENE_COUNT, VARIANT_COUNT, STRUCTURAL_VARIANT_COUNT],
+        [DEFAULT_PROJECT_ID, GENE_COUNT, VARIANT_COUNT, STRUCTURAL_VARIANT_COUNT],
     )
 
 
@@ -717,7 +721,7 @@ def _insert_profile_observation_sets(connection: duckdb.DuckDBPyConnection) -> N
                 ('multiqc_qc_metrics', NULL)
         ) AS profiles(profile_key, feature_set_key)
         """,
-        [PROJECT_ID],
+        [DEFAULT_PROJECT_ID],
     )
 
 

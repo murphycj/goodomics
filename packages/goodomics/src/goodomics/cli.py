@@ -46,9 +46,9 @@ DATABASE_URL_OPTION = typer.Option(
     help="Database URL for local Goodomics state.",
 )
 ANALYTICS_PATH_OPTION = typer.Option(
-    Path(".goodomics/analytics.duckdb"),
+    None,
     "--analytics-path",
-    help="DuckDB analytics database path.",
+    help="DuckDB analytics database path. Defaults to the selected project's analytics store.",
 )
 ARTIFACT_ROOT_OPTION = typer.Option(
     Path(".goodomics/artifacts"),
@@ -71,7 +71,7 @@ def _run_multiqc_ingest(
     assay: str | None,
     run_id: str | None,
     database_url: str | None,
-    analytics_path: Path,
+    analytics_path: Path | None,
     artifact_root: Path,
 ) -> None:
     resolved_database_url = database_url or os.environ.get(
@@ -117,7 +117,7 @@ def default_ingest(
     assay: str | None = ASSAY_OPTION,
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
-    analytics_path: Path = ANALYTICS_PATH_OPTION,
+    analytics_path: Path | None = ANALYTICS_PATH_OPTION,
     artifact_root: Path = ARTIFACT_ROOT_OPTION,
 ) -> None:
     """Search a results directory for MultiQC output and ingest it."""
@@ -153,7 +153,7 @@ def ingest(
     cohort: str | None = COHORT_OPTION,
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
-    analytics_path: Path = ANALYTICS_PATH_OPTION,
+    analytics_path: Path | None = ANALYTICS_PATH_OPTION,
     artifact_root: Path = ARTIFACT_ROOT_OPTION,
 ) -> None:
     """Ingest a run into a local or remote Goodomics store."""
@@ -187,7 +187,9 @@ def init(database_url: str | None = DATABASE_URL_OPTION) -> None:
         ) from exc
 
     try:
-        asyncio.run(SQLModelGoodomicsStore(resolved_url).ensure_schema())
+        store = SQLModelGoodomicsStore(resolved_url)
+        asyncio.run(store.ensure_schema())
+        asyncio.run(store.ensure_default_project())
     except ModuleNotFoundError as exc:
         raise typer.BadParameter(
             f"Missing database driver `{exc.name}`. Install `goodomics` for the full "

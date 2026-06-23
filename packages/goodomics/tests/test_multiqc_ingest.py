@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fixtures import write_multiqc_fixture
 from goodomics.ingest.multiqc import ingest_multiqc, ingest_multiqc_runs
 from goodomics.parsers.multiqc import discover_multiqc_outputs, parse_multiqc_bundle
+from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import ArtifactRecord, SQLModelGoodomicsStore
 from sqlmodel import select
@@ -119,6 +121,54 @@ def test_ingest_multiqc_creates_control_analytics_and_artifacts(tmp_path: Path) 
 
     artifacts = asyncio.run(load_artifacts())
     assert {artifact.kind for artifact in artifacts} == {"multiqc_data", "multiqc_report"}
+
+
+def test_ingest_multiqc_defaults_to_project_analytics_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    artifact_root = tmp_path / "state" / "artifacts"
+
+    result = ingest_multiqc(
+        multiqc_dir,
+        run_id="run-default-project",
+        database_url=database_url,
+        artifact_root=artifact_root,
+    )
+
+    expected_path = Path(".goodomics") / "projects" / DEFAULT_PROJECT_ID / "analytics.duckdb"
+    assert result.analytics_path == expected_path
+    assert (tmp_path / expected_path).exists()
+    assert DuckDBAnalyticsStore(expected_path).list_metric_values("run-default-project")
+
+
+def test_ingest_multiqc_project_slug_uses_generated_project_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    artifact_root = tmp_path / "state" / "artifacts"
+
+    result = ingest_multiqc(
+        multiqc_dir,
+        run_id="run-project-slug",
+        project="rnaseq-core",
+        database_url=database_url,
+        artifact_root=artifact_root,
+    )
+
+    control_store = SQLModelGoodomicsStore(database_url)
+    run = asyncio.run(control_store.get_run("run-project-slug"))
+    assert run is not None
+    assert run.project_id is not None
+    assert run.project_id.startswith("prj_")
+    assert run.project_id != "rnaseq-core"
+    assert result.analytics_path == (
+        Path(".goodomics") / "projects" / run.project_id / "analytics.duckdb"
+    )
 
 
 def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> None:
