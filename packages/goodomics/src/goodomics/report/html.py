@@ -43,5 +43,7 @@ def write_report(
     title: str = "Goodomics Report",
     template: dict[str, Any] | None = None,
 ) -> Path:
-    out.write_text(render_report(results, title=title, template=template), encoding="utf-8")
+    out.write_text(
+        render_report(results, title=title, template=template), encoding="utf-8"
+    )
     return out

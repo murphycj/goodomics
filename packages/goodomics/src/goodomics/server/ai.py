@@ -15,6 +15,7 @@ from goodomics.server.settings import Settings
 logger = logging.getLogger(__name__)
 
 
+# Pydantic models here are API-facing payloads used by the dashboard chat route.
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -46,6 +47,7 @@ class ProviderResponse:
 
 
 class AIProvider(Protocol):
+    # Structural interface for model backends (OpenAI-compatible or future providers).
     def is_configured(self) -> bool: ...
 
     async def complete(
@@ -56,6 +58,7 @@ class AIProvider(Protocol):
 
 
 class AIProviderNotConfigured(RuntimeError):
+    # Raised when Ask AI is requested but provider credentials/config are missing.
     pass
 
 
@@ -103,6 +106,8 @@ class OpenAICompatibleProvider:
             response.raise_for_status()
         data = response.json()
         message = data["choices"][0]["message"]
+
+        # Normalize provider-specific tool call payloads into a stable internal shape.
         tool_calls = []
         for raw_call in message.get("tool_calls") or []:
             function = raw_call.get("function") or {}
@@ -119,7 +124,9 @@ class OpenAICompatibleProvider:
             len(message.get("content") or ""),
             [call.name for call in tool_calls],
         )
-        return ProviderResponse(content=message.get("content") or "", tool_calls=tool_calls)
+        return ProviderResponse(
+            content=message.get("content") or "", tool_calls=tool_calls
+        )
 
 
 class GoodomicsChatService:
@@ -149,11 +156,15 @@ class GoodomicsChatService:
     ) -> ChatResult:
         if not self.provider.is_configured():
             logger.debug("Ask AI chat rejected because provider is not configured.")
-            raise AIProviderNotConfigured("Configure GOODOMICS_AI_API_KEY to enable Ask AI.")
+            raise AIProviderNotConfigured(
+                "Configure GOODOMICS_AI_API_KEY to enable Ask AI."
+            )
 
         provider_messages: list[dict[str, Any]] = [
             {"role": "system", "content": _system_prompt(project_id=project_id)}
         ] + [
+            # Only replay chat roles the provider should see; tool evidence is
+            # generated below from trusted server-side executions.
             {"role": message.role, "content": message.content}
             for message in messages
             if message.role in {"user", "assistant"} and message.content.strip()
@@ -173,12 +184,14 @@ class GoodomicsChatService:
         for round_index in range(max_rounds + 1):
             response = await self.provider.complete(provider_messages, tools)
             logger.debug(
-                "Ask AI provider round completed: round=%d content_chars=%d tool_calls=%s",
+                "Ask AI provider round completed: round=%d content_chars=%d "
+                "tool_calls=%s",
                 round_index,
                 len(response.content),
                 [call.name for call in response.tool_calls],
             )
             if not response.tool_calls:
+                # Final assistant turn with no further tool requests.
                 linked_content = _link_response_content(response.content, evidence)
                 logger.debug(
                     "Ask AI final response: conversation_id=%s evidence_items=%d "
@@ -197,6 +210,7 @@ class GoodomicsChatService:
                     tool_calls=evidence,
                 )
             if len(evidence) >= max_rounds:
+                # Bound tool execution rounds to keep chat auditable and predictable.
                 logger.debug(
                     "Ask AI stopped at tool round limit: conversation_id=%s "
                     "evidence_items=%d pending_tool_calls=%s",
@@ -234,6 +248,9 @@ class GoodomicsChatService:
                     ],
                 }
             )
+
+            # Execute each requested tool and append a tool-role message so the
+            # provider can continue reasoning with structured evidence.
             for call in response.tool_calls:
                 logger.debug(
                     "Ask AI executing Goodomics tool: name=%s arguments=%s",
@@ -265,7 +282,9 @@ class GoodomicsChatService:
             conversation_id=conversation_id,
             message=ChatMessage(
                 role="assistant",
-                content="I could not complete the request within the configured tool limit.",
+                content=(
+                    "I could not complete the request within the configured tool limit."
+                ),
             ),
             tool_calls=evidence,
         )
@@ -312,7 +331,11 @@ def chat_examples(project_name: str | None = None) -> list[str]:
 
 def tool_schemas() -> list[dict[str, Any]]:
     return [
-        _tool("list_projects", "List Goodomics projects.", {"query": _string(), "limit": _int()}),
+        _tool(
+            "list_projects",
+            "List Goodomics projects.",
+            {"query": _string(), "limit": _int()},
+        ),
         _tool(
             "resolve_project",
             "Resolve a project reference to a project or candidate list.",
@@ -376,7 +399,11 @@ def tool_schemas() -> list[dict[str, Any]]:
     ]
 
 
-def _tool(name: str, description: str, properties: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _tool(
+    name: str, description: str, properties: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    # `_string(required=True)` marks required fields with a private sentinel so
+    # call sites stay compact while the emitted schema remains provider-friendly.
     required = [
         key for key, schema in properties.items() if schema.pop("__required", False)
     ]
@@ -409,6 +436,7 @@ def _parse_arguments(arguments: str | dict[str, Any]) -> dict[str, Any]:
     try:
         value = json.loads(arguments)
     except json.JSONDecodeError:
+        # Invalid JSON from provider should not crash the chat loop.
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -446,6 +474,7 @@ def _link_response_content(content: str, evidence: list[ToolEvidence]) -> str:
     if not links:
         return content
 
+    # Prefer longest labels first so "project-123" wins over "project".
     pattern = re.compile(
         r"(?<![A-Za-z0-9_%/-])("
         + "|".join(re.escape(label) for label in sorted(links, key=len, reverse=True))
@@ -454,9 +483,14 @@ def _link_response_content(content: str, evidence: list[ToolEvidence]) -> str:
     )
     segments: list[str] = []
     last_index = 0
-    for match in re.finditer(r"\[[^\]\n]+\]\([^) \n]*(?:%20[^)\n]*)?[^)\n]*\)", content):
+    for match in re.finditer(
+        r"\[[^\]\n]+\]\([^) \n]*(?:%20[^)\n]*)?[^)\n]*\)", content
+    ):
+        # Do not rewrite text already inside Markdown links.
         if match.start() > last_index:
-            segments.append(_link_plain_text(content[last_index : match.start()], pattern, links))
+            segments.append(
+                _link_plain_text(content[last_index : match.start()], pattern, links)
+            )
         segments.append(match.group(0))
         last_index = match.end()
     if last_index < len(content):
@@ -495,6 +529,7 @@ def _evidence_entity_links(evidence: list[ToolEvidence]) -> dict[str, str]:
         if key in conflicts:
             return
         if key in links and links[key] != path:
+            # Drop ambiguous labels so we only auto-link unambiguous entities.
             links.pop(key, None)
             conflicts.add(key)
             return
@@ -504,6 +539,8 @@ def _evidence_entity_links(evidence: list[ToolEvidence]) -> dict[str, str]:
         if isinstance(value, dict):
             app_path = value.get("app_path")
             if isinstance(app_path, str) and app_path.startswith("/"):
+                # Tool results can nest entities under summaries or lists, so
+                # collect labels wherever an app path appears.
                 for label in _entity_link_labels(value):
                     add_link(label, app_path)
             for child in value.values():

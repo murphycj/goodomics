@@ -126,7 +126,10 @@ def discover_multiqc_outputs(path: Path) -> list[MultiQCOutput]:
             if candidate.is_dir():
                 data_dirs.add(candidate)
         for candidate in path.rglob("multiqc_data"):
-            if candidate.is_dir() and (candidate / "multiqc_general_stats.txt").exists():
+            if (
+                candidate.is_dir()
+                and (candidate / "multiqc_general_stats.txt").exists()
+            ):
                 data_dirs.add(candidate)
 
     return [
@@ -320,7 +323,11 @@ def _parse_payloads(
         rows = _read_tsv(path)
         if not rows:
             continue
-        samples = {value for row in rows if (value := _clean_text(row.get("Sample"))) is not None}
+        samples = {
+            value
+            for row in rows
+            if (value := _clean_text(row.get("Sample"))) is not None
+        }
         tool, module, _, _ = _metric_parts(path.stem, "")
         sample_key = next(iter(samples)) if len(samples) == 1 else None
         result.payloads.append(

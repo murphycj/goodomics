@@ -35,7 +35,9 @@ app = typer.Typer(cls=GoodomicsTyperGroup, help="Cohort-aware QC for omics pipel
 console = Console()
 RESULTS_ARGUMENT = typer.Argument(..., help="Pipeline results directory.")
 REPORT_OUT_OPTION = typer.Option(Path("goodomics_report.html"), "--out", "-o")
-TEMPLATE_OPTION = typer.Option(None, "--template", help="YAML or JSON report template config.")
+TEMPLATE_OPTION = typer.Option(
+    None, "--template", help="YAML or JSON report template config."
+)
 PROJECT_OPTION = typer.Option(None, "--project")
 ASSAY_OPTION = typer.Option(None, "--assay")
 REPORT_OPTION = typer.Option(None, "--report")
@@ -49,7 +51,10 @@ DATABASE_URL_OPTION = typer.Option(
 ANALYTICS_PATH_OPTION = typer.Option(
     None,
     "--analytics-path",
-    help="DuckDB analytics database path. Defaults to the selected project's analytics store.",
+    help=(
+        "DuckDB analytics database path. Defaults to the selected project's "
+        "analytics store."
+    ),
 )
 FILE_ROOT_OPTION = typer.Option(
     Path(".goodomics/files"),
@@ -159,9 +164,13 @@ def ingest(
 ) -> None:
     """Ingest a run into a local or remote Goodomics store."""
     if report_name:
-        console.print("[yellow]Ignoring --report for the MultiQC ingestion pilot.[/yellow]")
+        console.print(
+            "[yellow]Ignoring --report for the MultiQC ingestion pilot.[/yellow]"
+        )
     if cohort:
-        console.print("[yellow]Ignoring --cohort for the MultiQC ingestion pilot.[/yellow]")
+        console.print(
+            "[yellow]Ignoring --cohort for the MultiQC ingestion pilot.[/yellow]"
+        )
     _run_multiqc_ingest(
         results,
         project=project,
@@ -171,6 +180,7 @@ def ingest(
         analytics_path=analytics_path,
         file_root=file_root,
     )
+
 
 @app.command()
 def init(database_url: str | None = DATABASE_URL_OPTION) -> None:

@@ -583,10 +583,16 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     copy_number_segments: list[CopyNumberSegment] = Field(default_factory=list)
     variants: list[Variant] = Field(default_factory=list)
     variant_annotations: list[VariantAnnotation] = Field(default_factory=list)
-    variant_transcript_annotations: list[VariantTranscriptAnnotation] = Field(default_factory=list)
+    variant_transcript_annotations: list[VariantTranscriptAnnotation] = Field(
+        default_factory=list
+    )
     sample_variant_calls: list[SampleVariantCall] = Field(default_factory=list)
-    structural_variant_events: list[StructuralVariantEvent] = Field(default_factory=list)
-    sample_structural_variant_calls: list[SampleStructuralVariantCall] = Field(default_factory=list)
+    structural_variant_events: list[StructuralVariantEvent] = Field(
+        default_factory=list
+    )
+    sample_structural_variant_calls: list[SampleStructuralVariantCall] = Field(
+        default_factory=list
+    )
     timeline_events: list[TimelineEvent] = Field(default_factory=list)
     profile_payloads: list[ProfilePayload] = Field(default_factory=list)
     gene_alteration_state: list[GeneAlterationState] = Field(default_factory=list)

@@ -33,12 +33,17 @@ def slugify_project(value: str) -> str:
 def validate_project_slug(value: str) -> str:
     slug = slugify_project(value)
     if PROJECT_SLUG_RE.fullmatch(slug) is None:
-        raise ValueError("Project slug must contain lowercase letters, numbers, or hyphens")
+        raise ValueError(
+            "Project slug must contain lowercase letters, numbers, or hyphens"
+        )
     return slug
 
 
 def display_name_from_slug(slug: str) -> str:
-    return " ".join(part.capitalize() for part in slug.split("-") if part) or DEFAULT_PROJECT_NAME
+    return (
+        " ".join(part.capitalize() for part in slug.split("-") if part)
+        or DEFAULT_PROJECT_NAME
+    )
 
 
 def analytics_path_for_project(root: Path | str, project_id: str) -> Path:

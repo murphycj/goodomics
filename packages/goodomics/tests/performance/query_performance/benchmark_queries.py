@@ -263,8 +263,12 @@ QUERIES: tuple[QueryCase, ...] = (
             sms.value AS qc_status,
             eas.value AS cancer_type,
             count(*) AS samples,
-            avg(smn.value) FILTER (WHERE smn.metric_key = 'qc.metric.01') AS mean_metric_01,
-            avg(smn.value) FILTER (WHERE smn.metric_key = 'qc.metric.04') AS mean_metric_04
+            avg(smn.value) FILTER (
+                WHERE smn.metric_key = 'qc.metric.01'
+            ) AS mean_metric_01,
+            avg(smn.value) FILTER (
+                WHERE smn.metric_key = 'qc.metric.04'
+            ) AS mean_metric_04
         FROM sample_metric_string sms
         JOIN entity_attribute_string eas
             ON eas.entity_key = sms.run_sample_key

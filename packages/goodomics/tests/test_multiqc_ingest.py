@@ -61,12 +61,16 @@ def test_duckdb_store_round_trips_metrics_and_payloads(tmp_path: Path) -> None:
     metrics = store.list_metric_values("run-1")
     payloads = store.list_table_payloads("run-1")
 
-    assert any(metric.metric_key == "general_stats.salmon_percent_mapped" for metric in metrics)
+    assert any(
+        metric.metric_key == "general_stats.salmon_percent_mapped" for metric in metrics
+    )
     assert any(payload.payload_name == "salmon_plot" for payload in payloads)
     assert payloads[0].rows
 
 
-def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(tmp_path: Path) -> None:
+def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
+    tmp_path: Path,
+) -> None:
     multiqc_dir = write_multiqc_fixture(tmp_path)
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
     store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
@@ -139,7 +143,9 @@ def test_ingest_multiqc_defaults_to_project_analytics_path(
         file_root=file_root,
     )
 
-    expected_path = Path(".goodomics") / "projects" / DEFAULT_PROJECT_ID / "analytics.duckdb"
+    expected_path = (
+        Path(".goodomics") / "projects" / DEFAULT_PROJECT_ID / "analytics.duckdb"
+    )
     assert result.analytics_path == expected_path
     assert (tmp_path / expected_path).exists()
     assert DuckDBAnalyticsStore(expected_path).list_metric_values("run-default-project")

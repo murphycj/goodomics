@@ -78,13 +78,18 @@ class AnalyticalTableSerializer:
         view_name = f"{self.table_name}_sorted"
         connection.execute(f"DROP VIEW IF EXISTS {view_name}")
         connection.execute(
-            f"CREATE VIEW {view_name} AS SELECT * FROM {self.table_name} ORDER BY {self.order_by}"
+            f"CREATE VIEW {view_name} AS SELECT * FROM {self.table_name} "
+            f"ORDER BY {self.order_by}"
         )
 
-    def delete_run(self, connection: duckdb.DuckDBPyConnection, run_id: str | None) -> None:
+    def delete_run(
+        self, connection: duckdb.DuckDBPyConnection, run_id: str | None
+    ) -> None:
         if run_id is None or self.run_column is None:
             return
-        connection.execute(f"DELETE FROM {self.table_name} WHERE {self.run_column} = ?", [run_id])
+        connection.execute(
+            f"DELETE FROM {self.table_name} WHERE {self.run_column} = ?", [run_id]
+        )
 
     def delete_unique_values(
         self,
@@ -97,7 +102,9 @@ class AnalyticalTableSerializer:
             tuple(_field_value(record, column) for column in self.unique_columns)
             for record in records
         }
-        where = " AND ".join(f"{column} IS NOT DISTINCT FROM ?" for column in self.unique_columns)
+        where = " AND ".join(
+            f"{column} IS NOT DISTINCT FROM ?" for column in self.unique_columns
+        )
         connection.executemany(
             f"DELETE FROM {self.table_name} WHERE {where}",
             [tuple(value) for value in values],
@@ -111,10 +118,14 @@ class AnalyticalTableSerializer:
         if not records:
             return
         placeholders = ", ".join("?" for _ in self.columns)
+        columns = ", ".join(self.columns)
         connection.executemany(
-            f"INSERT INTO {self.table_name} ({', '.join(self.columns)}) VALUES ({placeholders})",
+            f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})",
             [
-                tuple(_to_db_value(_field_value(record, column)) for column in self.columns)
+                tuple(
+                    _to_db_value(_field_value(record, column))
+                    for column in self.columns
+                )
                 for record in records
             ],
         )
@@ -233,7 +244,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "value DOUBLE",
         ),
         "entity_scope, entity_key, attribute_key",
-        unique_columns=("entity_scope", "entity_key", "attribute_key", "data_profile_key"),
+        unique_columns=(
+            "entity_scope",
+            "entity_key",
+            "attribute_key",
+            "data_profile_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_string",
@@ -256,7 +272,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "value TEXT",
         ),
         "entity_scope, entity_key, attribute_key",
-        unique_columns=("entity_scope", "entity_key", "attribute_key", "data_profile_key"),
+        unique_columns=(
+            "entity_scope",
+            "entity_key",
+            "attribute_key",
+            "data_profile_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_boolean",
@@ -279,7 +300,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "value BOOLEAN",
         ),
         "entity_scope, entity_key, attribute_key",
-        unique_columns=("entity_scope", "entity_key", "attribute_key", "data_profile_key"),
+        unique_columns=(
+            "entity_scope",
+            "entity_key",
+            "attribute_key",
+            "data_profile_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_date",
@@ -302,7 +328,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "value TIMESTAMP",
         ),
         "entity_scope, entity_key, attribute_key",
-        unique_columns=("entity_scope", "entity_key", "attribute_key", "data_profile_key"),
+        unique_columns=(
+            "entity_scope",
+            "entity_key",
+            "attribute_key",
+            "data_profile_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_json",
@@ -325,7 +356,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "value_json JSON",
         ),
         "entity_scope, entity_key, attribute_key",
-        unique_columns=("entity_scope", "entity_key", "attribute_key", "data_profile_key"),
+        unique_columns=(
+            "entity_scope",
+            "entity_key",
+            "attribute_key",
+            "data_profile_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "sample_metric_numeric",
@@ -719,7 +755,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "info_json JSON",
         ),
         "variant_key, data_profile_key, feature_key",
-        unique_columns=("data_profile_key", "variant_key", "feature_key", "consequence"),
+        unique_columns=(
+            "data_profile_key",
+            "variant_key",
+            "feature_key",
+            "consequence",
+        ),
     ),
     AnalyticalTableSerializer(
         "variant_transcript_annotations",
@@ -1022,7 +1063,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "q95 DOUBLE",
         ),
         "sample_set_id, data_profile_key, metric_key, feature_key",
-        unique_columns=("sample_set_id", "data_profile_key", "metric_key", "feature_key"),
+        unique_columns=(
+            "sample_set_id",
+            "data_profile_key",
+            "metric_key",
+            "feature_key",
+        ),
     ),
     AnalyticalTableSerializer(
         "tool_versions",
@@ -1051,7 +1097,9 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     ),
 )
 
-SERIALIZERS_BY_FIELD = {serializer.batch_field: serializer for serializer in SERIALIZERS}
+SERIALIZERS_BY_FIELD = {
+    serializer.batch_field: serializer for serializer in SERIALIZERS
+}
 SERIALIZERS_BY_TABLE = {serializer.table_name: serializer for serializer in SERIALIZERS}
 RUN_SCOPED_TABLES = tuple(
     serializer for serializer in SERIALIZERS if serializer.run_column is not None
@@ -1108,8 +1156,12 @@ class DuckDBAnalyticsStore:
                     serializer.insert_records(connection, records)
 
                 if refresh_derived:
-                    self._refresh_gene_alteration_state(connection, run_id=replace_run_id)
-                    self._refresh_sample_profile_cache(connection, run_id=replace_run_id)
+                    self._refresh_gene_alteration_state(
+                        connection, run_id=replace_run_id
+                    )
+                    self._refresh_sample_profile_cache(
+                        connection, run_id=replace_run_id
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -1131,10 +1183,14 @@ class DuckDBAnalyticsStore:
             batch = AnalyticsIngestBatch(
                 metric_definitions=list(definitions or []),
                 sample_metric_numeric=[
-                    metric for metric in metric_records if isinstance(metric, SampleMetricNumeric)
+                    metric
+                    for metric in metric_records
+                    if isinstance(metric, SampleMetricNumeric)
                 ],
                 sample_metric_string=[
-                    metric for metric in metric_records if isinstance(metric, SampleMetricString)
+                    metric
+                    for metric in metric_records
+                    if isinstance(metric, SampleMetricString)
                 ],
                 profile_payloads=list(payloads or []),
                 tool_versions=list(tool_versions or []),
@@ -1167,9 +1223,15 @@ class DuckDBAnalyticsStore:
             for row in rows
         ]
 
-    def list_metric_values(self, run_id: str) -> list[SampleMetricNumeric | SampleMetricString]:
-        numeric = self.fetch_records("sample_metric_numeric", SampleMetricNumeric, run_id=run_id)
-        string = self.fetch_records("sample_metric_string", SampleMetricString, run_id=run_id)
+    def list_metric_values(
+        self, run_id: str
+    ) -> list[SampleMetricNumeric | SampleMetricString]:
+        numeric = self.fetch_records(
+            "sample_metric_numeric", SampleMetricNumeric, run_id=run_id
+        )
+        string = self.fetch_records(
+            "sample_metric_string", SampleMetricString, run_id=run_id
+        )
         return [*numeric, *string]
 
     def list_profile_payloads(self, run_id: str) -> list[ProfilePayload]:
@@ -1230,7 +1292,8 @@ class DuckDBAnalyticsStore:
             CREATE OR REPLACE VIEW copy_number_segments_by_region AS
             SELECT *
             FROM copy_number_segments
-            ORDER BY genome_build, contig, start_pos, end_pos, data_profile_key, run_sample_key
+            ORDER BY genome_build, contig, start_pos, end_pos,
+                data_profile_key, run_sample_key
             """
         )
         connection.execute(
@@ -1321,7 +1384,9 @@ class DuckDBAnalyticsStore:
             {feature_call_run_filter}
             AND (
                 call_rank IS DISTINCT FROM 0
-                OR lower(call_code) NOT IN ('0', 'diploid', 'neutral', 'absent', 'none', 'na')
+                OR lower(call_code) NOT IN (
+                    '0', 'diploid', 'neutral', 'absent', 'none', 'na'
+                )
             )
             """,
             parameters,
@@ -1446,7 +1511,12 @@ def _to_db_value(value: Any) -> Any:
 
 
 def _from_db_value(column: str, value: Any) -> Any:
-    if _is_json_column(column) and isinstance(value, str) and value and value[0] in "[{":
+    if (
+        _is_json_column(column)
+        and isinstance(value, str)
+        and value
+        and value[0] in "[{"
+    ):
         try:
             return json.loads(value)
         except json.JSONDecodeError:

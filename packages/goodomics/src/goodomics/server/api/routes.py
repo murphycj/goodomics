@@ -422,7 +422,9 @@ async def list_project_run_analytics_payloads(
 ) -> list[AnalyticsPayloadRead]:
     run = await _get_project_run(request, project_id, run_id)
     return _analytics_payload_reads(
-        _analytics_store_for_project(request, run.project_id).list_profile_payloads(run_id)
+        _analytics_store_for_project(request, run.project_id).list_profile_payloads(
+            run_id
+        )
     )
 
 
@@ -492,7 +494,9 @@ async def patch_project(
                 )
             ).first()
             if existing is not None:
-                raise HTTPException(status_code=409, detail="Project slug already exists")
+                raise HTTPException(
+                    status_code=409, detail="Project slug already exists"
+                )
             row.slug = slug
         if "name" in values and values["name"] is not None:
             row.name = str(values["name"]).strip() or row.name
@@ -545,7 +549,9 @@ async def search_samples(
             | (func.lower(SampleRecord.sample_name).like(pattern))
         )
         if project_id is not None:
-            sample_statement = sample_statement.where(SampleRecord.project_id == project_id)
+            sample_statement = sample_statement.where(
+                SampleRecord.project_id == project_id
+            )
         remaining = max(limit - len(run_rows), 0)
         sample_rows = (
             (await session.exec(sample_statement.limit(remaining))).all()
@@ -605,14 +611,18 @@ async def list_runs(
 
 @router.post("/runs", response_model=Run, status_code=201)
 async def create_run(payload: RunCreate, request: Request) -> Run:
-    project = await request.app.state.store.ensure_project(payload.project_id or payload.project)
+    project = await request.app.state.store.ensure_project(
+        payload.project_id or payload.project
+    )
     run = Run(
         run_id=payload.run_id or _new_id("run"),
         project_id=project.project_id,
         project=project.slug,
         assay=payload.assay,
         samples=[
-            sample.model_copy(update={"project_id": sample.project_id or project.project_id})
+            sample.model_copy(
+                update={"project_id": sample.project_id or project.project_id}
+            )
             for sample in payload.samples
         ],
         metrics=payload.metrics,
@@ -665,7 +675,9 @@ async def _list_run_files(run_id: str, request: Request) -> list[FileRead]:
     await _ensure_schema(request)
     async with _session(request) as session:
         rows = (
-            await session.exec(select(StoredFileRecord).where(StoredFileRecord.run_id == run_id))
+            await session.exec(
+                select(StoredFileRecord).where(StoredFileRecord.run_id == run_id)
+            )
         ).all()
     return [_file_from_stored_file(row) for row in rows]
 
@@ -674,7 +686,9 @@ async def _list_run_files(run_id: str, request: Request) -> list[FileRead]:
     "/runs/{run_id}/analytics/metrics",
     response_model=list[AnalyticsMetricRead],
 )
-async def list_run_analytics_metrics(run_id: str, request: Request) -> list[AnalyticsMetricRead]:
+async def list_run_analytics_metrics(
+    run_id: str, request: Request
+) -> list[AnalyticsMetricRead]:
     run = await get_run(run_id, request)
     analytics_store = _analytics_store_for_project(request, run.project_id)
     return _analytics_metric_reads(analytics_store.list_metric_values(run_id))
@@ -684,7 +698,9 @@ async def list_run_analytics_metrics(run_id: str, request: Request) -> list[Anal
     "/runs/{run_id}/analytics/payloads",
     response_model=list[AnalyticsPayloadRead],
 )
-async def list_run_analytics_payloads(run_id: str, request: Request) -> list[AnalyticsPayloadRead]:
+async def list_run_analytics_payloads(
+    run_id: str, request: Request
+) -> list[AnalyticsPayloadRead]:
     run = await get_run(run_id, request)
     analytics_store = _analytics_store_for_project(request, run.project_id)
     return _analytics_payload_reads(analytics_store.list_profile_payloads(run_id))
@@ -805,13 +821,17 @@ async def export_report_template_yaml(template_id: str, request: Request) -> Res
 
 
 @router.get("/report-templates/{template_id}/export.json")
-async def export_report_template_json(template_id: str, request: Request) -> dict[str, Any]:
+async def export_report_template_json(
+    template_id: str, request: Request
+) -> dict[str, Any]:
     template = await get_report_template(template_id, request)
     return _template_export(template)
 
 
 @router.post("/reports/render", response_model=ReportRead, status_code=201)
-async def render_standalone_report(payload: ReportRenderRequest, request: Request) -> ReportRead:
+async def render_standalone_report(
+    payload: ReportRenderRequest, request: Request
+) -> ReportRead:
     await _ensure_schema(request)
     report_id = payload.report_id or _new_id("report")
     html = render_report(payload.results, title=payload.title)
@@ -874,7 +894,9 @@ async def create_cohort(payload: CohortCreate, request: Request) -> CohortRead:
 
 
 @router.patch("/cohorts/{cohort_id}", response_model=CohortRead)
-async def patch_cohort(cohort_id: str, payload: CohortPatch, request: Request) -> CohortRead:
+async def patch_cohort(
+    cohort_id: str, payload: CohortPatch, request: Request
+) -> CohortRead:
     values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
     await _patch_values(request, CohortRecord, "cohort_id", cohort_id, values)
     row = await _get_row(request, CohortRecord, "cohort_id", cohort_id)
@@ -899,7 +921,9 @@ async def create_qc_policy(payload: QCPolicyCreate, request: Request) -> QCPolic
 
 
 @router.patch("/qc-policies/{policy_id}", response_model=QCPolicyRead)
-async def patch_qc_policy(policy_id: str, payload: QCPolicyPatch, request: Request) -> QCPolicyRead:
+async def patch_qc_policy(
+    policy_id: str, payload: QCPolicyPatch, request: Request
+) -> QCPolicyRead:
     values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
     await _patch_values(request, QCPolicyRecord, "policy_id", policy_id, values)
     row = await _get_row(request, QCPolicyRecord, "policy_id", policy_id)
@@ -908,7 +932,9 @@ async def patch_qc_policy(policy_id: str, payload: QCPolicyPatch, request: Reque
 
 @router.get("/database/tables", response_model=list[DatabaseTableRead])
 async def list_database_tables() -> list[DatabaseTableRead]:
-    return [DatabaseTableRead(name=name, editable=True) for name in sorted(EDITABLE_TABLES)]
+    return [
+        DatabaseTableRead(name=name, editable=True) for name in sorted(EDITABLE_TABLES)
+    ]
 
 
 @router.get("/database/summary", response_model=DatabaseSummaryRead)
@@ -931,7 +957,8 @@ async def get_database_summary(
         + analytics_counts.get("sample_metric_string", 0),
         total_payloads=analytics_counts.get("profile_payloads", 0),
         control_tables=[
-            TableCountRead(name=name, rows=count) for name, count in sorted(control_counts.items())
+            TableCountRead(name=name, rows=count)
+            for name, count in sorted(control_counts.items())
         ],
         analytics_tables=[
             TableCountRead(name=name, rows=count)
@@ -1032,7 +1059,9 @@ async def _project_read(
     )
     latest_activity_at = (
         await session.exec(
-            select(func.max(RunRecord.created_at)).where(RunRecord.project_id == row.project_id)
+            select(func.max(RunRecord.created_at)).where(
+                RunRecord.project_id == row.project_id
+            )
         )
     ).one()
     file_count = int(
@@ -1168,7 +1197,9 @@ def _analytics_store_for_project(
     if settings.analytics_path:
         return DuckDBAnalyticsStore(settings.analytics_path)
     return DuckDBAnalyticsStore(
-        analytics_path_for_project(settings.analytics_root, project_id or DEFAULT_PROJECT_ID)
+        analytics_path_for_project(
+            settings.analytics_root, project_id or DEFAULT_PROJECT_ID
+        )
     )
 
 
@@ -1230,7 +1261,9 @@ async def _control_table_counts(
             project_run_ids = list(
                 (
                     await session.exec(
-                        select(RunRecord.run_id).where(RunRecord.project_id == project_id)
+                        select(RunRecord.run_id).where(
+                            RunRecord.project_id == project_id
+                        )
                     )
                 ).all()
             )
@@ -1245,7 +1278,9 @@ async def _control_table_counts(
         return counts
 
 
-async def _insert_values(request: Request, model: type[SQLModel], values: dict[str, Any]) -> None:
+async def _insert_values(
+    request: Request, model: type[SQLModel], values: dict[str, Any]
+) -> None:
     await _ensure_schema(request)
     async with _session(request) as session:
         session.add(model.model_validate(values))
@@ -1284,7 +1319,9 @@ async def _get_row(
     try:
         key_value: Any = _coerce_primary_key_value(model, primary_key, row_id)
         row = (
-            await session.exec(select(model).where(getattr(model, primary_key) == key_value))
+            await session.exec(
+                select(model).where(getattr(model, primary_key) == key_value)
+            )
         ).first()
     finally:
         if own_session:
@@ -1301,7 +1338,9 @@ def _editable_table(table_name: str) -> tuple[type[SQLModel], str, set[str]]:
     return table_config
 
 
-def _coerce_json_values(model: type[SQLModel], values: dict[str, JsonValue]) -> dict[str, Any]:
+def _coerce_json_values(
+    model: type[SQLModel], values: dict[str, JsonValue]
+) -> dict[str, Any]:
     coerced: dict[str, Any] = {}
     for key, value in values.items():
         field_name = _model_field_name(model, key)
@@ -1331,7 +1370,9 @@ def _model_field_name(model: type[SQLModel], requested_name: str) -> str:
     return requested_name
 
 
-def _coerce_primary_key_value(model: type[SQLModel], primary_key: str, value: str) -> Any:
+def _coerce_primary_key_value(
+    model: type[SQLModel], primary_key: str, value: str
+) -> Any:
     field_info = model.model_fields.get(primary_key)
     if field_info is None:
         return value

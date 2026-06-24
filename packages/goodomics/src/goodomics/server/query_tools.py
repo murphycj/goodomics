@@ -34,7 +34,9 @@ class GoodomicsQueryTools:
     def __init__(self, context: QueryToolContext) -> None:
         self.context = context
 
-    async def list_projects(self, query: str | None = None, limit: int = 20) -> dict[str, Any]:
+    async def list_projects(
+        self, query: str | None = None, limit: int = 20
+    ) -> dict[str, Any]:
         projects = await self._all_projects()
         term = _normalize(query or "")
         if term:
@@ -46,7 +48,9 @@ class GoodomicsQueryTools:
                 or term in _normalize(project.project_id)
             ]
         projects = projects[: _bounded_limit(limit)]
-        return {"projects": [await self._project_summary(project) for project in projects]}
+        return {
+            "projects": [await self._project_summary(project) for project in projects]
+        }
 
     async def resolve_project(self, reference: str, limit: int = 5) -> dict[str, Any]:
         reference = reference.strip()
@@ -73,7 +77,9 @@ class GoodomicsQueryTools:
 
         normalized_reference = _normalize(reference)
         normalized_name_matches = [
-            project for project in projects if _normalize(project.name) == normalized_reference
+            project
+            for project in projects
+            if _normalize(project.name) == normalized_reference
         ]
         if len(normalized_name_matches) == 1:
             return {
@@ -95,7 +101,10 @@ class GoodomicsQueryTools:
         candidates = sorted(
             (
                 (
-                    max(_score(reference, project.name), _score(reference, project.slug or "")),
+                    max(
+                        _score(reference, project.name),
+                        _score(reference, project.slug or ""),
+                    ),
                     project,
                 )
                 for project in projects
@@ -122,7 +131,11 @@ class GoodomicsQueryTools:
                 "project": await self._project_summary(top_project),
                 "candidates": candidate_payloads,
             }
-        return {"status": "ambiguous", "project": None, "candidates": candidate_payloads}
+        return {
+            "status": "ambiguous",
+            "project": None,
+            "candidates": candidate_payloads,
+        }
 
     async def get_project_summary(self, project: str) -> dict[str, Any]:
         resolution = await self.resolve_project(project)
@@ -214,7 +227,11 @@ class GoodomicsQueryTools:
             if project_id is None:
                 return {"project_resolution": resolution, "run": None}
             if run.project_id != project_id:
-                return {"status": "not_found", "project_resolution": resolution, "run": None}
+                return {
+                    "status": "not_found",
+                    "project_resolution": resolution,
+                    "run": None,
+                }
         return {
             "status": "matched",
             "run": _run_payload(run),
@@ -261,7 +278,9 @@ class GoodomicsQueryTools:
 
         analytics_metrics: list[dict[str, Any]] = []
         try:
-            values = self._analytics_store(run.get("project_id")).list_metric_values(run_id)
+            values = self._analytics_store(run.get("project_id")).list_metric_values(
+                run_id
+            )
             analytics_metrics = [_analytics_metric_payload(value) for value in values]
             if term:
                 analytics_metrics = [
@@ -276,7 +295,9 @@ class GoodomicsQueryTools:
         bounded = _bounded_limit(limit)
         return {
             "run": run,
-            "metrics": [metric.model_dump(mode="json") for metric in scalar_metrics[:bounded]],
+            "metrics": [
+                metric.model_dump(mode="json") for metric in scalar_metrics[:bounded]
+            ],
             "analytics_metrics": analytics_metrics[:bounded],
         }
 
@@ -294,7 +315,9 @@ class GoodomicsQueryTools:
         await self.context.store.ensure_schema()
         statement = select(StoredFileRecord).where(StoredFileRecord.run_id == run_id)
         if kind:
-            statement = statement.where(func.lower(StoredFileRecord.kind) == kind.lower())
+            statement = statement.where(
+                func.lower(StoredFileRecord.kind) == kind.lower()
+            )
         statement = statement.order_by(cast(Any, StoredFileRecord.id)).limit(
             _bounded_limit(limit)
         )
@@ -429,7 +452,9 @@ class GoodomicsQueryTools:
             return None, None
         return await self._required_project_id(project)
 
-    async def _required_project_id(self, project: str) -> tuple[str | None, dict[str, Any]]:
+    async def _required_project_id(
+        self, project: str
+    ) -> tuple[str | None, dict[str, Any]]:
         resolution = await self.resolve_project(project)
         return _matched_project_id(resolution), resolution
 
@@ -441,7 +466,9 @@ class GoodomicsQueryTools:
         if settings.analytics_path:
             return DuckDBAnalyticsStore(settings.analytics_path)
         return DuckDBAnalyticsStore(
-            analytics_path_for_project(settings.analytics_root, project_id or DEFAULT_PROJECT_ID)
+            analytics_path_for_project(
+                settings.analytics_root, project_id or DEFAULT_PROJECT_ID
+            )
         )
 
 
@@ -463,7 +490,9 @@ def _score(reference: str, candidate: str) -> float:
     if not left or not right:
         return 0.0
     if left in right or right in left:
-        return min(1.0, max(len(left), len(right)) / max(min(len(left), len(right)), 1) * 0.72)
+        return min(
+            1.0, max(len(left), len(right)) / max(min(len(left), len(right)), 1) * 0.72
+        )
     return SequenceMatcher(a=left, b=right).ratio()
 
 
@@ -479,14 +508,18 @@ def _run_record_payload(row: RunRecord) -> dict[str, Any]:
         "project": row.project,
         "name": row.name,
         "app_path": app_path,
-        "markdown_link": f"[{row.name or row.run_id}]({app_path})" if app_path else row.run_id,
+        "markdown_link": f"[{row.name or row.run_id}]({app_path})"
+        if app_path
+        else row.run_id,
         "run_kind": row.run_kind,
         "assay": row.assay,
         "pipeline_name": row.pipeline_name,
         "pipeline_version": row.pipeline_version,
         "status": row.status,
         "created_at": row.created_at.isoformat(),
-        "started_at": row.started_at.isoformat() if row.started_at is not None else None,
+        "started_at": row.started_at.isoformat()
+        if row.started_at is not None
+        else None,
         "ended_at": row.ended_at.isoformat() if row.ended_at is not None else None,
     }
 
@@ -578,7 +611,9 @@ def _file_payload(row: StoredFileRecord) -> dict[str, Any]:
         "size_bytes": row.size_bytes,
         "sha256": row.sha256,
         "source_path": row.source_path,
-        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "created_at": row.created_at.isoformat()
+        if row.created_at is not None
+        else None,
     }
 
 

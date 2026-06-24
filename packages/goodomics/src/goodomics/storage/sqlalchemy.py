@@ -254,7 +254,9 @@ class SQLModelGoodomicsStore:
                 row = await _resolve_project_row(session, slug)
             if row is None:
                 project_id = (
-                    DEFAULT_PROJECT_ID if slug == DEFAULT_PROJECT_SLUG else new_project_id()
+                    DEFAULT_PROJECT_ID
+                    if slug == DEFAULT_PROJECT_SLUG
+                    else new_project_id()
                 )
                 row = ProjectRecord(
                     project_id=project_id,
@@ -287,8 +289,12 @@ class SQLModelGoodomicsStore:
             await session.exec(
                 delete(StoredFileRecord).where(StoredFileRecord.run_id == run.run_id)
             )
-            await session.exec(delete(MetricRecord).where(MetricRecord.run_id == run.run_id))
-            await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run.run_id))
+            await session.exec(
+                delete(MetricRecord).where(MetricRecord.run_id == run.run_id)
+            )
+            await session.exec(
+                delete(RunSampleRecord).where(RunSampleRecord.run_id == run.run_id)
+            )
 
             existing = await session.get(RunRecord, run.run_id)
             if existing is not None:
@@ -380,7 +386,9 @@ class SQLModelGoodomicsStore:
                 )
             ).all()
             metric_rows = (
-                await session.exec(select(MetricRecord).where(MetricRecord.run_id == run_id))
+                await session.exec(
+                    select(MetricRecord).where(MetricRecord.run_id == run_id)
+                )
             ).all()
         return Run(
             run_id=run_row.run_id,
@@ -405,7 +413,9 @@ class SQLModelGoodomicsStore:
         await self.ensure_schema()
         async with AsyncSession(self._get_engine()) as session:
             metric_rows = (
-                await session.exec(select(MetricRecord).where(MetricRecord.run_id == run_id))
+                await session.exec(
+                    select(MetricRecord).where(MetricRecord.run_id == run_id)
+                )
             ).all()
         return [_metric_from_row(row) for row in metric_rows]
 
@@ -415,7 +425,9 @@ class SQLModelGoodomicsStore:
         run_id: str,
         files: list[StoredFileMetadata],
     ) -> None:
-        await session.exec(delete(StoredFileRecord).where(StoredFileRecord.run_id == run_id))
+        await session.exec(
+            delete(StoredFileRecord).where(StoredFileRecord.run_id == run_id)
+        )
         if files:
             session.add_all(
                 [
@@ -494,7 +506,9 @@ async def _ensure_compatible_schema(connection: Any) -> None:
     result = await connection.exec_driver_sql("PRAGMA table_info(projects)")
     columns = {str(row[1]) for row in result.fetchall()}
     if "slug" not in columns:
-        await connection.exec_driver_sql("ALTER TABLE projects ADD COLUMN slug VARCHAR(255)")
+        await connection.exec_driver_sql(
+            "ALTER TABLE projects ADD COLUMN slug VARCHAR(255)"
+        )
         await connection.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_projects_slug ON projects (slug)"
         )

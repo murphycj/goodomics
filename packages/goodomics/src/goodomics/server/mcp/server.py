@@ -34,7 +34,9 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
     logger.debug("Created Goodomics MCP server mounted at streamable_http_path=/")
 
     @mcp.tool()
-    async def list_projects(query: str | None = None, limit: int = 20) -> dict[str, Any]:
+    async def list_projects(
+        query: str | None = None, limit: int = 20
+    ) -> dict[str, Any]:
         """List Goodomics projects, optionally filtered by name, slug, or ID."""
         return await _logged_tool_call(
             "list_projects",
@@ -195,7 +197,9 @@ async def _logged_tool_call(
 ) -> dict[str, Any]:
     """Log MCP tool execution without dumping large result payloads."""
 
-    logger.debug("MCP tool started: name=%s arguments=%s", name, _debug_arguments(arguments))
+    logger.debug(
+        "MCP tool started: name=%s arguments=%s", name, _debug_arguments(arguments)
+    )
     try:
         result = await call
     except Exception:
@@ -205,7 +209,9 @@ async def _logged_tool_call(
             _debug_arguments(arguments),
         )
         raise
-    logger.debug("MCP tool completed: name=%s result=%s", name, _debug_result_summary(result))
+    logger.debug(
+        "MCP tool completed: name=%s result=%s", name, _debug_result_summary(result)
+    )
     return result
 
 

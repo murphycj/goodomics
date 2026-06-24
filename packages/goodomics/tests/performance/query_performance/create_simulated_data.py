@@ -14,7 +14,11 @@ from goodomics.projects import (
     analytics_path_for_project,
 )
 from goodomics.storage.duckdb import ANALYTICS_TABLES, DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import ProjectRecord, RunRecord, SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    ProjectRecord,
+    RunRecord,
+    SQLModelGoodomicsStore,
+)
 from sqlmodel import delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -65,7 +69,9 @@ def _parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("runs", type=_positive_int, help="Number of simulated runs.")
-    parser.add_argument("samples", type=_positive_int, help="Number of samples per run.")
+    parser.add_argument(
+        "samples", type=_positive_int, help="Number of samples per run."
+    )
     return parser.parse_args()
 
 
@@ -286,19 +292,34 @@ def _load_reference_tables(connection: duckdb.DuckDBPyConnection) -> None:
             "variant_transcript_annotations",
             lambda: _insert_variant_transcript_annotations(connection),
         ),
-        ("structural_variant_events", lambda: _insert_structural_variant_events(connection)),
+        (
+            "structural_variant_events",
+            lambda: _insert_structural_variant_events(connection),
+        ),
     )
     _run_steps(steps)
 
 
 def _load_run_scoped_tables(connection: duckdb.DuckDBPyConnection) -> None:
     steps: tuple[tuple[str, Callable[[], None]], ...] = (
-        ("entity_attribute_numeric", lambda: _insert_entity_attribute_numeric(connection)),
-        ("entity_attribute_string", lambda: _insert_entity_attribute_string(connection)),
-        ("entity_attribute_boolean", lambda: _insert_entity_attribute_boolean(connection)),
+        (
+            "entity_attribute_numeric",
+            lambda: _insert_entity_attribute_numeric(connection),
+        ),
+        (
+            "entity_attribute_string",
+            lambda: _insert_entity_attribute_string(connection),
+        ),
+        (
+            "entity_attribute_boolean",
+            lambda: _insert_entity_attribute_boolean(connection),
+        ),
         ("entity_attribute_date", lambda: _insert_entity_attribute_date(connection)),
         ("entity_attribute_json", lambda: _insert_entity_attribute_json(connection)),
-        ("profile_observation_sets", lambda: _insert_profile_observation_sets(connection)),
+        (
+            "profile_observation_sets",
+            lambda: _insert_profile_observation_sets(connection),
+        ),
         ("sample_metric_numeric", lambda: _insert_sample_metric_numeric(connection)),
         ("sample_metric_string", lambda: _insert_sample_metric_string(connection)),
         ("sample_metric_json", lambda: _insert_sample_metric_json(connection)),
@@ -549,7 +570,9 @@ def _insert_variant_annotations(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _insert_variant_transcript_annotations(connection: duckdb.DuckDBPyConnection) -> None:
+def _insert_variant_transcript_annotations(
+    connection: duckdb.DuckDBPyConnection,
+) -> None:
     connection.execute(
         """
         INSERT INTO variant_transcript_annotations
@@ -846,8 +869,7 @@ def _insert_feature_call(connection: duckdb.DuckDBPyConnection) -> None:
             NULL
         FROM perf_run_samples rs
         JOIN perf_genes g ON g.feature_index < ?
-        """
-        ,
+        """,
         [FEATURE_CALLS_PER_SAMPLE],
     )
 
@@ -867,8 +889,7 @@ def _insert_sample_interval_values(connection: duckdb.DuckDBPyConnection) -> Non
             NULL
         FROM perf_run_samples rs
         JOIN perf_intervals i ON i.interval_index < ?
-        """
-        ,
+        """,
         [INTERVAL_VALUES_PER_SAMPLE],
     )
 
@@ -898,8 +919,7 @@ def _insert_copy_number_segments(connection: duckdb.DuckDBPyConnection) -> None:
             NULL
         FROM perf_run_samples rs
         CROSS JOIN range(?) AS segment_range(segment_index)
-        """
-        ,
+        """,
         [COPY_NUMBER_SEGMENTS_PER_SAMPLE],
     )
 
@@ -933,7 +953,9 @@ def _insert_sample_variant_calls(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _insert_sample_structural_variant_calls(connection: duckdb.DuckDBPyConnection) -> None:
+def _insert_sample_structural_variant_calls(
+    connection: duckdb.DuckDBPyConnection,
+) -> None:
     connection.execute(
         """
         INSERT INTO sample_structural_variant_calls
@@ -1050,8 +1072,7 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
             columns_json,
             rows_json
         )
-        """
-        ,
+        """,
         [QC_NUMERIC_METRIC_COUNT],
     )
 

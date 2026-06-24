@@ -108,7 +108,9 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     search_body = search.json()
     assert search_body[0]["kind"] == "run"
     assert search_body[0]["run_id"] == "rna-run"
-    assert any(item["kind"] == "sample" and item["sample_id"] == "S1" for item in search_body)
+    assert any(
+        item["kind"] == "sample" and item["sample_id"] == "S1" for item in search_body
+    )
 
     sample = client.get(f"/api/v1/projects/{project['project_id']}/samples/S1")
     assert sample.status_code == 200
@@ -164,7 +166,9 @@ def test_query_tools_resolve_project_and_list_read_only_context(
             ),
         )
 
-    resolution, runs, samples, run, run_samples, metrics = _portal(client).call(query_context)
+    resolution, runs, samples, run, run_samples, metrics = _portal(client).call(
+        query_context
+    )
 
     assert resolution["status"] == "matched"
     assert resolution["project"]["project_id"] == created["project_id"]
@@ -185,7 +189,9 @@ def test_query_tools_resolve_project_and_list_read_only_context(
         f"[Tumor RNA](/project/{created['project_id']}/samples/S1%20Read%201)"
     )
     assert run["run"]["sample_count"] == 1
-    assert run["run"]["app_path"] == f"/project/{created['project_id']}/runs/rna-prod-run"
+    assert (
+        run["run"]["app_path"] == f"/project/{created['project_id']}/runs/rna-prod-run"
+    )
     assert run_samples["samples"][0]["sample_name"] == "Tumor RNA"
     assert (
         run_samples["samples"][0]["app_path"]
@@ -404,14 +410,8 @@ def test_ai_chat_links_projects_runs_and_samples_from_tool_evidence(
 
     assert response.status_code == 200
     content = response.json()["message"]["content"]
-    assert (
-        f"[AI Links Project](/project/{project['project_id']})"
-        in content
-    )
-    assert (
-        f"[WT_REP2](/project/{project['project_id']}/runs/WT_REP2)"
-        in content
-    )
+    assert f"[AI Links Project](/project/{project['project_id']})" in content
+    assert f"[WT_REP2](/project/{project['project_id']}/runs/WT_REP2)" in content
     assert (
         f"[WT_REP2 Read 1](/project/{project['project_id']}/samples/WT_REP2%20Read%201)"
         in content
@@ -459,14 +459,12 @@ def test_ai_chat_links_plain_run_id_lists_from_tool_evidence(
 
     assert response.status_code == 200
     content = response.json()["message"]["content"]
-    assert (
-        f"Run ID: [WT_REP2](/project/{DEFAULT_PROJECT_ID}/runs/WT_REP2)"
-        in content
-    )
-    assert (
+    assert f"Run ID: [WT_REP2](/project/{DEFAULT_PROJECT_ID}/runs/WT_REP2)" in content
+    rap1_link = (
         f"Run ID: [RAP1_UNINDUCED_REP2](/project/{DEFAULT_PROJECT_ID}/runs/"
         "RAP1_UNINDUCED_REP2)"
-    ) in content
+    )
+    assert (rap1_link) in content
 
 
 def test_ai_chat_preserves_ambiguous_project_resolution(client: TestClient) -> None:
@@ -564,7 +562,9 @@ def test_projects_endpoint_upgrades_legacy_project_table(
         response = test_client.get("/api/v1/projects")
 
     assert response.status_code == 200
-    assert any(project["project_id"] == DEFAULT_PROJECT_ID for project in response.json())
+    assert any(
+        project["project_id"] == DEFAULT_PROJECT_ID for project in response.json()
+    )
     with sqlite3.connect(database_path) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
     assert "slug" in columns
