@@ -211,6 +211,7 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+.DS_Store
 
 # Marimo
 marimo/_static/
@@ -241,3 +242,5 @@ results/
 # Built dashboard assets
 packages/goodomics/src/goodomics/server/web/static/*
 !packages/goodomics/src/goodomics/server/web/static/.gitkeep
+
+packages/goodomics/tests/cbioportal/*/**/*
