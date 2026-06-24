@@ -29,7 +29,6 @@ class Project(GoodomicsModel):
 class Subject(GoodomicsModel):
     subject_id: str
     project_id: str
-    external_id: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -37,7 +36,6 @@ class Sample(GoodomicsModel):
     sample_id: str
     project_id: str | None = None
     subject_id: str | None = None
-    external_id: str | None = None
     sample_name: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 

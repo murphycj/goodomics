@@ -206,7 +206,6 @@ class GoodomicsQueryTools:
             statement = statement.where(
                 (func.lower(SampleRecord.sample_id).like(pattern))
                 | (func.lower(SampleRecord.sample_name).like(pattern))
-                | (func.lower(SampleRecord.external_id).like(pattern))
             )
         statement = statement.order_by(cast(Any, SampleRecord.sample_id)).limit(
             _bounded_limit(limit)
@@ -545,7 +544,6 @@ def _sample_payload(row: SampleRecord) -> dict[str, Any]:
     payload.update(
         {
             "subject_id": row.subject_id,
-            "external_id": row.external_id,
         }
     )
     return payload
@@ -560,7 +558,6 @@ def _sample_model_payload(sample: Any) -> dict[str, Any]:
     payload.update(
         {
             "subject_id": sample.subject_id,
-            "external_id": sample.external_id,
             "metadata_json": sample.metadata_json,
         }
     )
