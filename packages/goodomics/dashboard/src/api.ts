@@ -114,6 +114,27 @@ const templateSchema = z.object({
   updated_at: z.string(),
 });
 
+const aiMessageSchema = z.object({
+  role: z.string(),
+  content: z.string(),
+});
+
+const aiToolEvidenceSchema = z.object({
+  name: z.string(),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+  result: z.record(z.string(), z.unknown()).default({}),
+});
+
+const aiChatResponseSchema = z.object({
+  conversation_id: z.string().nullable(),
+  message: aiMessageSchema,
+  tool_calls: z.array(aiToolEvidenceSchema).default([]),
+});
+
+const aiExamplesSchema = z.object({
+  examples: z.array(z.string()),
+});
+
 export type GoodomicsRun = z.infer<typeof runSchema>;
 export type RunsPage = z.infer<typeof runPageSchema>;
 export type GoodomicsProject = z.infer<typeof projectSchema>;
@@ -124,6 +145,9 @@ export type AnalyticsMetric = z.infer<typeof analyticsMetricSchema>;
 export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
 export type DatabaseSummary = z.infer<typeof databaseSummarySchema>;
 export type ReportTemplate = z.infer<typeof templateSchema>;
+export type AiMessage = z.infer<typeof aiMessageSchema>;
+export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
+export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
 
 async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   const response = await fetch(path);
@@ -196,6 +220,42 @@ export function searchSamples({ projectId, query }: { projectId?: string; query:
   const params = new URLSearchParams({ q: query });
   if (projectId) params.set('project_id', projectId);
   return getJson(`/api/v1/search?${params.toString()}`, z.array(searchResultSchema));
+}
+
+export async function askAi({
+  conversationId,
+  messages,
+  projectId,
+}: {
+  conversationId?: string | null;
+  messages: AiMessage[];
+  projectId?: string;
+}) {
+  const response = await fetch('/api/v1/ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      conversation_id: conversationId ?? null,
+      messages,
+      project_id: projectId ?? null,
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail =
+      body && typeof body === 'object' && 'detail' in body
+        ? String(body.detail)
+        : `Request failed: ${response.status}`;
+    throw new Error(detail);
+  }
+  return aiChatResponseSchema.parse(await response.json());
+}
+
+export function getAiExamples(projectId?: string) {
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', projectId);
+  const query = params.toString();
+  return getJson(`/api/v1/ai/examples${query ? `?${query}` : ''}`, aiExamplesSchema);
 }
 
 export function getProjectRun(projectId: string, runId: string) {
