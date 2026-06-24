@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils";
 import { SidebarModeSelect } from "./SidebarModeSelect";
 
 const navItems = [
-  { suffix: "", label: "Runs", icon: FlaskConical },
+  { suffix: "", label: "Samples", icon: FlaskConical },
   { suffix: "/reports", label: "Reports", icon: FileText },
   { suffix: "/templates", label: "Templates", icon: FileCode2 },
   { suffix: "/cohorts", label: "Cohorts", icon: Layers3 },

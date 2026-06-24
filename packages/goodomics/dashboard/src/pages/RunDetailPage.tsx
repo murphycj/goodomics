@@ -81,7 +81,7 @@ export function RunDetailPage({
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Button asChild variant="secondary">
           <Link to="/project/$projectId" params={{ projectId }}>
-            Back to runs
+            Back to samples
           </Link>
         </Button>
         {files.data
