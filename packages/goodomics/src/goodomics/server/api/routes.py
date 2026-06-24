@@ -23,6 +23,12 @@ from goodomics.projects import (
 )
 from goodomics.report.html import render_report
 from goodomics.schemas.models import Metric, Run, Sample
+from goodomics.server.ai import (
+    AIProviderNotConfigured,
+    ChatMessage,
+    ChatResult,
+    chat_examples,
+)
 from goodomics.server.db.models import (
     CohortRecord,
     QCPolicyRecord,
@@ -243,6 +249,16 @@ class DatabaseRowPatch(SQLModel):
     audit_note: str | None = None
 
 
+class AIChatRequest(SQLModel):
+    messages: list[ChatMessage]
+    project_id: str | None = None
+    conversation_id: str | None = None
+
+
+class AIExamplesRead(SQLModel):
+    examples: list[str]
+
+
 EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     "projects": (
         ProjectRecord,
@@ -267,6 +283,34 @@ EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/ai/examples", response_model=AIExamplesRead)
+async def get_ai_examples(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> AIExamplesRead:
+    project_name = None
+    if project_id:
+        try:
+            project_name = (await _get_project_read(request, project_id)).name
+        except HTTPException:
+            project_name = None
+    return AIExamplesRead(examples=chat_examples(project_name=project_name))
+
+
+@router.post("/ai/chat", response_model=ChatResult)
+async def chat_with_ai(payload: AIChatRequest, request: Request) -> ChatResult:
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    try:
+        return await request.app.state.ai_chat.chat(
+            payload.messages,
+            project_id=payload.project_id,
+            conversation_id=payload.conversation_id,
+        )
+    except AIProviderNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/projects", response_model=list[ProjectRead])

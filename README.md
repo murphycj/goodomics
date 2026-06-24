@@ -29,7 +29,6 @@ Then initialize local state, ingest a run, and open the UI:
 goodomics init
 goodomics ingest ./examples/rnaseq --project my-project
 goodomics serve
-goodomics ui
 ```
 
 ## Core Commands
@@ -40,7 +39,6 @@ goodomics report ./examples/rnaseq --out /tmp/goodomics_report.html
 goodomics init
 goodomics ingest ./examples/rnaseq --project my-project
 goodomics serve
-goodomics ui
 ```
 
 ## Workspace

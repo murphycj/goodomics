@@ -17,6 +17,8 @@ dev = [
   "pytest-cov",
   "ruff",
   "pyright",
+  "mkdocs",
+  "mkdocs-material",
   "twine",
 ]
 

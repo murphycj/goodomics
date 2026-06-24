@@ -10,6 +10,7 @@ from typer.core import TyperGroup
 
 from goodomics.ingest.multiqc import ingest_multiqc_runs
 from goodomics.report.html import load_report_template, write_report
+from goodomics.server.logging import build_uvicorn_log_config
 
 
 class GoodomicsTyperGroup(TyperGroup):
@@ -203,8 +204,13 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8000,
     reload: bool = False,
+    log_level: str = typer.Option(
+        "info",
+        "--log-level",
+        help="Uvicorn log level: critical, error, warning, info, debug, or trace.",
+    ),
 ) -> None:
-    """Run the Goodomics API, MCP server, and dashboard."""
+    """Run the Goodomics API, MCP server, AI chat, and dashboard."""
     try:
         import uvicorn
     except ImportError as exc:
@@ -218,18 +224,10 @@ def serve(
         host=host,
         port=port,
         reload=reload,
+        log_level=log_level,
+        log_config=build_uvicorn_log_config(log_level),
         factory=True,
     )
-
-
-@app.command()
-def ui(
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    reload: bool = False,
-) -> None:
-    """Run the local Goodomics dashboard."""
-    serve(host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

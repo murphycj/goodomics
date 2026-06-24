@@ -32,7 +32,8 @@ operational, and focused on how to work in the repo.
 - Built dashboard assets are generated into
   `packages/goodomics/src/goodomics/server/web/static/`, ignored by git, and
   included in Python wheels when present during package build.
-- Docs are portable MDX files in `docs/`.
+- Docs are MkDocs Markdown files in `docs/`, with navigation and Material theme
+  settings in `mkdocs.yml`.
 - Server Dockerfile lives at `docker/Dockerfile.server`.
 
 ## Commands
@@ -44,6 +45,7 @@ uv run ruff check .
 uv run pyright
 uv run python -m build packages/goodomics
 uv run python -m build packages/goodomics-full
+uv run mkdocs build
 ```
 
 Useful CLI checks:
@@ -77,6 +79,7 @@ docker build -f docker/Dockerfile.server -t goodomics/server:local .
 Use `uv run pytest` as the main verification command for Python changes. For
 packaging or CLI changes, also run Ruff, Pyright, and both package builds when
 feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
+For documentation changes, run `uv run mkdocs build` when feasible.
 
 ## Documentation Guidelines
 

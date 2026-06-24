@@ -1,0 +1,77 @@
+site_name: Goodomics Docs
+site_description: Open-source Goodomics documentation for CLI, SDK, server, dashboard, reports, and deployment.
+site_url: https://www.goodomics.com/docs/
+repo_url: https://github.com/murphycj/goodomics
+repo_name: murphycj/goodomics
+docs_dir: docs
+use_directory_urls: true
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/search-shortcut.js
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      title: On this page
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Get started:
+      - Overview: index.md
+      - Getting started: getting-started.md
+  - Interfaces:
+      - CLI: interfaces/cli.md
+      - Python SDK: interfaces/sdk.md
+      - Server: interfaces/server.md
+      - Dashboard: interfaces/dashboard.md
+      - MCP integration: interfaces/mcp.md
+  - Reports:
+      - Report templates: reports/report-templates.md
+  - Operations:
+      - Database backends: operations/database-backends.md
+      - Deployment: operations/deployment.md
+      - Development workflow: operations/development.md

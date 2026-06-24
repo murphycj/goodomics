@@ -34,7 +34,7 @@ export function HomePage() {
         </h1>
         <button
           className="mt-6 flex h-[54px] w-full max-w-[720px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#d8dee7] bg-white px-4 text-[#657082] shadow-[0_16px_42px_rgb(25_32_43/0.08)] transition-colors hover:border-[#c9d1dc] hover:text-[#1d2430]"
-          onClick={openSearch}
+          onClick={() => openSearch()}
           type="button"
         >
           <Search size={18} />

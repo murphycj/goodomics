@@ -1,16 +1,13 @@
----
-title: "Report templates"
-description: "Edit, version, export, and reuse Goodomics report templates."
----
-
 # Report templates
-
-Dashboard edits are stored in `report_templates` and `report_template_revisions`; exports are available as YAML or JSON configs for the standalone CLI.
 
 Report templates are the portable contract between the CLI, dashboard, and
 stored report history. The same YAML or JSON model should be usable from
 `goodomics report`, editable in the dashboard, and versioned for workflow
 integration.
+
+Dashboard edits are stored in `report_templates` and
+`report_template_revisions`; exports are available as YAML or JSON configs for
+the standalone CLI.
 
 ## Rendering model
 
@@ -19,9 +16,9 @@ generated `report.html` should include the report structure, data needed for
 display, CSS, and JavaScript runtime without depending on CDN-hosted assets or
 an internet connection.
 
-PDF export should use the same report model. The preferred path is to render
-the self-contained HTML file and print it with a local browser renderer,
-with print CSS and chart export behavior tuned for stable output.
+PDF export should use the same report model. The preferred path is to render the
+self-contained HTML file and print it with a local browser renderer, with print
+CSS and chart export behavior tuned for stable output.
 
 Large payloads should not be embedded blindly. Template authors and built-in
 profiles should prefer summarized data, downsampling, binned distributions,
@@ -66,8 +63,10 @@ sections:
           - duplication_rate
 ```
 
-Advanced templates may eventually allow raw ECharts options as an escape hatch,
-but the default authoring surface should stay Goodomics-specific and stable.
+??? info "Advanced chart options"
+    Advanced templates may eventually allow raw ECharts options as an escape
+    hatch, but the default authoring surface should stay Goodomics-specific and
+    stable.
 
 ## Charting
 
@@ -87,19 +86,3 @@ The dashboard report builder should visually edit the same YAML/JSON-compatible
 model consumed by the CLI. Drag-and-drop placement, chart resizing, section
 ordering, data bindings, thresholds, and export settings should update template
 metadata rather than creating a separate dashboard-only format.
-
-## Core workflows
-
-- Install and inspect the CLI with `uv run --package goodomics goodomics --help`.
-- Generate standalone HTML with `goodomics report ./results --template rnaseq-qc.yaml --out report.html`.
-- Use the SDK with `from goodomics import run` for lightweight instrumentation.
-- Run local database mode with `GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///.goodomics/goodomics.db`.
-- Start the server with `uv run --package goodomics goodomics serve --reload`.
-- Run the dashboard dev server with `cd packages/goodomics/dashboard && npm run dev`.
-- Build the dashboard with `cd packages/goodomics/dashboard && npm run build`.
-- Validate Python changes with `uv run pytest`, `uv run ruff check .`, and `uv run pyright`.
-- Render docs from the Astro marketing site with `npm run dev` and `npm run build`.
-
-## Astro hosting model
-
-Keep `docs/*.mdx` in this app monorepo as the open-source source of truth. The Astro marketing site should add or reuse a `docs` content collection, render pages from `/docs/[...slug]`, provide a docs layout with sidebar navigation, keep pages indexed for SEO, and link the marketing navigation to `/docs`. Start by copying or syncing these MDX files during deployment; use a submodule, subtree, CI sync, or npm workspace package later if the repositories split.

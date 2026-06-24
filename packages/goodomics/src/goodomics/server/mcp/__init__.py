@@ -1,3 +1,3 @@
-from goodomics.server.mcp.server import get_run, mcp, summarize_run
+from goodomics.server.mcp.server import create_mcp_server
 
-__all__ = ["get_run", "mcp", "summarize_run"]
+__all__ = ["create_mcp_server"]

@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouterState } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { getProject, listProjects } from "../../api";
 import type { SidebarMode } from "../../lib/types";
 import { cn, projectIdFromPath } from "../../lib/utils";
 import { SearchProvider, useSearch } from "../search/SearchProvider";
+import { useSearchStore } from "../search/searchStore";
 import { Toaster } from "../ui/sonner";
 import { AppHeader } from "./AppHeader";
 import { Sidebar } from "./Sidebar";
@@ -52,6 +54,9 @@ function LayoutContent({
   sidebarMode: SidebarMode;
 }) {
   const { openSearch } = useSearch();
+  const askOpen = useSearchStore((state) => state.askOpen);
+  const askWidth = useSearchStore((state) => state.askWidth);
+  const askInset = askOpen ? askWidth : 0;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -65,8 +70,12 @@ function LayoutContent({
   }, [openSearch]);
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa]">
+    <main
+      className="min-h-screen bg-[#f7f8fa] transition-[margin-right] duration-200 ease-out md:mr-[var(--ask-ai-inset)]"
+      style={{ "--ask-ai-inset": `${askInset}px` } as CSSProperties}
+    >
       <AppHeader
+        askInset={askInset}
         project={selectedProject}
         projects={projects}
       />
@@ -79,8 +88,8 @@ function LayoutContent({
       )}
       <section
         className={cn(
-          "px-4 pb-8 pt-[72px] md:px-8",
-          projectId && "transition-[margin-left] duration-[170ms] md:ml-[58px]",
+          "px-4 pb-8 pt-[72px] transition-[margin-left] duration-[170ms] md:px-8",
+          projectId && "md:ml-[58px]",
           projectId && sidebarMode === "expanded" && "md:ml-[232px]",
           !projectId && "mx-auto max-w-[1160px]",
         )}
