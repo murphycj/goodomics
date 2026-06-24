@@ -4,6 +4,7 @@ import re
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import goodomics.server.app as server_app
 import pytest
@@ -11,7 +12,11 @@ from fastapi.testclient import TestClient
 from fixtures import write_multiqc_fixture
 from goodomics.ingest.multiqc import ingest_multiqc
 from goodomics.projects import DEFAULT_PROJECT_ID, new_project_id
+from goodomics.server.ai import GoodomicsChatService, ProviderResponse, ProviderToolCall
 from goodomics.server.app import create_app
+from goodomics.server.logging import build_uvicorn_log_config
+from goodomics.server.mcp.server import create_mcp_server
+from goodomics.server.query_tools import GoodomicsQueryTools
 from goodomics.server.settings import Settings
 
 
@@ -24,11 +29,30 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
         yield test_client
 
 
+def _state(client: TestClient) -> Any:
+    return cast(Any, client.app).state
+
+
+def _portal(client: TestClient) -> Any:
+    return cast(Any, client.portal)
+
+
 def test_health_endpoint_reports_ok(client: TestClient) -> None:
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_debug_log_config_enables_goodomics_package_logger() -> None:
+    config = build_uvicorn_log_config("debug")
+
+    assert config["loggers"]["goodomics"] == {
+        "handlers": ["default"],
+        "level": "DEBUG",
+        "propagate": False,
+    }
+    assert config["loggers"]["uvicorn"]["level"] == "INFO"
 
 
 def test_project_id_generator_uses_prefixed_lowercase_ref() -> None:
@@ -97,6 +121,423 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     assert renamed.status_code == 200
     assert renamed.json()["project_id"] == project["project_id"]
     assert renamed.json()["name"] == "RNA-seq Production Core"
+
+
+def test_query_tools_resolve_project_and_list_read_only_context(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/projects",
+        json={"name": "RNA-seq Production Core", "slug": "rnaseq-prod"},
+    ).json()
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "rna-prod-run",
+            "project": "rnaseq-prod",
+            "assay": "RNA-seq",
+            "samples": [{"sample_id": "S1 Read 1", "sample_name": "Tumor RNA"}],
+            "metrics": [
+                {"sample_id": "S1 Read 1", "name": "percent_mapped", "value": 96.4}
+            ],
+        },
+    )
+
+    tools = GoodomicsQueryTools(_state(client).query_context)
+
+    async def query_context() -> tuple[
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+    ]:
+        return (
+            await tools.resolve_project("RNA seq production"),
+            await tools.list_project_runs(created["project_id"], assay="RNA-seq"),
+            await tools.list_project_samples("rnaseq-prod", query="tumor"),
+            await tools.get_run("rna-prod-run", project="rnaseq-prod"),
+            await tools.list_run_samples("rna-prod-run", project="rnaseq-prod"),
+            await tools.list_run_metrics(
+                "rna-prod-run", project="rnaseq-prod", metric_query="mapped"
+            ),
+        )
+
+    resolution, runs, samples, run, run_samples, metrics = _portal(client).call(query_context)
+
+    assert resolution["status"] == "matched"
+    assert resolution["project"]["project_id"] == created["project_id"]
+    assert resolution["project"]["app_path"] == f"/project/{created['project_id']}"
+    assert runs["runs"][0]["run_id"] == "rna-prod-run"
+    assert runs["runs"][0]["app_path"] == (
+        f"/project/{created['project_id']}/runs/rna-prod-run"
+    )
+    assert runs["runs"][0]["markdown_link"] == (
+        f"[rna-prod-run](/project/{created['project_id']}/runs/rna-prod-run)"
+    )
+    assert samples["samples"][0]["sample_id"] == "S1 Read 1"
+    assert (
+        samples["samples"][0]["app_path"]
+        == f"/project/{created['project_id']}/samples/S1%20Read%201"
+    )
+    assert samples["samples"][0]["markdown_link"] == (
+        f"[Tumor RNA](/project/{created['project_id']}/samples/S1%20Read%201)"
+    )
+    assert run["run"]["sample_count"] == 1
+    assert run["run"]["app_path"] == f"/project/{created['project_id']}/runs/rna-prod-run"
+    assert run_samples["samples"][0]["sample_name"] == "Tumor RNA"
+    assert (
+        run_samples["samples"][0]["app_path"]
+        == f"/project/{created['project_id']}/samples/S1%20Read%201"
+    )
+    assert metrics["metrics"][0]["name"] == "percent_mapped"
+
+
+def test_query_tools_return_candidates_for_ambiguous_project(
+    client: TestClient,
+) -> None:
+    client.post("/api/v1/projects", json={"name": "RNA Core", "slug": "rna-core"})
+    client.post("/api/v1/projects", json={"name": "RNA Production", "slug": "rna-prod"})
+
+    tools = GoodomicsQueryTools(_state(client).query_context)
+
+    async def resolve() -> dict[str, Any]:
+        return await tools.resolve_project("rna")
+
+    resolution = _portal(client).call(resolve)
+
+    assert resolution["status"] == "ambiguous"
+    assert len(resolution["candidates"]) >= 2
+
+
+def test_mcp_server_exposes_read_only_query_tools(client: TestClient) -> None:
+    client.post("/api/v1/projects", json={"name": "MCP Project", "slug": "mcp-project"})
+    mcp = create_mcp_server(_state(client).query_context)
+
+    async def query_mcp() -> tuple[set[str], dict[str, Any]]:
+        tool_names = {tool.name for tool in await mcp.list_tools()}
+        _, result = await mcp.call_tool("resolve_project", {"reference": "MCP Project"})
+        return tool_names, cast(dict[str, Any], result)
+
+    tool_names, result = _portal(client).call(query_mcp)
+
+    assert {
+        "list_projects",
+        "resolve_project",
+        "get_project_summary",
+        "list_recent_runs",
+        "list_project_runs",
+        "list_project_samples",
+        "get_run",
+        "list_run_samples",
+        "list_run_metrics",
+        "list_run_files",
+    }.issubset(tool_names)
+    assert result["status"] == "matched"
+
+
+def test_mcp_streamable_http_endpoint_is_mounted_at_single_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "GOODOMICS_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    )
+
+    with TestClient(create_app(), base_url="http://localhost:8000") as test_client:
+        response = test_client.post(
+            "/mcp",
+            json={},
+            headers={"accept": "application/json, text/event-stream"},
+        )
+        nested_response = test_client.post(
+            "/mcp/mcp",
+            json={},
+            headers={"accept": "application/json, text/event-stream"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["jsonrpc"] == "2.0"
+    assert nested_response.status_code == 405
+
+
+class FakeProvider:
+    def __init__(self, responses: list[ProviderResponse]) -> None:
+        self.responses = responses
+
+    def is_configured(self) -> bool:
+        return True
+
+    async def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ProviderResponse:
+        if self.responses:
+            return self.responses.pop(0)
+        return ProviderResponse(content="Done.")
+
+
+def test_ai_chat_returns_503_without_provider_key(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "List projects"}]},
+    )
+
+    assert response.status_code == 503
+    assert "GOODOMICS_AI_API_KEY" in response.json()["detail"]
+
+
+def test_ai_chat_handles_direct_fake_provider_answer(client: TestClient) -> None:
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider([ProviderResponse(content="There are no failed runs.")]),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "Any failed runs?"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"]["content"] == "There are no failed runs."
+    assert response.json()["tool_calls"] == []
+
+
+def test_ai_chat_executes_multiple_read_only_tool_calls(client: TestClient) -> None:
+    project = client.post(
+        "/api/v1/projects", json={"name": "AI Project", "slug": "ai-project"}
+    ).json()
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider(
+            [
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-1",
+                            name="resolve_project",
+                            arguments={"reference": "AI Project"},
+                        ),
+                        ProviderToolCall(
+                            id="call-2",
+                            name="list_projects",
+                            arguments={"query": "AI"},
+                        ),
+                    ]
+                ),
+                ProviderResponse(content="AI Project is available."),
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "Find AI Project"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (
+        body["message"]["content"]
+        == f"[AI Project](/project/{project['project_id']}) is available."
+    )
+    assert [call["name"] for call in body["tool_calls"]] == [
+        "resolve_project",
+        "list_projects",
+    ]
+    assert body["tool_calls"][0]["result"]["status"] == "matched"
+
+
+def test_ai_chat_links_projects_runs_and_samples_from_tool_evidence(
+    client: TestClient,
+) -> None:
+    project = client.post(
+        "/api/v1/projects",
+        json={"name": "AI Links Project", "slug": "ai-links"},
+    ).json()
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "WT_REP2",
+            "project": "ai-links",
+            "samples": [
+                {
+                    "sample_id": "WT_REP2 Read 1",
+                    "sample_name": "WT_REP2 Read 1",
+                }
+            ],
+        },
+    )
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider(
+            [
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-1",
+                            name="list_project_runs",
+                            arguments={"project": "ai-links"},
+                        ),
+                        ProviderToolCall(
+                            id="call-2",
+                            name="list_project_samples",
+                            arguments={"project": "ai-links"},
+                        ),
+                    ]
+                ),
+                ProviderResponse(
+                    content=(
+                        "AI Links Project has run WT_REP2 and sample WT_REP2 Read 1."
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "List links"}]},
+    )
+
+    assert response.status_code == 200
+    content = response.json()["message"]["content"]
+    assert (
+        f"[AI Links Project](/project/{project['project_id']})"
+        in content
+    )
+    assert (
+        f"[WT_REP2](/project/{project['project_id']}/runs/WT_REP2)"
+        in content
+    )
+    assert (
+        f"[WT_REP2 Read 1](/project/{project['project_id']}/samples/WT_REP2%20Read%201)"
+        in content
+    )
+
+
+def test_ai_chat_links_plain_run_id_lists_from_tool_evidence(
+    client: TestClient,
+) -> None:
+    for run_id in ["WT_REP2", "WT_REP1", "RAP1_UNINDUCED_REP2"]:
+        client.post(
+            "/api/v1/runs",
+            json={"run_id": run_id, "project": DEFAULT_PROJECT_ID},
+        )
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider(
+            [
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-1",
+                            name="list_project_runs",
+                            arguments={"project": DEFAULT_PROJECT_ID},
+                        )
+                    ]
+                ),
+                ProviderResponse(
+                    content=(
+                        "The project [Default Project](http://127.0.0.1:8000/project/"
+                        f"{DEFAULT_PROJECT_ID}) has 3 runs:\n\n"
+                        "1. Run ID: WT_REP2\n"
+                        "2. Run ID: WT_REP1\n"
+                        "3. Run ID: RAP1_UNINDUCED_REP2"
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "List runs in this project"}]},
+    )
+
+    assert response.status_code == 200
+    content = response.json()["message"]["content"]
+    assert (
+        f"Run ID: [WT_REP2](/project/{DEFAULT_PROJECT_ID}/runs/WT_REP2)"
+        in content
+    )
+    assert (
+        f"Run ID: [RAP1_UNINDUCED_REP2](/project/{DEFAULT_PROJECT_ID}/runs/"
+        "RAP1_UNINDUCED_REP2)"
+    ) in content
+
+
+def test_ai_chat_preserves_ambiguous_project_resolution(client: TestClient) -> None:
+    client.post("/api/v1/projects", json={"name": "RNA Core", "slug": "rna-core"})
+    client.post("/api/v1/projects", json={"name": "RNA Production", "slug": "rna-prod"})
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider(
+            [
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-1",
+                            name="resolve_project",
+                            arguments={"reference": "rna"},
+                        )
+                    ]
+                ),
+                ProviderResponse(content="I found multiple RNA projects. Which one?"),
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "Summarize RNA"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tool_calls"][0]["result"]["status"] == "ambiguous"
+    assert "multiple RNA projects" in body["message"]["content"]
+
+
+def test_ai_chat_stops_at_tool_round_limit(client: TestClient) -> None:
+    _state(client).query_context.settings.ai_max_tool_rounds = 1
+    _state(client).ai_chat = GoodomicsChatService(
+        _state(client).query_context,
+        provider=FakeProvider(
+            [
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-1",
+                            name="list_projects",
+                            arguments={},
+                        )
+                    ]
+                ),
+                ProviderResponse(
+                    tool_calls=[
+                        ProviderToolCall(
+                            id="call-2",
+                            name="list_recent_runs",
+                            arguments={},
+                        )
+                    ]
+                ),
+            ]
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ai/chat",
+        json={"messages": [{"role": "user", "content": "Keep looking"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "tool round limit" in body["message"]["content"]
+    assert [call["name"] for call in body["tool_calls"]] == ["list_projects"]
 
 
 def test_projects_endpoint_upgrades_legacy_project_table(
