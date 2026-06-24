@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
+from goodomics.server.ai import GoodomicsChatService
 from goodomics.server.api.routes import router
 from goodomics.server.db.session import create_store
-from goodomics.server.mcp.server import mcp
+from goodomics.server.mcp.server import create_mcp_server
+from goodomics.server.query_tools import QueryToolContext
 from goodomics.server.settings import Settings
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -42,6 +46,20 @@ def _dashboard_dev_redirect(
 
 def create_app() -> FastAPI:
     settings = Settings()
+    store = create_store(settings.database_url)
+    query_context = QueryToolContext(settings=settings, store=store)
+    ai_chat = GoodomicsChatService(query_context)
+    mcp = create_mcp_server(query_context)
+    mcp_app = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        async with mcp.session_manager.run():
+            yield
+        engine = store.engine
+        if engine is not None:
+            await engine.dispose()
+
     app = FastAPI(
         title="Goodomics API",
         version="0.1.0",
@@ -49,11 +67,18 @@ def create_app() -> FastAPI:
             "API for Goodomics runs, samples, metrics, reports, cohorts, QC policies, "
             "report templates, MCP integrations, and the React dashboard."
         ),
+        lifespan=lifespan,
     )
     app.state.settings = settings
-    app.state.store = create_store(settings.database_url)
+    app.state.store = store
+    app.state.query_context = query_context
+    app.state.ai_chat = ai_chat
     app.include_router(router)
-    app.mount("/mcp", mcp.streamable_http_app(), name="mcp")
+    app.router.routes.extend(
+        Route("/mcp", endpoint=route.endpoint, name="mcp")
+        for route in mcp_app.routes
+        if isinstance(route, Route) and route.path == "/"
+    )
 
     if ASSETS_DIR.exists():
         app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="dashboard-assets")
