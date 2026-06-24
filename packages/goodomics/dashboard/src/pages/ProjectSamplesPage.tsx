@@ -177,7 +177,6 @@ function SamplesTable({
           <TableRow>
             <TableHead>Sample</TableHead>
             <TableHead>Subject</TableHead>
-            <TableHead>External ID</TableHead>
             <TableHead>Latest run</TableHead>
             <TableHead>Latest activity</TableHead>
             <TableHead>Runs</TableHead>
@@ -207,7 +206,6 @@ function SamplesTable({
                 )}
               </TableCell>
               <TableCell>{sample.subject_id ?? "—"}</TableCell>
-              <TableCell>{sample.external_id ?? "—"}</TableCell>
               <TableCell>{sample.latest_run_name ?? sample.latest_run_id ?? "—"}</TableCell>
               <TableCell>
                 {sample.latest_run_created_at

@@ -245,7 +245,6 @@ function SampleOverview({
             <Detail label="Sample ID" value={sample.sample_id} />
             <Detail label="Sample name" value={sample.sample_name ?? "—"} />
             <Detail label="Subject" value={sample.subject_id ?? "—"} />
-            <Detail label="External ID" value={sample.external_id ?? "—"} />
             <Detail label="Current run" value={selectedRun?.name ?? selectedRun?.run_id ?? "—"} />
             <Detail
               label="Run created"

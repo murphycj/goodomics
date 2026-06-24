@@ -65,7 +65,6 @@ studies.
 | --- | --- |
 | `subject_id` | Primary key |
 | `project_id` | Owning project |
-| `external_id` | Optional external/study ID |
 | `metadata_json` | Subject-level metadata |
 
 ### `samples`
@@ -77,7 +76,6 @@ The biological, material, or analytical input.
 | `sample_id` | Primary key |
 | `project_id` | Owning project |
 | `subject_id` | Nullable subject link |
-| `external_id` | Optional external/study ID |
 | `sample_name` | Human-readable sample name |
 | `metadata_json` | Sample-level metadata |
 
@@ -904,10 +902,10 @@ Examples:
 
 ### Subjects
 
-| subject_id | external_id |
-| --- | --- |
-| `P001` | `P001` |
-| `P002` | `P002` |
+| subject_id |
+| --- |
+| `P001` |
+| `P002` |
 
 ### Samples
 
