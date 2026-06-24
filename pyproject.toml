@@ -12,18 +12,19 @@ members = ["packages/goodomics", "packages/goodomics-full"]
 dev = [
   "build",
   "httpx",
+  "pre-commit",
   "pytest",
   "pytest-asyncio",
   "pytest-cov",
-  "ruff",
   "pyright",
+  "ruff",
   "mkdocs",
   "mkdocs-material",
   "twine",
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
