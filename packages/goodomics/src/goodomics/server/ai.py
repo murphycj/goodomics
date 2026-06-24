@@ -317,18 +317,6 @@ class GoodomicsChatService:
         return {"error": f"Unknown tool: {call.name}"}
 
 
-def chat_examples(project_name: str | None = None) -> list[str]:
-    project = project_name or "this project"
-    return [
-        f"What are the most recent runs for {project}?",
-        f"List the samples in {project}.",
-        "List the projects in this Goodomics database.",
-        "Which files were attached to the latest run?",
-        "Show mapping metrics for run-1.",
-        "Find the project that sounds like RNA seq core.",
-    ]
-
-
 def tool_schemas() -> list[dict[str, Any]]:
     return [
         _tool(

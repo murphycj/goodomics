@@ -1,9 +1,10 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowUp,
   Bot,
   ChevronsRight,
+  FileText,
   GripVertical,
   Sparkles,
   User,
@@ -11,7 +12,7 @@ import {
 import type { RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { AiMessage, AiToolEvidence } from "../../api";
-import { askAi, getAiExamples } from "../../api";
+import { askAi } from "../../api";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -45,11 +46,6 @@ export function AskAiSidePanel({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const dragStart = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  const examples = useQuery({
-    queryKey: ["ai-examples", defaultProjectId ?? "global"],
-    queryFn: () => getAiExamples(defaultProjectId),
-    enabled: open,
-  });
   const chat = useMutation({
     mutationFn: (nextMessages: AiMessage[]) =>
       askAi({
@@ -103,8 +99,8 @@ export function AskAiSidePanel({
     };
   }, [setWidth]);
 
-  const submitChat = () => {
-    const content = chatDraft.trim();
+  const submitChat = (selectedPrompt?: string) => {
+    const content = (selectedPrompt ?? chatDraft).trim();
     if (!content || chat.isPending) return;
     const userMessage: TranscriptMessage = { role: "user", content };
     const nextMessages = [...messages, userMessage];
@@ -146,6 +142,9 @@ export function AskAiSidePanel({
                 ? `Grounded in ${defaultProjectName}`
                 : "Grounded in Goodomics data"}
             </div>
+            <div className="truncate text-[0.68rem] text-[#858c95]">
+              Read-only. AI cannot modify data.
+            </div>
           </div>
         </div>
         <Button
@@ -160,19 +159,7 @@ export function AskAiSidePanel({
         </Button>
       </div>
       <div className="overflow-auto px-4 py-4">
-        {messages.length === 0 ? (
-          <div className="grid gap-4">
-            <div className="rounded-[8px] border border-[#353535] bg-[#202020] p-4 text-sm leading-6 text-[#c8ced6]">
-              Ask about projects, recent runs, samples, files, or run metrics. Answers
-              should cite structured Goodomics evidence and stay inside the review
-              boundary.
-            </div>
-            <ExampleList
-              examples={examples.data?.examples ?? fallbackExamples()}
-              onExampleSelect={setChatDraft}
-            />
-          </div>
-        ) : (
+        {messages.length === 0 ? null : (
           <div className="grid gap-4">
             {messages.map((message, index) => (
               <ChatBubble key={`${message.role}-${index}`} message={message} />
@@ -192,13 +179,21 @@ export function AskAiSidePanel({
         )}
         <div ref={bottomRef} />
       </div>
-      <ChatComposer
-        chatDraft={chatDraft}
-        disabled={chat.isPending}
-        onDraftChange={setChatDraft}
-        onSubmit={submitChat}
-        textareaRef={textareaRef}
-      />
+      <div className="px-4 pb-3">
+        {messages.length === 0 && (
+          <ExampleList
+            examples={examplePrompts()}
+            onExampleSelect={submitChat}
+          />
+        )}
+        <ChatComposer
+          chatDraft={chatDraft}
+          disabled={chat.isPending}
+          onDraftChange={setChatDraft}
+          onSubmit={submitChat}
+          textareaRef={textareaRef}
+        />
+      </div>
     </aside>
   );
 }
@@ -211,18 +206,22 @@ function ExampleList({
   onExampleSelect: (example: string) => void;
 }) {
   return (
-    <div className="grid gap-2">
-      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-[#7f858d]">
-        Examples
+    <div className="mb-5 grid gap-3">
+      <div className="text-2xl font-semibold text-[#f3f3f3]">
+        How can I assist you?
+      </div>
+      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-[#8f969f]">
+        Ideas
       </div>
       {examples.map((example) => (
         <button
-          className="cursor-pointer rounded-[7px] border border-[#353535] bg-[#2a2a2a] px-3 py-2 text-left text-sm text-[#d8dde5] transition-colors hover:border-[#58c98a] hover:bg-[#303030]"
+          className="flex cursor-pointer items-center gap-3 rounded-[7px] px-1 py-1.5 text-left text-sm text-[#d8dde5] transition-colors hover:bg-[#303030] hover:text-white"
           key={example}
           onClick={() => onExampleSelect(example)}
           type="button"
         >
-          {example}
+          <FileText className="shrink-0 text-[#aeb4bd]" size={17} />
+          <span>{example}</span>
         </button>
       ))}
     </div>
@@ -243,33 +242,31 @@ function ChatComposer({
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   return (
-    <div className="border-t border-[#353535] p-3">
-      <div className="grid grid-cols-[1fr_auto] gap-2 rounded-[8px] border border-[#444444] bg-[#1d1d1d] p-2">
-        <textarea
-          ref={textareaRef}
-          className="max-h-[160px] min-h-[64px] resize-none border-0 bg-transparent px-2 py-1.5 text-sm leading-6 text-[#f3f3f3] outline-none placeholder:text-[#7f858d]"
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              onSubmit();
-            }
-          }}
-          placeholder="Ask a question about projects, runs, samples, files, or metrics..."
-          value={chatDraft}
-        />
-        <Button
-          aria-label="Send Ask AI message"
-          className="mt-auto h-9 w-9 border-[#58c98a] bg-[#e8f8ef] text-[#102017] hover:bg-white"
-          disabled={!chatDraft.trim() || disabled}
-          onClick={onSubmit}
-          size="icon"
-          type="button"
-          variant="outline"
-        >
-          <ArrowUp size={16} />
-        </Button>
-      </div>
+    <div className="grid grid-cols-[1fr_auto] gap-2 rounded-[8px] border border-[#444444] bg-[#1d1d1d] p-2">
+      <textarea
+        ref={textareaRef}
+        className="max-h-[160px] min-h-[64px] resize-none border-0 bg-transparent px-2 py-1.5 text-sm leading-6 text-[#f3f3f3] outline-none placeholder:text-[#7f858d]"
+        onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder="Ask a question about projects, runs, samples, files, or metrics..."
+        value={chatDraft}
+      />
+      <Button
+        aria-label="Send Ask AI message"
+        className="mt-auto h-9 w-9 border-[#58c98a] bg-[#e8f8ef] text-[#102017] hover:bg-white"
+        disabled={!chatDraft.trim() || disabled}
+        onClick={onSubmit}
+        size="icon"
+        type="button"
+        variant="outline"
+      >
+        <ArrowUp size={16} />
+      </Button>
     </div>
   );
 }
@@ -476,10 +473,12 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function fallbackExamples() {
+function examplePrompts() {
   return [
     "What are the most recent runs for this project?",
+    "List the samples in this project.",
     "List the projects in this Goodomics database.",
+    "Which files were attached to the latest run?",
     "Show mapping metrics for run-1.",
   ];
 }

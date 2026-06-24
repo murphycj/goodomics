@@ -131,10 +131,6 @@ const aiChatResponseSchema = z.object({
   tool_calls: z.array(aiToolEvidenceSchema).default([]),
 });
 
-const aiExamplesSchema = z.object({
-  examples: z.array(z.string()),
-});
-
 export type GoodomicsRun = z.infer<typeof runSchema>;
 export type RunsPage = z.infer<typeof runPageSchema>;
 export type GoodomicsProject = z.infer<typeof projectSchema>;
@@ -249,13 +245,6 @@ export async function askAi({
     throw new Error(detail);
   }
   return aiChatResponseSchema.parse(await response.json());
-}
-
-export function getAiExamples(projectId?: string) {
-  const params = new URLSearchParams();
-  if (projectId) params.set('project_id', projectId);
-  const query = params.toString();
-  return getJson(`/api/v1/ai/examples${query ? `?${query}` : ''}`, aiExamplesSchema);
 }
 
 export function getProjectRun(projectId: string, runId: string) {

@@ -27,7 +27,6 @@ from goodomics.server.ai import (
     AIProviderNotConfigured,
     ChatMessage,
     ChatResult,
-    chat_examples,
 )
 from goodomics.server.db.models import (
     CohortRecord,
@@ -255,10 +254,6 @@ class AIChatRequest(SQLModel):
     conversation_id: str | None = None
 
 
-class AIExamplesRead(SQLModel):
-    examples: list[str]
-
-
 EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     "projects": (
         ProjectRecord,
@@ -283,20 +278,6 @@ EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@router.get("/ai/examples", response_model=AIExamplesRead)
-async def get_ai_examples(
-    request: Request,
-    project_id: str | None = Query(default=None),
-) -> AIExamplesRead:
-    project_name = None
-    if project_id:
-        try:
-            project_name = (await _get_project_read(request, project_id)).name
-        except HTTPException:
-            project_name = None
-    return AIExamplesRead(examples=chat_examples(project_name=project_name))
 
 
 @router.post("/ai/chat", response_model=ChatResult)
