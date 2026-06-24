@@ -60,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
         description=(
             "Create a synthetic cancer omics DuckDB analytics database for query "
             "pressure testing. The script writes the default paths used by "
-            f"`goodomics ui`: {DEFAULT_ANALYTICS_PATH} and {DEFAULT_DATABASE_URL}. "
+            f"`goodomics serve`: {DEFAULT_ANALYTICS_PATH} and {DEFAULT_DATABASE_URL}. "
             "The only inputs are run and sample counts."
         )
     )
