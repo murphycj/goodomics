@@ -41,6 +41,7 @@ operational, and focused on how to work in the repo.
 ```bash
 uv sync --all-packages --group dev
 uv run pytest
+uv run ruff format --check .
 uv run ruff check .
 uv run pyright
 uv run python -m build packages/goodomics
@@ -80,6 +81,23 @@ Use `uv run pytest` as the main verification command for Python changes. For
 packaging or CLI changes, also run Ruff, Pyright, and both package builds when
 feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
 For documentation changes, run `uv run mkdocs build` when feasible.
+
+## Coding Style
+
+- Use Ruff as the canonical Python formatter and linter. Prefer
+  `uv run ruff format .` for formatting and `uv run ruff check --fix .` for
+  safe lint fixes before committing Python changes.
+- Keep the configured 88-character line length. Let Ruff wrap calls, dicts, and
+  comprehensions instead of hand-compressing code to fit on one line.
+- Install commit hooks with `uv run pre-commit install` after syncing the dev
+  environment. Hooks run Ruff fixes and formatting on staged files; CI also runs
+  `uv run ruff format --check .` and `uv run ruff check .`.
+- Prefer readable structure over dense expressions: split complex conditions,
+  payload construction, or nested transformations into named intermediate values
+  when that makes the code easier to scan.
+- Add lightweight, high-signal comments in Python and React code when logic is
+  non-obvious, crosses trust boundaries, or encodes important constraints; avoid
+  noisy comments that restate the code.
 
 ## Documentation Guidelines
 
