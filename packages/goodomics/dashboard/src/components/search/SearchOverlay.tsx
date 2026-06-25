@@ -11,8 +11,8 @@ import { Dialog, DialogClose, DialogContent, DialogTitle } from "../ui/dialog";
 import { useSearchStore } from "./searchStore";
 
 const ENTITY_LABELS: Record<string, string> = {
-  run: "Runs",
   sample: "Samples",
+  run: "Runs",
 };
 
 export function SearchOverlay({
@@ -52,7 +52,7 @@ export function SearchOverlay({
   }, [items]);
   const filters = useMemo(() => {
     const kinds = Object.keys(countsByKind).sort((left, right) => {
-      const preferredOrder = ["run", "sample"];
+      const preferredOrder = ["sample", "run"];
       const leftIndex = preferredOrder.indexOf(left);
       const rightIndex = preferredOrder.indexOf(right);
       if (leftIndex !== -1 || rightIndex !== -1) {
@@ -133,7 +133,7 @@ export function SearchOverlay({
         overlayClassName="backdrop-blur-[4px]"
         showCloseButton={false}
       >
-        <DialogTitle className="sr-only">Search runs or samples</DialogTitle>
+        <DialogTitle className="sr-only">Search samples or runs</DialogTitle>
         <SearchPanel
           activeIndex={activeIndex}
           defaultProjectId={defaultProjectId}
@@ -245,7 +245,7 @@ function SearchPanel({
               openActiveItem();
             }
           }}
-          placeholder="Search runs, samples, or tools..."
+          placeholder="Search samples, runs, or tools..."
           value={query}
         />
         <DialogClose asChild>
@@ -326,7 +326,7 @@ function SearchPanel({
           </div>
         )}
         {!query.trim() && !showAskTool && (
-          <div className="p-4 text-[#aeb4bd]">Start typing a run or sample name.</div>
+          <div className="p-4 text-[#aeb4bd]">Start typing a sample or run name.</div>
         )}
         {query.trim() && resultsLoading && (
           <div className="p-4 text-[#aeb4bd]">Searching...</div>
@@ -335,7 +335,7 @@ function SearchPanel({
           <div className="p-4 text-[#ffb4a8]">{resultsError}</div>
         )}
         {query.trim() && items.length === 0 && !resultsLoading && (
-          <div className="p-4 text-[#aeb4bd]">No runs or samples found.</div>
+          <div className="p-4 text-[#aeb4bd]">No samples or runs found.</div>
         )}
         {filteredItems.map((result, index) => (
           <SearchResultRow

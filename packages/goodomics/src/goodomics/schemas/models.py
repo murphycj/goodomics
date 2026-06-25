@@ -10,14 +10,20 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
 class GoodomicsModel(BaseModel):
+    """Immutable base for canonical Goodomics schema records."""
+
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
 
 class MutableGoodomicsModel(BaseModel):
+    """Mutable base for request and aggregate models assembled during workflows."""
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class Project(GoodomicsModel):
+    """Workspace boundary that owns runs, samples, files, and analytics."""
+
     project_id: str
     slug: str | None = None
     name: str
@@ -27,17 +33,19 @@ class Project(GoodomicsModel):
 
 
 class Subject(GoodomicsModel):
+    """Optional patient, donor, organism, cell line, or individual."""
+
     subject_id: str
     project_id: str
-    external_id: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
 class Sample(GoodomicsModel):
+    """Stable biological, material, or analytical input across runs."""
+
     sample_id: str
     project_id: str | None = None
     subject_id: str | None = None
-    external_id: str | None = None
     sample_name: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
@@ -47,6 +55,8 @@ class Sample(GoodomicsModel):
 
 
 class Run(MutableGoodomicsModel):
+    """Computational, import, benchmark, or analysis event."""
+
     run_id: str
     project_id: str | None = None
     project: str | None = None
@@ -62,7 +72,6 @@ class Run(MutableGoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     samples: list[Sample] = Field(default_factory=list)
-    metrics: list[Metric] = Field(default_factory=list)
 
     @field_validator("project_id", mode="before")
     @classmethod
@@ -71,6 +80,8 @@ class Run(MutableGoodomicsModel):
 
 
 class RunSample(GoodomicsModel):
+    """A sample within a run, used as the processed-sample comparison grain."""
+
     run_sample_id: str
     project_id: str | None = None
     run_id: str
@@ -82,6 +93,8 @@ class RunSample(GoodomicsModel):
 
 
 class DataProfile(GoodomicsModel):
+    """Describes one analytical data layer produced by a run."""
+
     data_profile_id: str
     project_id: str | None = None
     run_id: str | None = None
@@ -101,6 +114,8 @@ class DataProfile(GoodomicsModel):
 
 
 class FileAsset(GoodomicsModel):
+    """File-level asset tracked by Goodomics control storage."""
+
     file_id: str
     project_id: str | None = None
     path: str | None = None
@@ -114,6 +129,8 @@ class FileAsset(GoodomicsModel):
 
 
 class FileLink(GoodomicsModel):
+    """Associates a file with runs, samples, run samples, or data profiles."""
+
     file_id: str
     project_id: str | None = None
     run_id: str | None = None
@@ -124,6 +141,8 @@ class FileLink(GoodomicsModel):
 
 
 class SampleSet(GoodomicsModel):
+    """Saved group of processed samples, such as a cohort or reference set."""
+
     sample_set_id: str
     project_id: str | None = None
     name: str
@@ -135,18 +154,15 @@ class SampleSet(GoodomicsModel):
 
 
 class SampleSetMember(GoodomicsModel):
+    """Membership row linking a sample set to a processed sample."""
+
     sample_set_id: str
     run_sample_id: str
 
 
-class Metric(GoodomicsModel):
-    sample_id: str | None = None
-    name: str
-    value: float | int | str
-    unit: str | None = None
-
-
 class QCDecision(GoodomicsModel):
+    """Quality-control decision with provenance for policy/report versions."""
+
     status: Literal["pass", "warn", "fail", "unknown"]
     reasons: list[str] = Field(default_factory=list)
     cohort: str | None = None
@@ -155,10 +171,14 @@ class QCDecision(GoodomicsModel):
 
 
 class AnalyticalRecord(GoodomicsModel):
+    """Base for DuckDB analytical-store records."""
+
     pass
 
 
 class DuckDBMetadata(AnalyticalRecord):
+    """Project-level metadata stored in the analytical database."""
+
     project_id: str | None = None
     project_name: str | None = None
     schema_version: str = "analytics-v1"
@@ -168,6 +188,8 @@ class DuckDBMetadata(AnalyticalRecord):
 
 
 class MetricDefinition(AnalyticalRecord):
+    """Catalog entry describing metric identity, display, and value semantics."""
+
     metric_key: str | None = None
     metric_id: str
     namespace: str | None = None
@@ -183,6 +205,8 @@ class MetricDefinition(AnalyticalRecord):
 
 
 class AttributeDefinition(AnalyticalRecord):
+    """Catalog entry describing flexible attributes on analytical entities."""
+
     attribute_key: int | None = None
     attribute_id: str
     entity_scope: str
@@ -195,6 +219,8 @@ class AttributeDefinition(AnalyticalRecord):
 
 
 class EntityAttributeBase(AnalyticalRecord):
+    """Shared keys for typed entity-attribute value records."""
+
     entity_scope: str
     entity_key: str
     attribute_key: str
@@ -203,26 +229,38 @@ class EntityAttributeBase(AnalyticalRecord):
 
 
 class EntityAttributeNumeric(EntityAttributeBase):
+    """Numeric attribute value for a project, subject, sample, or run entity."""
+
     value: float
 
 
 class EntityAttributeString(EntityAttributeBase):
+    """String attribute value for a project, subject, sample, or run entity."""
+
     value: str
 
 
 class EntityAttributeBoolean(EntityAttributeBase):
+    """Boolean attribute value for a project, subject, sample, or run entity."""
+
     value: bool
 
 
 class EntityAttributeDate(EntityAttributeBase):
+    """Datetime attribute value for a project, subject, sample, or run entity."""
+
     value: datetime
 
 
 class EntityAttributeJson(EntityAttributeBase):
+    """JSON attribute value for a project, subject, sample, or run entity."""
+
     value_json: JsonValue
 
 
 class SampleMetricBase(AnalyticalRecord):
+    """Shared keys for typed metrics measured at sample or run-sample grain."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str | None = None
@@ -232,18 +270,26 @@ class SampleMetricBase(AnalyticalRecord):
 
 
 class SampleMetricNumeric(SampleMetricBase):
+    """Numeric metric value measured for a sample or processed sample."""
+
     value: float
 
 
 class SampleMetricString(SampleMetricBase):
+    """String metric value measured for a sample or processed sample."""
+
     value: str
 
 
 class SampleMetricJson(SampleMetricBase):
+    """JSON metric value measured for a sample or processed sample."""
+
     value_json: JsonValue
 
 
 class Feature(AnalyticalRecord):
+    """Biological or analytical feature such as a gene, transcript, or region."""
+
     feature_key: str
     feature_id: str
     feature_type: str
@@ -255,12 +301,16 @@ class Feature(AnalyticalRecord):
 
 
 class FeatureAlias(AnalyticalRecord):
+    """Alternative identifier or symbol for a feature."""
+
     feature_key: str
     alias: str
     namespace: str | None = None
 
 
 class FeatureSet(AnalyticalRecord):
+    """Named collection of features used for grouping or interpretation."""
+
     feature_set_key: str
     feature_set_id: str
     feature_set_type: str
@@ -270,6 +320,8 @@ class FeatureSet(AnalyticalRecord):
 
 
 class FeatureSetMember(AnalyticalRecord):
+    """Membership row linking a feature set to a feature."""
+
     feature_set_key: str
     feature_key: str
     member_role: str | None = None
@@ -277,6 +329,8 @@ class FeatureSetMember(AnalyticalRecord):
 
 
 class ProfileObservationSet(AnalyticalRecord):
+    """Records whether a data profile was observed for a processed sample."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -292,6 +346,8 @@ class ProfileObservationSet(AnalyticalRecord):
 
 
 class FeatureValueNumeric(AnalyticalRecord):
+    """Numeric value for a feature in a processed sample and data profile."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -303,6 +359,8 @@ class FeatureValueNumeric(AnalyticalRecord):
 
 
 class FeatureCall(AnalyticalRecord):
+    """Categorical feature-level call for a processed sample."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -318,6 +376,8 @@ class FeatureCall(AnalyticalRecord):
 
 
 class GenomicInterval(AnalyticalRecord):
+    """Genomic coordinate interval, optionally linked to a feature."""
+
     interval_key: str
     genome_build: str
     contig: str
@@ -330,6 +390,8 @@ class GenomicInterval(AnalyticalRecord):
 
 
 class SampleIntervalValue(AnalyticalRecord):
+    """Numeric value assigned to a genomic interval for a processed sample."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -341,6 +403,8 @@ class SampleIntervalValue(AnalyticalRecord):
 
 
 class CopyNumberSegment(AnalyticalRecord):
+    """Copy-number segment call for a processed sample."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -358,6 +422,8 @@ class CopyNumberSegment(AnalyticalRecord):
 
 
 class Variant(AnalyticalRecord):
+    """Normalized genomic variant identity."""
+
     variant_key: str
     variant_id: str
     genome_build: str
@@ -371,6 +437,8 @@ class Variant(AnalyticalRecord):
 
 
 class VariantAnnotation(AnalyticalRecord):
+    """Profile-level annotation describing a variant and optional feature."""
+
     data_profile_key: str | None = None
     variant_key: str
     feature_key: str | None = None
@@ -382,6 +450,8 @@ class VariantAnnotation(AnalyticalRecord):
 
 
 class VariantTranscriptAnnotation(AnalyticalRecord):
+    """Transcript-specific annotation for a variant."""
+
     data_profile_key: str | None = None
     variant_key: str
     transcript_feature_key: str
@@ -397,6 +467,8 @@ class VariantTranscriptAnnotation(AnalyticalRecord):
 
 
 class SampleVariantCall(AnalyticalRecord):
+    """Per-sample call and sequencing evidence for a variant."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -414,6 +486,8 @@ class SampleVariantCall(AnalyticalRecord):
 
 
 class StructuralVariantEvent(AnalyticalRecord):
+    """Structural variant event identity and annotation."""
+
     structural_variant_key: str
     event_id: str
     event_class: str
@@ -430,6 +504,8 @@ class StructuralVariantEvent(AnalyticalRecord):
 
 
 class SampleStructuralVariantCall(AnalyticalRecord):
+    """Per-sample call and evidence for a structural variant event."""
+
     data_profile_key: str
     run_id: str
     run_sample_key: str
@@ -447,6 +523,8 @@ class SampleStructuralVariantCall(AnalyticalRecord):
 
 
 class TimelineEvent(AnalyticalRecord):
+    """Subject or sample timeline event for longitudinal context."""
+
     event_key: str
     subject_key: str
     sample_key: str | None = None
@@ -460,6 +538,8 @@ class TimelineEvent(AnalyticalRecord):
 
 
 class ProfilePayload(AnalyticalRecord):
+    """Stored payload attached to a data profile, such as a table or blob."""
+
     payload_id: str
     data_profile_key: str
     run_id: str
@@ -505,6 +585,8 @@ class ProfilePayload(AnalyticalRecord):
 
 
 class GeneAlterationState(AnalyticalRecord):
+    """Unified alteration state for a gene-like feature in a processed sample."""
+
     run_sample_key: str
     sample_key: str | None = None
     subject_key: str | None = None
@@ -521,12 +603,16 @@ class GeneAlterationState(AnalyticalRecord):
 
 
 class SampleProfileCache(AnalyticalRecord):
+    """Cached profile summary for a processed sample."""
+
     run_sample_key: str
     profile_summary_json: JsonObject = Field(default_factory=dict)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class CohortSummary(AnalyticalRecord):
+    """Precomputed summary statistics for a sample set and profile feature."""
+
     sample_set_id: str
     data_profile_key: str
     metric_key: str | None = None
@@ -544,6 +630,8 @@ class CohortSummary(AnalyticalRecord):
 
 
 class ToolVersion(AnalyticalRecord):
+    """Tool version observed while producing or importing a run."""
+
     run_id: str
     tool: str
     version: str
@@ -551,6 +639,8 @@ class ToolVersion(AnalyticalRecord):
 
 
 class DataSource(AnalyticalRecord):
+    """Source path provenance for imported analytical data."""
+
     run_id: str
     run_sample_key: str | None = None
     sample_key: str | None = None
@@ -560,6 +650,8 @@ class DataSource(AnalyticalRecord):
 
 
 class AnalyticsIngestBatch(MutableGoodomicsModel):
+    """Container for analytical records staged for DuckDB ingestion."""
+
     duckdb_metadata: list[DuckDBMetadata] = Field(default_factory=list)
     metric_definitions: list[MetricDefinition] = Field(default_factory=list)
     attribute_definitions: list[AttributeDefinition] = Field(default_factory=list)

@@ -18,11 +18,16 @@ SDK, parser, report generation, and pipeline integration features.
 ```python
 from goodomics import run
 
-with run("rnaseq-batch-042") as ctx:
-    ctx.metric("pct_mapped", 97.2)
+with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
+    ctx.log_metric("S1", "pct_mapped", 97.2, unit="percent")
     ctx.metric("duplication_rate", 0.18)
     ctx.file("multiqc_report.html")
 ```
+
+Logged SDK metrics are written to the DuckDB analytical store as generic metric
+records, not to the SQL catalog database. The context manager records the run
+and sample catalog metadata in SQLite, then flushes metric observations to the
+project DuckDB store when the block exits successfully.
 
 ## Pipeline integration
 

@@ -22,7 +22,7 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.report.html import render_report
-from goodomics.schemas.models import Metric, Run, Sample
+from goodomics.schemas.models import Run, Sample
 from goodomics.server.ai import (
     AIProviderNotConfigured,
     ChatMessage,
@@ -37,12 +37,12 @@ from goodomics.server.db.models import (
 )
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    MetricRecord,
+    FileLinkRecord,
+    FileRecord,
     ProjectRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
-    StoredFileRecord,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -55,7 +55,6 @@ class RunCreate(SQLModel):
     project: str | None = None
     assay: str | None = None
     samples: list[Sample] = Field(default_factory=list)
-    metrics: list[Metric] = Field(default_factory=list)
 
 
 class RunPatch(SQLModel):
@@ -68,6 +67,39 @@ class RunPageRead(SQLModel):
     total: int
     limit: int
     offset: int
+
+
+class SampleListItemRead(SQLModel):
+    sample_id: str
+    project_id: str | None = None
+    subject_id: str | None = None
+    sample_name: str | None = None
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+    run_count: int = 0
+    latest_run_id: str | None = None
+    latest_run_name: str | None = None
+    latest_run_created_at: datetime | None = None
+
+
+class SamplePageRead(SQLModel):
+    items: list[SampleListItemRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class SampleRunRead(SQLModel):
+    run_id: str
+    project_id: str | None = None
+    name: str | None = None
+    run_kind: str
+    assay: str | None = None
+    pipeline_name: str | None = None
+    pipeline_version: str | None = None
+    status: str
+    created_at: datetime
+    run_sample_id: str
+    run_sample_status: str
 
 
 class ProjectCreate(SQLModel):
@@ -108,11 +140,12 @@ class SearchResultRead(SQLModel):
 
 
 class FileRead(SQLModel):
-    id: int
-    file_id: str | None = None
-    run_id: str
+    file_id: str
+    project_id: str | None = None
+    run_id: str | None = None
     kind: str = "file"
-    path: str
+    path: str | None = None
+    uri: str | None = None
     size_bytes: int | None = None
     sha256: str | None = None
     source_path: str | None = None
@@ -262,8 +295,7 @@ EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     ),
     "runs": (RunRecord, "run_id", {"project", "assay"}),
     "samples": (SampleRecord, "sample_id", {"sample_name", "metadata_json"}),
-    "metrics": (MetricRecord, "id", {"sample_id", "name", "value", "unit"}),
-    "files": (StoredFileRecord, "id", {"kind", "path", "source_path"}),
+    "files": (FileRecord, "file_id", {"file_role", "path", "uri", "metadata_json"}),
     "report_templates": (
         ReportTemplateRecord,
         "template_id",
@@ -357,16 +389,6 @@ async def list_project_run_samples(
     return run.samples
 
 
-@router.get("/projects/{project_id}/runs/{run_id}/metrics", response_model=list[Metric])
-async def list_project_run_metrics(
-    project_id: str,
-    run_id: str,
-    request: Request,
-) -> list[Metric]:
-    await _get_project_run(request, project_id, run_id)
-    return await request.app.state.store.list_metrics(run_id)
-
-
 @router.get("/projects/{project_id}/runs/{run_id}/files", response_model=list[FileRead])
 async def list_project_run_files(
     project_id: str,
@@ -374,7 +396,7 @@ async def list_project_run_files(
     request: Request,
 ) -> list[FileRead]:
     await _get_project_run(request, project_id, run_id)
-    return await _list_run_files(run_id, request)
+    return await _list_run_files(run_id, request, project_id=project_id)
 
 
 @router.get(
@@ -418,6 +440,22 @@ async def get_project_file_content(
     return await _file_content_response(file_id, request, project_id=project_id)
 
 
+@router.get("/projects/{project_id}/samples", response_model=SamplePageRead)
+async def list_project_samples(
+    project_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> SamplePageRead:
+    await _require_project(request, project_id)
+    return await _list_samples(
+        request,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/projects/{project_id}/samples/{sample_id}", response_model=Sample)
 async def get_project_sample(
     project_id: str,
@@ -452,6 +490,47 @@ async def get_project_sample(
     if row is None:
         raise HTTPException(status_code=404, detail="Sample not found")
     return _sample_from_row(row)
+
+
+@router.get(
+    "/projects/{project_id}/samples/{sample_id}/runs",
+    response_model=list[SampleRunRead],
+)
+async def list_project_sample_runs(
+    project_id: str,
+    sample_id: str,
+    request: Request,
+) -> list[SampleRunRead]:
+    await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        await _require_project_sample(session, project_id, sample_id)
+        rows = await _sample_run_rows(session, project_id, sample_id)
+    return [_sample_run_from_rows(run, run_sample) for run, run_sample in rows]
+
+
+@router.get(
+    "/projects/{project_id}/samples/{sample_id}/runs/{run_id}/analytics/metrics",
+    response_model=list[AnalyticsMetricRead],
+)
+async def list_project_sample_run_analytics_metrics(
+    project_id: str,
+    sample_id: str,
+    run_id: str,
+    request: Request,
+) -> list[AnalyticsMetricRead]:
+    await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        _, run_sample = await _get_sample_run_link(
+            session, project_id, sample_id, run_id
+        )
+    metrics = _analytics_store_for_project(request, project_id).list_metric_values(
+        run_id,
+        sample_key=sample_id,
+        run_sample_key=run_sample.run_sample_id,
+    )
+    return _analytics_metric_reads(metrics)
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectRead)
@@ -517,14 +596,6 @@ async def search_samples(
         return []
     pattern = f"%{term}%"
     async with _session(request) as session:
-        run_statement = select(RunRecord).where(
-            (func.lower(RunRecord.run_id).like(pattern))
-            | (func.lower(RunRecord.name).like(pattern))
-        )
-        if project_id is not None:
-            run_statement = run_statement.where(RunRecord.project_id == project_id)
-        run_rows = (await session.exec(run_statement.limit(limit))).all()
-
         sample_statement = select(SampleRecord).where(
             (func.lower(SampleRecord.sample_id).like(pattern))
             | (func.lower(SampleRecord.sample_name).like(pattern))
@@ -533,9 +604,17 @@ async def search_samples(
             sample_statement = sample_statement.where(
                 SampleRecord.project_id == project_id
             )
-        remaining = max(limit - len(run_rows), 0)
-        sample_rows = (
-            (await session.exec(sample_statement.limit(remaining))).all()
+        sample_rows = (await session.exec(sample_statement.limit(limit))).all()
+
+        run_statement = select(RunRecord).where(
+            (func.lower(RunRecord.run_id).like(pattern))
+            | (func.lower(RunRecord.name).like(pattern))
+        )
+        if project_id is not None:
+            run_statement = run_statement.where(RunRecord.project_id == project_id)
+        remaining = max(limit - len(sample_rows), 0)
+        run_rows = (
+            (await session.exec(run_statement.limit(remaining))).all()
             if remaining
             else []
         )
@@ -558,16 +637,6 @@ async def search_samples(
             }
     return [
         SearchResultRead(
-            kind="run",
-            project_id=row.project_id,
-            project_name=project_rows[row.project_id].name
-            if row.project_id in project_rows
-            else None,
-            run_id=row.run_id,
-        )
-        for row in run_rows
-    ] + [
-        SearchResultRead(
             kind="sample",
             project_id=row.project_id,
             project_name=project_rows[row.project_id].name
@@ -577,6 +646,16 @@ async def search_samples(
             sample_name=row.sample_name,
         )
         for row in sample_rows
+    ] + [
+        SearchResultRead(
+            kind="run",
+            project_id=row.project_id,
+            project_name=project_rows[row.project_id].name
+            if row.project_id in project_rows
+            else None,
+            run_id=row.run_id,
+        )
+        for row in run_rows
     ]
 
 
@@ -606,7 +685,6 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
             )
             for sample in payload.samples
         ],
-        metrics=payload.metrics,
     )
     await request.app.state.store.save_run(run)
     return run
@@ -642,25 +720,26 @@ async def list_run_samples(run_id: str, request: Request) -> list[Sample]:
     return run.samples
 
 
-@router.get("/runs/{run_id}/metrics", response_model=list[Metric])
-async def list_run_metrics(run_id: str, request: Request) -> list[Metric]:
-    return await request.app.state.store.list_metrics(run_id)
-
-
 @router.get("/runs/{run_id}/files", response_model=list[FileRead])
 async def list_run_files(run_id: str, request: Request) -> list[FileRead]:
     return await _list_run_files(run_id, request)
 
 
-async def _list_run_files(run_id: str, request: Request) -> list[FileRead]:
+async def _list_run_files(
+    run_id: str, request: Request, *, project_id: str | None = None
+) -> list[FileRead]:
     await _ensure_schema(request)
+    statement = (
+        select(FileRecord, FileLinkRecord)
+        .join(FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.file_id)
+        .where(FileLinkRecord.run_id == run_id)
+        .order_by(FileRecord.file_id)
+    )
+    if project_id is not None:
+        statement = statement.where(FileLinkRecord.project_id == project_id)
     async with _session(request) as session:
-        rows = (
-            await session.exec(
-                select(StoredFileRecord).where(StoredFileRecord.run_id == run_id)
-            )
-        ).all()
-    return [_file_from_stored_file(row) for row in rows]
+        rows = (await session.exec(statement)).all()
+    return [_file_from_rows(file, link) for file, link in rows]
 
 
 @router.get(
@@ -700,19 +779,22 @@ async def _file_content_response(
 ) -> FileResponse:
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = (
-            await session.exec(
-                select(StoredFileRecord).where(StoredFileRecord.file_id == file_id)
-            )
-        ).first()
-        if row is None and file_id.isdigit():
-            row = await session.get(StoredFileRecord, int(file_id))
+        row = await session.get(FileRecord, file_id)
+        if row is not None and project_id is not None:
+            link = (
+                await session.exec(
+                    select(FileLinkRecord).where(
+                        FileLinkRecord.file_id == file_id,
+                        FileLinkRecord.project_id == project_id,
+                    )
+                )
+            ).first()
+            if link is None:
+                row = None
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
-    if project_id is not None:
-        run = await request.app.state.store.get_run(row.run_id)
-        if run is None or run.project_id != project_id:
-            raise HTTPException(status_code=404, detail="File not found")
+    if row.path is None:
+        raise HTTPException(status_code=404, detail="Stored file not found")
     path = Path(row.path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file not found")
@@ -1045,27 +1127,19 @@ async def _project_read(
             )
         )
     ).one()
-    file_count = int(
-        (
-            await session.exec(
-                select(func.count())
-                .select_from(StoredFileRecord)
-                .join(RunRecord, cast(Any, StoredFileRecord.run_id) == RunRecord.run_id)
-                .where(RunRecord.project_id == row.project_id)
+    file_rows = (
+        await session.exec(
+            select(FileRecord)
+            .join(
+                FileLinkRecord,
+                cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
             )
-        ).one()
-    )
-    file_size_bytes = int(
-        (
-            await session.exec(
-                select(func.coalesce(func.sum(StoredFileRecord.size_bytes), 0))
-                .select_from(StoredFileRecord)
-                .join(RunRecord, cast(Any, StoredFileRecord.run_id) == RunRecord.run_id)
-                .where(RunRecord.project_id == row.project_id)
-            )
-        ).one()
-        or 0
-    )
+            .where(FileLinkRecord.project_id == row.project_id)
+            .distinct()
+        )
+    ).all()
+    file_count = len(file_rows)
+    file_size_bytes = sum(file.size_bytes or 0 for file in file_rows)
     data = row.model_dump()
     return ProjectRead(
         **data,
@@ -1075,6 +1149,162 @@ async def _project_read(
         file_size_bytes=file_size_bytes,
         latest_activity_at=latest_activity_at,
     )
+
+
+async def _list_samples(
+    request: Request,
+    *,
+    project_id: str,
+    limit: int,
+    offset: int,
+) -> SamplePageRead:
+    await _ensure_schema(request)
+    latest_run_subquery = (
+        select(
+            cast(Any, RunSampleRecord.sample_id).label("sample_id"),
+            func.max(RunRecord.created_at).label("latest_run_created_at"),
+        )
+        .join(RunRecord, cast(Any, RunRecord.run_id) == RunSampleRecord.run_id)
+        .where(
+            RunSampleRecord.project_id == project_id,
+            RunRecord.project_id == project_id,
+        )
+        .group_by(RunSampleRecord.sample_id)
+        .subquery()
+    )
+    run_count_subquery = (
+        select(
+            cast(Any, RunSampleRecord.sample_id).label("sample_id"),
+            func.count(func.distinct(RunSampleRecord.run_id)).label("run_count"),
+        )
+        .where(RunSampleRecord.project_id == project_id)
+        .group_by(RunSampleRecord.sample_id)
+        .subquery()
+    )
+    async with _session(request) as session:
+        total = int(
+            (
+                await session.exec(
+                    select(func.count())
+                    .select_from(SampleRecord)
+                    .where(SampleRecord.project_id == project_id)
+                )
+            ).one()
+        )
+        statement = (
+            select(
+                SampleRecord,
+                run_count_subquery.c.run_count,
+                latest_run_subquery.c.latest_run_created_at,
+            )
+            .outerjoin(
+                run_count_subquery,
+                cast(Any, SampleRecord.sample_id) == run_count_subquery.c.sample_id,
+            )
+            .outerjoin(
+                latest_run_subquery,
+                cast(Any, SampleRecord.sample_id) == latest_run_subquery.c.sample_id,
+            )
+            .where(SampleRecord.project_id == project_id)
+            .order_by(
+                cast(Any, latest_run_subquery.c.latest_run_created_at).desc(),
+                SampleRecord.sample_id,
+            )
+        )
+        rows = (await session.exec(statement.offset(offset).limit(limit))).all()
+        items: list[SampleListItemRead] = []
+        for sample_row, run_count, latest_run_created_at in rows:
+            latest_run = await _latest_sample_run(
+                session, project_id, sample_row.sample_id
+            )
+            items.append(
+                _sample_list_item_from_row(
+                    sample_row,
+                    run_count=int(run_count or 0),
+                    latest_run=latest_run[0] if latest_run is not None else None,
+                    latest_run_created_at=latest_run_created_at,
+                )
+            )
+    return SamplePageRead(items=items, total=total, limit=limit, offset=offset)
+
+
+async def _require_project_sample(
+    session: AsyncSession,
+    project_id: str,
+    sample_id: str,
+) -> SampleRecord:
+    row = (
+        await session.exec(
+            select(SampleRecord).where(
+                SampleRecord.project_id == project_id,
+                SampleRecord.sample_id == sample_id,
+            )
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    return row
+
+
+async def _sample_run_rows(
+    session: AsyncSession,
+    project_id: str,
+    sample_id: str,
+) -> list[tuple[RunRecord, RunSampleRecord]]:
+    rows = (
+        await session.exec(
+            select(RunRecord, RunSampleRecord)
+            .join(
+                RunSampleRecord,
+                cast(Any, RunSampleRecord.run_id) == RunRecord.run_id,
+            )
+            .where(
+                RunRecord.project_id == project_id,
+                RunSampleRecord.project_id == project_id,
+                RunSampleRecord.sample_id == sample_id,
+            )
+            .order_by(
+                cast(Any, RunRecord.created_at).desc(),
+                cast(Any, RunRecord.run_id).desc(),
+            )
+        )
+    ).all()
+    return [(run, run_sample) for run, run_sample in rows]
+
+
+async def _latest_sample_run(
+    session: AsyncSession,
+    project_id: str,
+    sample_id: str,
+) -> tuple[RunRecord, RunSampleRecord] | None:
+    rows = await _sample_run_rows(session, project_id, sample_id)
+    return rows[0] if rows else None
+
+
+async def _get_sample_run_link(
+    session: AsyncSession,
+    project_id: str,
+    sample_id: str,
+    run_id: str,
+) -> tuple[RunRecord, RunSampleRecord]:
+    row = (
+        await session.exec(
+            select(RunRecord, RunSampleRecord)
+            .join(
+                RunSampleRecord,
+                cast(Any, RunSampleRecord.run_id) == RunRecord.run_id,
+            )
+            .where(
+                RunRecord.project_id == project_id,
+                RunRecord.run_id == run_id,
+                RunSampleRecord.project_id == project_id,
+                RunSampleRecord.sample_id == sample_id,
+            )
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sample run not found")
+    return row
 
 
 async def _list_runs(
@@ -1131,9 +1361,46 @@ def _sample_from_row(row: SampleRecord) -> Sample:
         sample_id=row.sample_id,
         project_id=row.project_id,
         subject_id=row.subject_id,
-        external_id=row.external_id,
         sample_name=row.sample_name,
         metadata_json=metadata_dict,
+    )
+
+
+def _sample_list_item_from_row(
+    row: SampleRecord,
+    *,
+    run_count: int,
+    latest_run: RunRecord | None,
+    latest_run_created_at: datetime | None,
+) -> SampleListItemRead:
+    metadata_value = row.metadata_json
+    metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
+    return SampleListItemRead(
+        sample_id=row.sample_id,
+        project_id=row.project_id,
+        subject_id=row.subject_id,
+        sample_name=row.sample_name,
+        metadata_json=metadata_dict,
+        run_count=run_count,
+        latest_run_id=latest_run.run_id if latest_run is not None else None,
+        latest_run_name=latest_run.name if latest_run is not None else None,
+        latest_run_created_at=latest_run_created_at,
+    )
+
+
+def _sample_run_from_rows(run: RunRecord, run_sample: RunSampleRecord) -> SampleRunRead:
+    return SampleRunRead(
+        run_id=run.run_id,
+        project_id=run.project_id,
+        name=run.name,
+        run_kind=run.run_kind,
+        assay=run.assay,
+        pipeline_name=run.pipeline_name,
+        pipeline_version=run.pipeline_version,
+        status=run.status,
+        created_at=run.created_at,
+        run_sample_id=run_sample.run_sample_id,
+        run_sample_status=run_sample.status,
     )
 
 
@@ -1339,8 +1606,22 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     return data
 
 
-def _file_from_stored_file(row: StoredFileRecord) -> FileRead:
-    return FileRead.model_validate(row.model_dump())
+def _file_from_rows(file: FileRecord, link: FileLinkRecord | None = None) -> FileRead:
+    metadata_value = file.metadata_json
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
+    source_path = metadata.get("source_path")
+    return FileRead(
+        file_id=file.file_id,
+        project_id=file.project_id,
+        run_id=link.run_id if link is not None else None,
+        kind=file.file_role,
+        path=file.path,
+        uri=file.uri,
+        size_bytes=file.size_bytes,
+        sha256=file.sha256,
+        source_path=source_path if isinstance(source_path, str) else None,
+        created_at=file.created_at,
+    )
 
 
 def _model_field_name(model: type[SQLModel], requested_name: str) -> str:

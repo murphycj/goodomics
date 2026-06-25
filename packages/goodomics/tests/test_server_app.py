@@ -18,6 +18,7 @@ from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import GoodomicsQueryTools
 from goodomics.server.settings import Settings
+from goodomics.storage.database import DEFAULT_DATABASE_URL
 
 
 @pytest.fixture
@@ -106,11 +107,17 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     )
     assert search.status_code == 200
     search_body = search.json()
-    assert search_body[0]["kind"] == "run"
-    assert search_body[0]["run_id"] == "rna-run"
+    assert search_body[0]["kind"] == "sample"
+    assert search_body[0]["sample_id"] == "S1"
     assert any(
-        item["kind"] == "sample" and item["sample_id"] == "S1" for item in search_body
+        item["kind"] == "run" and item["run_id"] == "rna-run" for item in search_body
     )
+
+    samples = client.get(f"/api/v1/projects/{project['project_id']}/samples")
+    assert samples.status_code == 200
+    assert samples.json()["items"][0]["sample_id"] == "S1"
+    assert samples.json()["items"][0]["latest_run_id"] == "rna-run"
+    assert samples.json()["items"][0]["run_count"] == 1
 
     sample = client.get(f"/api/v1/projects/{project['project_id']}/samples/S1")
     assert sample.status_code == 200
@@ -123,6 +130,51 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     assert renamed.status_code == 200
     assert renamed.json()["project_id"] == project["project_id"]
     assert renamed.json()["name"] == "RNA-seq Production Core"
+
+
+def test_project_sample_list_and_sample_runs_are_sample_first(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/projects",
+        json={"name": "Sample Core", "slug": "sample-core"},
+    ).json()
+    project_id = created["project_id"]
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "run-old",
+            "project": "sample-core",
+            "samples": [{"sample_id": "S1", "sample_name": "Tumor RNA"}],
+        },
+    )
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "run-new",
+            "project": "sample-core",
+            "samples": [
+                {"sample_id": "S1", "sample_name": "Tumor RNA"},
+                {"sample_id": "S2", "sample_name": "Control DNA"},
+            ],
+        },
+    )
+
+    samples = client.get(f"/api/v1/projects/{project_id}/samples")
+    assert samples.status_code == 200
+    body = samples.json()
+    assert body["total"] == 2
+    sample_by_id = {sample["sample_id"]: sample for sample in body["items"]}
+    assert sample_by_id["S1"]["run_count"] == 2
+    assert sample_by_id["S1"]["latest_run_id"] == "run-new"
+    assert sample_by_id["S2"]["run_count"] == 1
+    assert sample_by_id["S2"]["latest_run_id"] == "run-new"
+
+    runs = client.get(f"/api/v1/projects/{project_id}/samples/S1/runs")
+    assert runs.status_code == 200
+    run_body = runs.json()
+    assert [run["run_id"] for run in run_body] == ["run-new", "run-old"]
+    assert run_body[0]["run_sample_id"] == "run-new:S1"
 
 
 def test_query_tools_resolve_project_and_list_read_only_context(
@@ -139,9 +191,6 @@ def test_query_tools_resolve_project_and_list_read_only_context(
             "project": "rnaseq-prod",
             "assay": "RNA-seq",
             "samples": [{"sample_id": "S1 Read 1", "sample_name": "Tumor RNA"}],
-            "metrics": [
-                {"sample_id": "S1 Read 1", "name": "percent_mapped", "value": 96.4}
-            ],
         },
     )
 
@@ -197,7 +246,7 @@ def test_query_tools_resolve_project_and_list_read_only_context(
         run_samples["samples"][0]["app_path"]
         == f"/project/{created['project_id']}/samples/S1%20Read%201"
     )
-    assert metrics["metrics"][0]["name"] == "percent_mapped"
+    assert metrics["metrics"] == []
 
 
 def test_query_tools_return_candidates_for_ambiguous_project(
@@ -616,6 +665,9 @@ def test_run_analytics_and_file_content_endpoints(
         project_payloads = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/analytics/payloads"
         )
+        sample_metrics = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/run-1/analytics/metrics"
+        )
         project_files = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/files"
         )
@@ -623,9 +675,12 @@ def test_run_analytics_and_file_content_endpoints(
         tables = test_client.get("/api/v1/database/tables").json()
         file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
         content = test_client.get(f"/api/v1/files/{report['file_id']}/content")
-        content_by_id = test_client.get(f"/api/v1/files/{report['id']}/content")
         project_content = test_client.get(
-            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['id']}/content"
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['file_id']}/content"
+        )
+        legacy_metrics = test_client.get("/api/v1/runs/run-1/metrics")
+        legacy_project_metrics = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/metrics"
         )
 
     assert metrics.status_code == 200
@@ -639,6 +694,13 @@ def test_run_analytics_and_file_content_endpoints(
     assert project_metrics.json() == metrics.json()
     assert project_payloads.status_code == 200
     assert project_payloads.json() == payloads.json()
+    assert sample_metrics.status_code == 200
+    assert sample_metrics.json()
+    assert all(
+        item["sample_key"] == "S1" or item["run_sample_key"] == "run-1:S1"
+        for item in sample_metrics.json()
+    )
+    assert not any(item["sample_key"] == "S1 Read 1" for item in sample_metrics.json())
     assert project_files.status_code == 200
     assert project_files.json() == files
     assert "file_id" in report
@@ -646,10 +708,10 @@ def test_run_analytics_and_file_content_endpoints(
     assert "file_id" in file_rows[0]
     assert content.status_code == 200
     assert "MultiQC" in content.text
-    assert content_by_id.status_code == 200
-    assert "MultiQC" in content_by_id.text
     assert project_content.status_code == 200
     assert "MultiQC" in project_content.text
+    assert legacy_metrics.status_code == 404
+    assert legacy_project_metrics.status_code == 404
 
 
 def test_database_summary_reports_control_and_analytics_counts(
@@ -694,7 +756,7 @@ def test_server_default_database_matches_cli_local_state(
 ) -> None:
     monkeypatch.delenv("GOODOMICS_DATABASE_URL", raising=False)
 
-    assert Settings().database_url == "sqlite+aiosqlite:///.goodomics/goodomics.db"
+    assert Settings().database_url == DEFAULT_DATABASE_URL
 
 
 def test_report_template_round_trips_to_yaml_and_json(client: TestClient) -> None:

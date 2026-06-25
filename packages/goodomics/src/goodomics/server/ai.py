@@ -366,7 +366,7 @@ def tool_schemas() -> list[dict[str, Any]]:
         ),
         _tool(
             "list_run_metrics",
-            "List scalar and analytics metrics for a run.",
+            "List analytics metrics for a run.",
             {
                 "run_id": _string(required=True),
                 "project": _string(),

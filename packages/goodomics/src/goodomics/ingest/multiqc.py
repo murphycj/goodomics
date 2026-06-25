@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.parsers.multiqc import (
@@ -18,11 +17,15 @@ from goodomics.parsers.multiqc import (
     parse_multiqc_outputs,
 )
 from goodomics.projects import analytics_path_for_project
-from goodomics.schemas.models import Run, Sample
+from goodomics.schemas.models import FileAsset, FileLink, Run, Sample
+from goodomics.storage.database import (
+    DEFAULT_DATABASE_URL,
+    create_async_database_engine,
+    ensure_sqlite_parent,
+)
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
-    StoredFileMetadata,
 )
 
 
@@ -63,7 +66,7 @@ def ingest_multiqc_runs(
     run_id: str | None = None,
     project: str | None = None,
     assay: str | None = None,
-    database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
+    database_url: str = DEFAULT_DATABASE_URL,
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
 ) -> list[MultiQCIngestResult]:
@@ -107,7 +110,7 @@ def ingest_multiqc(
     run_id: str | None = None,
     project: str | None = None,
     assay: str | None = None,
-    database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db",
+    database_url: str = DEFAULT_DATABASE_URL,
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
 ) -> MultiQCIngestResult:
@@ -159,11 +162,11 @@ def _save_multiqc_parse_result(
     analytics_path: Path | None,
     file_root: Path,
 ) -> MultiQCIngestResult:
-    _ensure_sqlite_parent(database_url)
+    ensure_sqlite_parent(database_url)
     file_root.mkdir(parents=True, exist_ok=True)
 
-    control_store = SQLModelGoodomicsStore(database_url)
-    project_record = asyncio.run(control_store.ensure_project(project))
+    catalog_store = SQLModelGoodomicsStore(database_url)
+    project_record = asyncio.run(catalog_store.ensure_project(project))
     resolved_analytics_path = analytics_path or analytics_path_for_project(
         Path(".goodomics"), project_record.project_id
     )
@@ -177,14 +180,32 @@ def _save_multiqc_parse_result(
             for sample_id in sorted(parsed.sample_ids)
         ],
     )
-    asyncio.run(control_store.save_run(run))
+    asyncio.run(catalog_store.save_run(run))
 
     files = _copy_multiqc_files(
         parsed.outputs,
         run_id=run_id,
+        project_id=project_record.project_id,
         file_root=file_root,
     )
-    asyncio.run(_replace_files(database_url, run_id, files))
+    file_links = [
+        FileLink(
+            file_id=file.file_id,
+            project_id=project_record.project_id,
+            run_id=run_id,
+            link_role="source" if file.file_role == "multiqc_data" else "report",
+        )
+        for file in files
+    ]
+    asyncio.run(
+        _replace_files(
+            database_url,
+            run_id,
+            files,
+            file_links,
+            project_id=project_record.project_id,
+        )
+    )
 
     DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
         run_id,
@@ -207,14 +228,15 @@ def _copy_multiqc_files(
     outputs: list[MultiQCOutput],
     *,
     run_id: str,
+    project_id: str,
     file_root: Path,
-) -> list[StoredFileMetadata]:
+) -> list[FileAsset]:
     destination_root = file_root / run_id / "multiqc"
     if destination_root.exists():
         shutil.rmtree(destination_root)
     destination_root.mkdir(parents=True, exist_ok=True)
 
-    files: list[StoredFileMetadata] = []
+    files: list[FileAsset] = []
     for index, output in enumerate(outputs, start=1):
         output_destination = (
             destination_root if len(outputs) == 1 else destination_root / str(index)
@@ -226,6 +248,7 @@ def _copy_multiqc_files(
             files.append(
                 _file_metadata(
                     run_id=run_id,
+                    project_id=project_id,
                     kind="multiqc_report",
                     source=output.report_html,
                     destination=report_destination,
@@ -237,6 +260,7 @@ def _copy_multiqc_files(
         files.append(
             _file_metadata(
                 run_id=run_id,
+                project_id=project_id,
                 kind="multiqc_data",
                 source=output.data_dir,
                 destination=data_destination,
@@ -248,19 +272,26 @@ def _copy_multiqc_files(
 def _file_metadata(
     *,
     run_id: str,
+    project_id: str,
     kind: str,
     source: Path,
     destination: Path,
-) -> StoredFileMetadata:
-    return StoredFileMetadata(
-        file_id=f"{run_id}:{kind}:{destination.name}",
-        run_id=run_id,
-        kind=kind,
+) -> FileAsset:
+    path_digest = hashlib.sha256(str(destination).encode("utf-8")).hexdigest()[:12]
+    return FileAsset(
+        file_id=f"{run_id}:{kind}:{path_digest}:{destination.name}",
+        project_id=project_id,
+        file_role=kind,
+        format=destination.suffix.removeprefix(".") if destination.is_file() else "dir",
         path=str(destination),
         size_bytes=_path_size(destination),
         sha256=_path_hash(destination),
-        source_path=str(source),
         created_at=datetime.now(UTC),
+        metadata_json={
+            "source_path": str(source),
+            "source": "multiqc_import",
+            "run_id": run_id,
+        },
     )
 
 
@@ -288,24 +319,25 @@ def _update_hash(digest: Any, path: Path) -> None:
             digest.update(chunk)
 
 
-def _ensure_sqlite_parent(database_url: str) -> None:
-    prefix = "sqlite+aiosqlite:///"
-    if database_url.startswith(prefix):
-        db_path = Path(database_url.removeprefix(prefix))
-        if str(db_path) != ":memory:":
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-
-
 async def _replace_files(
     database_url: str,
     run_id: str,
-    files: list[StoredFileMetadata],
+    files: list[FileAsset],
+    file_links: list[FileLink],
+    *,
+    project_id: str,
 ) -> None:
-    engine = create_async_engine(database_url)
+    engine = create_async_database_engine(database_url)
     try:
         store = SQLModelGoodomicsStore(database_url, engine=engine)
         await store.ensure_schema()
         async with AsyncSession(engine) as session:
-            await store.replace_files(session, run_id, files)
+            await store.replace_run_file_catalog(
+                session,
+                run_id,
+                files,
+                file_links,
+                project_id,
+            )
     finally:
         await engine.dispose()

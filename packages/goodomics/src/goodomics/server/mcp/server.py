@@ -137,7 +137,7 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
         metric_query: str | None = None,
         limit: int = 30,
     ) -> dict[str, Any]:
-        """List scalar and analytics metrics for a run."""
+        """List analytics metrics for a run."""
         return await _logged_tool_call(
             "list_run_metrics",
             {

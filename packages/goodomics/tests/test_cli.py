@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fixtures import write_multiqc_fixture
+from fixtures import write_cbioportal_fixture, write_multiqc_fixture
 from goodomics.cli import app
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
@@ -79,6 +79,82 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values("run-1")
+
+
+def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:
+    study_dir = write_cbioportal_fixture(tmp_path / "study")
+    database_path = tmp_path / "state" / "goodomics.db"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest",
+            str(study_dir),
+            "--type",
+            "cbioportal",
+            "--project",
+            "demo",
+            "--run-id",
+            "cbio-run",
+            "--database-url",
+            f"sqlite+aiosqlite:///{database_path}",
+            "--analytics-path",
+            str(analytics_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Ingested cBioPortal run" in result.stdout
+    assert "cbio-run" in result.stdout
+    assert database_path.exists()
+    assert analytics_path.exists()
+    assert DuckDBAnalyticsStore(analytics_path).row_counts()["feature_value_numeric"]
+
+
+def test_ingest_command_accepts_short_flags(tmp_path: Path) -> None:
+    results_dir = write_multiqc_fixture(tmp_path / "results")
+    database_path = tmp_path / "state" / "goodomics.db"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+    file_root = tmp_path / "state" / "files"
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest",
+            str(results_dir),
+            "-t",
+            "multiqc",
+            "-p",
+            "demo",
+            "-a",
+            "rnaseq",
+            "-R",
+            "short-run",
+            "-d",
+            f"sqlite+aiosqlite:///{database_path}",
+            "-A",
+            str(analytics_path),
+            "-f",
+            str(file_root),
+            "-l",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "short-run" in result.stdout
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("short-run")
+
+
+def test_help_alias_uses_short_h() -> None:
+    root_help = runner.invoke(app, ["-h"])
+    ingest_help = runner.invoke(app, ["ingest", "-h"])
+
+    assert root_help.exit_code == 0
+    assert ingest_help.exit_code == 0
+    assert root_help.stdout
+    assert ingest_help.stdout
 
 
 def test_default_path_argument_ingests_multiqc_output(tmp_path: Path) -> None:

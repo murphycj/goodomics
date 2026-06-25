@@ -12,7 +12,7 @@ import { CohortsPage } from "./pages/CohortsPage";
 import { DatabasePage } from "./pages/DatabasePage";
 import { HomePage } from "./pages/HomePage";
 import { PoliciesPage } from "./pages/PoliciesPage";
-import { ProjectRunsPage } from "./pages/ProjectRunsPage";
+import { ProjectSamplesPage } from "./pages/ProjectSamplesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { SampleDetailPage } from "./pages/SampleDetailPage";
@@ -89,7 +89,7 @@ const router = createRouter({
 
 function ProjectRouteAdapter() {
   const { projectId } = projectRoute.useParams();
-  return <ProjectRunsPage projectId={projectId} />;
+  return <ProjectSamplesPage projectId={projectId} />;
 }
 
 function RunDetailRouteAdapter() {
