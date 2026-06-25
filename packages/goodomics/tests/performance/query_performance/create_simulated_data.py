@@ -13,6 +13,7 @@ from goodomics.projects import (
     DEFAULT_PROJECT_NAME,
     analytics_path_for_project,
 )
+from goodomics.storage.database import DEFAULT_DATABASE_URL, sqlite_database_path
 from goodomics.storage.duckdb import ANALYTICS_TABLES, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     ProjectRecord,
@@ -27,7 +28,6 @@ DEFAULT_ANALYTICS_PATH = analytics_path_for_project(
     DEFAULT_GOODOMICS_ROOT,
     DEFAULT_PROJECT_ID,
 )
-DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///.goodomics/goodomics.db"
 GENE_COUNT = 20_000
 VARIANT_COUNT = 1_000
 STRUCTURAL_VARIANT_COUNT = 300
@@ -42,7 +42,9 @@ def main() -> None:
     args = _parse_args()
     analytics_path = DEFAULT_ANALYTICS_PATH
     _reset_database(analytics_path)
-    _reset_database(_sqlite_path_from_url(DEFAULT_DATABASE_URL))
+    database_path = sqlite_database_path(DEFAULT_DATABASE_URL)
+    if database_path is not None:
+        _reset_database(database_path)
 
     store = DuckDBAnalyticsStore(analytics_path)
     store.ensure_schema()
@@ -86,13 +88,6 @@ def _reset_database(path: Path) -> None:
     for candidate in (path, path.with_suffix(path.suffix + ".wal")):
         if candidate.exists():
             candidate.unlink()
-
-
-def _sqlite_path_from_url(database_url: str) -> Path:
-    prefix = "sqlite+aiosqlite:///"
-    if not database_url.startswith(prefix):
-        raise ValueError(f"Only local SQLite URLs are supported: {database_url}")
-    return Path(database_url.removeprefix(prefix))
 
 
 async def _write_control_database(runs: int, samples: int) -> None:

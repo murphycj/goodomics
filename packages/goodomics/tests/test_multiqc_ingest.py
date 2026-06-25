@@ -9,7 +9,11 @@ from goodomics.ingest.multiqc import ingest_multiqc, ingest_multiqc_runs
 from goodomics.parsers.multiqc import discover_multiqc_outputs, parse_multiqc_bundle
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore, StoredFileRecord
+from goodomics.storage.sqlalchemy import (
+    FileLinkRecord,
+    FileRecord,
+    SQLModelGoodomicsStore,
+)
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -115,17 +119,19 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     assert run is not None
     assert run.project == "demo"
 
-    async def load_files() -> list[StoredFileRecord]:
+    async def load_files() -> tuple[list[FileRecord], list[FileLinkRecord]]:
         async with AsyncSession(control_store._get_engine()) as session:
-            rows = (
+            files = (await session.exec(select(FileRecord))).all()
+            links = (
                 await session.exec(
-                    select(StoredFileRecord).where(StoredFileRecord.run_id == "run-1")
+                    select(FileLinkRecord).where(FileLinkRecord.run_id == "run-1")
                 )
             ).all()
-        return list(rows)
+        return list(files), list(links)
 
-    files = asyncio.run(load_files())
-    assert {file.kind for file in files} == {"multiqc_data", "multiqc_report"}
+    files, links = asyncio.run(load_files())
+    assert {file.file_role for file in files} == {"multiqc_data", "multiqc_report"}
+    assert {link.file_id for link in links} == {file.file_id for file in files}
 
 
 def test_ingest_multiqc_defaults_to_project_analytics_path(
