@@ -10,7 +10,6 @@ const runSchema = z.object({
   status: z.string().default('unknown'),
   created_at: z.string(),
   samples: z.array(z.unknown()).default([]),
-  metrics: z.array(z.unknown()).default([]),
 });
 
 const runPageSchema = z.object({
@@ -38,9 +37,36 @@ const sampleSchema = z.object({
   sample_id: z.string(),
   project_id: z.string().nullable(),
   subject_id: z.string().nullable(),
-  external_id: z.string().nullable(),
   sample_name: z.string().nullable(),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
+});
+
+const sampleListItemSchema = sampleSchema.extend({
+  run_count: z.number(),
+  latest_run_id: z.string().nullable(),
+  latest_run_name: z.string().nullable(),
+  latest_run_created_at: z.string().nullable(),
+});
+
+const samplePageSchema = z.object({
+  items: z.array(sampleListItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+const sampleRunSchema = z.object({
+  run_id: z.string(),
+  project_id: z.string().nullable(),
+  name: z.string().nullable(),
+  run_kind: z.string(),
+  assay: z.string().nullable(),
+  pipeline_name: z.string().nullable(),
+  pipeline_version: z.string().nullable(),
+  status: z.string(),
+  created_at: z.string(),
+  run_sample_id: z.string(),
+  run_sample_status: z.string(),
 });
 
 const searchResultSchema = z.object({
@@ -53,11 +79,12 @@ const searchResultSchema = z.object({
 });
 
 const fileSchema = z.object({
-  id: z.number(),
-  file_id: z.string().nullable(),
-  run_id: z.string(),
+  file_id: z.string(),
+  project_id: z.string().nullable(),
+  run_id: z.string().nullable(),
   kind: z.string(),
-  path: z.string(),
+  path: z.string().nullable(),
+  uri: z.string().nullable(),
   size_bytes: z.number().nullable(),
   sha256: z.string().nullable(),
   source_path: z.string().nullable(),
@@ -135,6 +162,9 @@ export type GoodomicsRun = z.infer<typeof runSchema>;
 export type RunsPage = z.infer<typeof runPageSchema>;
 export type GoodomicsProject = z.infer<typeof projectSchema>;
 export type GoodomicsSample = z.infer<typeof sampleSchema>;
+export type SampleListItem = z.infer<typeof sampleListItemSchema>;
+export type SamplesPage = z.infer<typeof samplePageSchema>;
+export type SampleRun = z.infer<typeof sampleRunSchema>;
 export type SearchResult = z.infer<typeof searchResultSchema>;
 export type StoredFile = z.infer<typeof fileSchema>;
 export type AnalyticsMetric = z.infer<typeof analyticsMetricSchema>;
@@ -153,11 +183,11 @@ async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   return schema.parse(await response.json());
 }
 
-export function fileContentUrl(file: Pick<StoredFile, 'file_id' | 'id'>, projectId?: string) {
+export function fileContentUrl(file: Pick<StoredFile, 'file_id'>, projectId?: string) {
   if (projectId) {
-    return `/api/v1/projects/${encodeURIComponent(projectId)}/files/${file.id}/content`;
+    return `/api/v1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.file_id)}/content`;
   }
-  return `/api/v1/files/${file.id}/content`;
+  return `/api/v1/files/${encodeURIComponent(file.file_id)}/content`;
 }
 
 export function listRuns({ limit, offset }: { limit: number; offset: number }) {
@@ -181,6 +211,22 @@ export function listProjectRuns({
   );
 }
 
+export function listProjectSamples({
+  limit,
+  offset,
+  projectId,
+}: {
+  limit: number;
+  offset: number;
+  projectId: string;
+}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/samples?${params.toString()}`,
+    samplePageSchema,
+  );
+}
+
 export function listProjects() {
   return getJson('/api/v1/projects', z.array(projectSchema));
 }
@@ -193,6 +239,24 @@ export function getProjectSample(projectId: string, sampleId: string) {
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/samples/${encodeURIComponent(sampleId)}`,
     sampleSchema,
+  );
+}
+
+export function listProjectSampleRuns(projectId: string, sampleId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/samples/${encodeURIComponent(sampleId)}/runs`,
+    z.array(sampleRunSchema),
+  );
+}
+
+export function listProjectSampleRunMetrics(
+  projectId: string,
+  sampleId: string,
+  runId: string,
+) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/samples/${encodeURIComponent(sampleId)}/runs/${encodeURIComponent(runId)}/analytics/metrics`,
+    z.array(analyticsMetricSchema),
   );
 }
 
