@@ -1,7 +1,13 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { Database, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { DataGrid, type Column, type SortColumn } from "react-data-grid";
+import { ChevronDown, Copy, Database, Search, X } from "lucide-react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DataGrid,
+  SELECT_COLUMN_KEY,
+  SelectColumn,
+  type Column,
+  type SortColumn,
+} from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import {
   type DatabaseTable,
@@ -11,23 +17,42 @@ import {
 } from "../api";
 import {
   AsyncBlock,
-  Badge,
+  Button,
   Card,
   CardContent,
   ColumnVisibilityMenu,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   PaginationBar,
 } from "../components/ui";
+import { writeClipboardText } from "../lib/clipboard";
+import { showToast } from "../lib/toasts";
 import { cn, formatBytes } from "../lib/utils";
 
 type TableStore = DatabaseTable["store"];
 type GridRow = Record<string, unknown> & { __rowId: string };
+type CellPreview = {
+  column: string;
+  rowNumber: number;
+  tableName: string;
+  value: unknown;
+};
 
+const DEFAULT_COLUMN_WIDTH = 150;
+const LONG_COLUMN_WIDTH = 220;
 const PAGE_SIZES = [25, 50, 100, 250];
 const STORE_LABELS: Record<TableStore, string> = {
   catalog: "Catalog tables",
   analytics: "Analytical tables",
 };
+const COPY_FORMAT_LABELS = {
+  csv: "CSV",
+  json: "JSON",
+} as const;
+type CopyFormat = keyof typeof COPY_FORMAT_LABELS;
 
 export function DatabasePage({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<{ store: TableStore; name: string } | null>(
@@ -36,8 +61,15 @@ export function DatabasePage({ projectId }: { projectId: string }) {
   const [tableFilter, setTableFilter] = useState("");
   const [pageSize, setPageSize] = useState(100);
   const [offset, setOffset] = useState(0);
+  const [rowSearch, setRowSearch] = useState("");
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const [selectedRows, setSelectedRows] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [cellPreview, setCellPreview] = useState<CellPreview | null>(null);
+  const [lastCellPreview, setLastCellPreview] = useState<CellPreview | null>(null);
+  const cellPreviewPanelRef = useRef<HTMLElement | null>(null);
 
   const summary = useQuery({
     queryKey: ["database-summary", projectId],
@@ -69,7 +101,39 @@ export function DatabasePage({ projectId }: { projectId: string }) {
     setOffset(0);
     setSortColumns([]);
     setHiddenColumns(new Set());
+    setRowSearch("");
+    setSelectedRows(new Set());
+    setCellPreview(null);
   }, [selected?.store, selected?.name]);
+
+  useEffect(() => {
+    setSelectedRows(new Set());
+    setCellPreview(null);
+  }, [offset, pageSize]);
+
+  useEffect(() => {
+    if (cellPreview !== null) {
+      setLastCellPreview(cellPreview);
+    }
+  }, [cellPreview]);
+
+  useEffect(() => {
+    if (cellPreview === null) return;
+    function closePreviewOnOutsideClick(event: PointerEvent) {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        cellPreviewPanelRef.current !== null &&
+        !cellPreviewPanelRef.current.contains(target)
+      ) {
+        setCellPreview(null);
+      }
+    }
+    document.addEventListener("pointerdown", closePreviewOnOutsideClick);
+    return () => {
+      document.removeEventListener("pointerdown", closePreviewOnOutsideClick);
+    };
+  }, [cellPreview]);
 
   const activeSort = sortColumns[0];
   const rowsQuery = useQuery({
@@ -98,19 +162,24 @@ export function DatabasePage({ projectId }: { projectId: string }) {
   });
 
   const page = rowsQuery.data;
-  const columns = useMemo<Column<GridRow>[]>(
+  const dataColumns = useMemo<Column<GridRow>[]>(
     () =>
       (page?.columns ?? selectedTable?.columns ?? [])
         .filter((column) => !hiddenColumns.has(column))
         .map((column) => ({
           key: column,
           name: column,
-          minWidth: column === "metadata_json" || column.endsWith("_json") ? 240 : 150,
+          width: defaultColumnWidth(column),
+          minWidth: 120,
           resizable: true,
           sortable: true,
           renderCell: ({ row }) => <CellValue value={row[column]} />,
         })),
     [hiddenColumns, page?.columns, selectedTable?.columns],
+  );
+  const columns = useMemo<Column<GridRow>[]>(
+    () => [SelectColumn as Column<GridRow>, ...dataColumns],
+    [dataColumns],
   );
   const rows = useMemo<GridRow[]>(
     () =>
@@ -120,14 +189,64 @@ export function DatabasePage({ projectId }: { projectId: string }) {
       })),
     [offset, page?.rows],
   );
+  const searchedRows = useMemo(() => {
+    const normalizedSearch = rowSearch.trim().toLowerCase();
+    if (!normalizedSearch) return rows;
+    return rows.filter((row) =>
+      Object.entries(row).some(([key, value]) => {
+        if (key === "__rowId" || value === null || value === undefined) return false;
+        return stringifyCellForSearch(value).includes(normalizedSearch);
+      }),
+    );
+  }, [rowSearch, rows]);
+  const visibleRowIds = useMemo(
+    () => new Set(searchedRows.map((row) => row.__rowId)),
+    [searchedRows],
+  );
+  useEffect(() => {
+    setSelectedRows((current) => {
+      const next = new Set([...current].filter((rowId) => visibleRowIds.has(rowId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleRowIds]);
+  const selectedRowsInView = useMemo(
+    () => searchedRows.filter((row) => selectedRows.has(row.__rowId)),
+    [searchedRows, selectedRows],
+  );
+  const copyColumns = useMemo(
+    () =>
+      (page?.columns ?? selectedTable?.columns ?? []).filter(
+        (column) => !hiddenColumns.has(column),
+      ),
+    [hiddenColumns, page?.columns, selectedTable?.columns],
+  );
   const total = page?.total ?? selectedTable?.rows ?? 0;
   const pageIndex = Math.floor(offset / pageSize);
+
+  const copySelection = async (format: CopyFormat) => {
+    if (!selectedTable || selectedRowsInView.length === 0) return;
+    try {
+      await writeClipboardText(
+        formatSelectedRows({
+          columns: copyColumns,
+          format,
+          rows: selectedRowsInView,
+        }),
+      );
+      showToast("database_rows_copied", {
+        count: selectedRowsInView.length,
+        format: COPY_FORMAT_LABELS[format],
+      });
+    } catch {
+      showToast("database_rows_copy_failed", { tableName: selectedTable.name });
+    }
+  };
 
   return (
     <div className="grid h-[calc(100vh-48px)] min-h-0 grid-cols-1 overflow-hidden lg:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col border-r border-[#dce3eb] pr-3">
         <div className="shrink-0 pb-3">
-          <h1 className="m-0 truncate text-[1.75rem] font-semibold tracking-normal text-[#1d2430]">
+          <h1 className="m-0 truncate pl-3 text-[1.75rem] font-semibold tracking-normal text-[#1d2430]">
             Database
           </h1>
           <SummaryMetrics query={summary} />
@@ -165,17 +284,47 @@ export function DatabasePage({ projectId }: { projectId: string }) {
       <Card className="mt-0 min-h-0 overflow-hidden rounded-l-none border-l-0 p-0">
         <CardContent className="h-full min-h-0 overflow-hidden">
           <section className="flex h-full min-h-0 min-w-0 flex-col">
-            <div className="flex min-h-[34px] items-center justify-between gap-2 border-b border-[#dce3eb] px-3 py-1">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
+            <div className="flex min-h-[44px] items-center justify-between gap-3 border-b border-[#dce3eb] px-3 py-1.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <h2 className="m-0 inline-flex max-w-[34vw] shrink-0 items-center gap-2 truncate rounded-full border border-[#cfd8e3] bg-white px-3 py-1 text-sm font-semibold text-[#1d2430]">
                   <Database className="h-4 w-4 shrink-0 text-[#21a66a]" />
-                  <h2 className="m-0 truncate text-sm font-semibold">
+                  <span className="min-w-0 truncate">
                     {selectedTable?.name ?? "Select a table"}
-                  </h2>
-                  {selectedTable ? (
-                    <Badge variant="outline">{STORE_LABELS[selectedTable.store]}</Badge>
-                  ) : null}
-                </div>
+                  </span>
+                </h2>
+                {selectedRowsInView.length > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        className="h-8 shrink-0 rounded-md"
+                        size="sm"
+                        variant="outline"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Copy {selectedRowsInView.length.toLocaleString()} selected
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-[180px]">
+                      <DropdownMenuItem onClick={() => void copySelection("csv")}>
+                        Copy as CSV
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void copySelection("json")}>
+                        Copy as JSON
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <div className="relative w-full max-w-[300px]">
+                    <Search className="pointer-events-none absolute left-1 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+                    <Input
+                      className="h-8 border-0 bg-transparent pl-7 pr-2 shadow-none focus-visible:ring-0"
+                      placeholder="Search visible rows..."
+                      value={rowSearch}
+                      onChange={(event) => setRowSearch(event.target.value)}
+                    />
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <ColumnVisibilityMenu
@@ -186,27 +335,58 @@ export function DatabasePage({ projectId }: { projectId: string }) {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 bg-white">
+            <div className="flex min-h-0 flex-1 bg-white">
               {selectedTable ? (
                 <DataGrid
-                  className="goodomics-data-grid h-full"
+                  className="goodomics-data-grid h-full min-w-0 flex-1"
                   columns={columns}
-                  rows={rows}
+                  rows={searchedRows}
                   rowKeyGetter={(row) => row.__rowId}
+                  selectedRows={selectedRows}
+                  onSelectedRowsChange={setSelectedRows}
                   sortColumns={sortColumns}
                   onSortColumnsChange={(nextSort) => {
                     setSortColumns(nextSort.slice(-1));
                     setOffset(0);
+                    setSelectedRows(new Set());
+                    setCellPreview(null);
+                  }}
+                  onCellDoubleClick={(args) => {
+                    if (args.column.key === SELECT_COLUMN_KEY) return;
+                    const column = args.column.key;
+                    setCellPreview({
+                      column,
+                      rowNumber: offset + args.rowIdx + 1,
+                      tableName: selectedTable.name,
+                      value: args.row[column],
+                    });
                   }}
                   defaultColumnOptions={{ resizable: true, sortable: true }}
                   rowHeight={42}
                   headerRowHeight={42}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-[#657082]">
+                <div className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-[#657082]">
                   No table selected.
                 </div>
               )}
+              {cellPreview ? (
+                <CellPreviewPanel
+                  isOpen
+                  panelRef={cellPreviewPanelRef}
+                  preview={cellPreview}
+                  onClose={() => setCellPreview(null)}
+                  onClosed={() => undefined}
+                />
+              ) : lastCellPreview ? (
+                <CellPreviewPanel
+                  isOpen={false}
+                  panelRef={cellPreviewPanelRef}
+                  preview={lastCellPreview}
+                  onClose={() => setCellPreview(null)}
+                  onClosed={() => setLastCellPreview(null)}
+                />
+              ) : null}
             </div>
 
             <PaginationBar
@@ -226,6 +406,18 @@ export function DatabasePage({ projectId }: { projectId: string }) {
       </Card>
     </div>
   );
+}
+
+function defaultColumnWidth(column: string) {
+  const normalized = column.toLowerCase();
+  if (
+    normalized === "metadata_json" ||
+    normalized.endsWith("_json") ||
+    normalized.includes("description")
+  ) {
+    return LONG_COLUMN_WIDTH;
+  }
+  return DEFAULT_COLUMN_WIDTH;
 }
 
 function SummaryMetrics({
@@ -361,4 +553,121 @@ function CellValue({ value }: { value: unknown }) {
     );
   }
   return <span className="block w-full truncate text-left">{String(value)}</span>;
+}
+
+function CellPreviewPanel({
+  isOpen,
+  onClosed,
+  panelRef,
+  preview,
+  onClose,
+}: {
+  isOpen: boolean;
+  onClosed: () => void;
+  panelRef: RefObject<HTMLElement | null>;
+  preview: CellPreview;
+  onClose: () => void;
+}) {
+  const formattedValue = formatPreviewValue(preview.value);
+  const lines = formattedValue.split("\n");
+  return (
+    <aside
+      ref={panelRef}
+      className={cn(
+        "database-cell-preview-panel",
+        isOpen
+          ? "database-cell-preview-panel-open"
+          : "database-cell-preview-panel-closed",
+      )}
+      onTransitionEnd={(event) => {
+        if (event.propertyName === "width" && !isOpen) {
+          onClosed();
+        }
+      }}
+    >
+      <div className="database-cell-preview-panel-inner">
+        <div className="flex min-h-[48px] items-center justify-between gap-3 border-b border-[#dce3eb] px-4">
+          <div className="min-w-0">
+            <p className="m-0 truncate text-sm font-semibold text-[#1d2430]">
+              Viewing value of: {preview.column}
+            </p>
+            <p className="m-0 mt-0.5 truncate text-xs text-[#657082]">
+              {preview.tableName} · row {preview.rowNumber.toLocaleString()}
+            </p>
+          </div>
+          <button
+            aria-label="Close value preview"
+            className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-[#dce3eb] bg-white text-[#657082] transition-colors hover:border-[#8edeb4] hover:bg-[#eef8f2] hover:text-[#16784a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#21a66a]"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-[#1f2329] py-3">
+          <div className="font-mono text-xs leading-5">
+            {lines.map((line, index) => (
+              <div
+                className="grid grid-cols-[3rem_minmax(0,1fr)] px-3"
+                key={`${index}:${line}`}
+              >
+                <span className="select-none pr-4 text-right text-[#7a8798]">
+                  {index + 1}
+                </span>
+                <pre className="m-0 whitespace-pre-wrap break-words text-[#eef2f6]">
+                  {line || " "}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function formatPreviewValue(value: unknown) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
+function stringifyCellForSearch(value: unknown) {
+  return (typeof value === "object" ? JSON.stringify(value) : String(value))
+    .toLowerCase()
+    .trim();
+}
+
+function formatSelectedRows({
+  columns,
+  format,
+  rows,
+}: {
+  columns: string[];
+  format: CopyFormat;
+  rows: GridRow[];
+}) {
+  const records = rows.map((row) => recordFromRow(row, columns));
+  if (format === "json") {
+    return JSON.stringify(records, null, 2);
+  }
+  return [
+    columns.map(formatCsvCell).join(","),
+    ...records.map((record) =>
+      columns.map((column) => formatCsvCell(record[column])).join(","),
+    ),
+  ].join("\n");
+}
+
+function recordFromRow(row: GridRow, columns: string[]) {
+  return Object.fromEntries(columns.map((column) => [column, row[column]]));
+}
+
+function formatCsvCell(value: unknown) {
+  if (value === null || value === undefined) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
 }
