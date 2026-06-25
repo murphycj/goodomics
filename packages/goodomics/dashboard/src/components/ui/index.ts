@@ -2,6 +2,7 @@ export { AsyncBlock } from "./AsyncBlock";
 export { Badge } from "./badge";
 export { Button, buttonVariants } from "./button";
 export { Card, CardContent, CardHeader, CardTitle } from "./card";
+export { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 export { CopyButton } from "./CopyButton";
 export { Detail } from "./Detail";
 export {
@@ -25,6 +26,7 @@ export { GenericRows } from "./GenericRows";
 export { Input } from "./input";
 export { Label } from "./label";
 export { Page } from "./Page";
+export { PaginationBar } from "./PaginationBar";
 export { SearchBox } from "./SearchBox";
 export {
   Select,
