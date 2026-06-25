@@ -654,6 +654,48 @@ class DuckDBAnalyticsStore:
                 counts[table] = int(result[0]) if result is not None else 0
             return counts
 
+    def preview_table(
+        self,
+        table_name: str,
+        *,
+        limit: int,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_direction: Literal["asc", "desc"] = "asc",
+    ) -> tuple[list[str], list[dict[str, Any]], int]:
+        serializer = SERIALIZERS_BY_TABLE[table_name]
+        columns = list(serializer.columns)
+        if not self.path.exists():
+            return columns, [], 0
+        self.ensure_schema()
+        order_by = serializer.order_by
+        if sort_by is not None:
+            if sort_by not in serializer.columns:
+                raise ValueError(f"Unknown analytical table column: {sort_by}")
+            direction = "DESC" if sort_direction == "desc" else "ASC"
+            order_by = f"{sort_by} {direction}"
+        query = (
+            f"SELECT {', '.join(serializer.columns)} FROM {table_name} "
+            f"ORDER BY {order_by} LIMIT ? OFFSET ?"
+        )
+        with self._connect() as connection:
+            total_result = connection.execute(
+                f"SELECT COUNT(*) FROM {table_name}"
+            ).fetchone()
+            rows = connection.execute(query, [limit, offset]).fetchall()
+        total = int(total_result[0]) if total_result is not None else 0
+        return (
+            columns,
+            [
+                {
+                    column: _from_db_value(column, value)
+                    for column, value in zip(columns, row, strict=True)
+                }
+                for row in rows
+            ],
+            total,
+        )
+
     def database_size_bytes(self) -> int:
         return self.path.stat().st_size if self.path.exists() else 0
 
@@ -966,6 +1008,8 @@ def _from_db_value(column: str, value: Any) -> Any:
             return json.loads(value)
         except json.JSONDecodeError:
             return value
+    if isinstance(value, datetime | date):
+        return value.isoformat()
     return value
 
 

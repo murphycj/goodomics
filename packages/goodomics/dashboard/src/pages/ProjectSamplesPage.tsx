@@ -1,166 +1,112 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  ChevronFirst,
-  ChevronLast,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { DataGrid, type Column } from "react-data-grid";
+import "react-data-grid/lib/styles.css";
 import type { SampleListItem } from "../api";
-import { getProject, listProjectSamples } from "../api";
+import { listProjectSamples } from "../api";
 import {
-  AsyncBlock,
-  Button,
-  Page,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  TableWrap,
+  Card,
+  CardContent,
+  ColumnVisibilityMenu,
+  PaginationBar,
 } from "../components/ui";
 import { formatDate } from "../lib/utils";
 
 const SAMPLES_PAGE_SIZE = 50;
+const SAMPLES_PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
+const SAMPLE_COLUMN_OPTIONS = [
+  { key: "sample", label: "Sample" },
+  { key: "subject_id", label: "Subject" },
+  { key: "latest_run", label: "Latest run" },
+  { key: "latest_run_created_at", label: "Latest activity" },
+  { key: "run_count", label: "Runs" },
+];
+
+type SampleGridRow = SampleListItem & { __rowId: string };
 
 export function ProjectSamplesPage({ projectId }: { projectId: string }) {
-  const project = useQuery({
-    queryKey: ["project", projectId],
-    queryFn: () => getProject(projectId),
-  });
   return (
-    <Page
-      title={project.data?.name ?? projectId}
-      subtitle="Browse samples and inspect their latest stored results."
-    >
+    <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col overflow-hidden">
       <SamplesPanel projectId={projectId} />
-    </Page>
+    </div>
   );
 }
 
 function SamplesPanel({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(0);
-  const offset = page * SAMPLES_PAGE_SIZE;
+  const [pageSize, setPageSize] = useState(SAMPLES_PAGE_SIZE);
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const offset = page * pageSize;
   const samples = useQuery({
-    queryKey: ["project-samples", projectId, offset, SAMPLES_PAGE_SIZE],
-    queryFn: () =>
-      listProjectSamples({ projectId, limit: SAMPLES_PAGE_SIZE, offset }),
+    queryKey: ["project-samples", projectId, offset, pageSize],
+    queryFn: () => listProjectSamples({ projectId, limit: pageSize, offset }),
+    placeholderData: (previous) => previous,
   });
+  const data = samples.data;
+  const rows = useMemo<SampleGridRow[]>(
+    () =>
+      (data?.items ?? []).map((sample) => ({
+        __rowId: sample.sample_id,
+        ...sample,
+      })),
+    [data?.items],
+  );
+
   return (
-    <AsyncBlock
-      query={samples}
-      empty="No samples have been stored for this project yet."
-    >
-      {(data) => (
-        <>
-          {data.items.length === 0 ? (
-            <div className="mt-4 rounded-lg border border-[#dce3eb] bg-white p-4 text-[#657082]">
-              No samples have been stored for this project yet.
-            </div>
-          ) : (
-            <SamplesTable projectId={projectId} samples={data.items} />
-          )}
-          <PaginationControls
-            isLoading={samples.isLoading}
-            offset={data.offset}
-            onPageChange={setPage}
-            page={page}
-            pageSize={data.limit}
-            total={data.total}
+    <Card className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-x-0 p-0">
+      <CardContent className="flex h-full min-h-0 flex-col">
+        <div className="flex min-h-[42px] shrink-0 items-center justify-between gap-3 border-b border-[#dce3eb] bg-white px-4 py-2">
+          <h1 className="m-0 truncate text-lg font-semibold tracking-normal text-[#1d2430]">
+            Samples
+          </h1>
+          <ColumnVisibilityMenu
+            columns={SAMPLE_COLUMN_OPTIONS}
+            hiddenColumns={hiddenColumns}
+            onChange={setHiddenColumns}
           />
-        </>
-      )}
-    </AsyncBlock>
+        </div>
+        <div className="min-h-0 flex-1 bg-white">
+          {samples.isLoading ? (
+            <GridMessage>Loading samples...</GridMessage>
+          ) : samples.error ? (
+            <GridMessage tone="error">{samples.error.message}</GridMessage>
+          ) : rows.length === 0 ? (
+            <GridMessage>No samples have been stored for this project yet.</GridMessage>
+          ) : (
+            <SamplesGrid
+              hiddenColumns={hiddenColumns}
+              projectId={projectId}
+              samples={rows}
+            />
+          )}
+        </div>
+        <PaginationBar
+          isLoading={samples.isFetching}
+          itemLabel="records"
+          onPageChange={setPage}
+          onPageSizeChange={(nextPageSize) => {
+            setPageSize(nextPageSize);
+            setPage(0);
+          }}
+          pageIndex={page}
+          pageSize={data?.limit ?? pageSize}
+          pageSizeOptions={SAMPLES_PAGE_SIZE_OPTIONS}
+          total={data?.total ?? 0}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
-function PaginationControls({
-  isLoading,
-  offset,
-  onPageChange,
-  page,
-  pageSize,
-  total,
-}: {
-  isLoading: boolean;
-  offset: number;
-  onPageChange: (page: number) => void;
-  page: number;
-  pageSize: number;
-  total: number;
-}) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const start = total === 0 ? 0 : offset + 1;
-  const end = Math.min(offset + pageSize, total);
-  const canGoBack = page > 0 && !isLoading;
-  const canGoForward = page + 1 < pageCount && !isLoading;
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-[#596678]">
-      <span>
-        {start.toLocaleString()}-{end.toLocaleString()} of {total.toLocaleString()} samples
-      </span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Button
-          aria-label="First page"
-          disabled={!canGoBack}
-          onClick={() => onPageChange(0)}
-          size="icon"
-          title="First page"
-          type="button"
-          variant="outline"
-        >
-          <ChevronFirst size={18} />
-        </Button>
-        <Button
-          aria-label="Previous page"
-          disabled={!canGoBack}
-          onClick={() => onPageChange(Math.max(0, page - 1))}
-          size="icon"
-          title="Previous page"
-          type="button"
-          variant="outline"
-        >
-          <ChevronLeft size={18} />
-        </Button>
-        <span className="min-w-[9.5rem] text-center text-[#1d2430]">
-          Page {(page + 1).toLocaleString()} of {pageCount.toLocaleString()}
-        </span>
-        <Button
-          aria-label="Next page"
-          disabled={!canGoForward}
-          onClick={() => onPageChange(Math.min(pageCount - 1, page + 1))}
-          size="icon"
-          title="Next page"
-          type="button"
-          variant="outline"
-        >
-          <ChevronRight size={18} />
-        </Button>
-        <Button
-          aria-label="Last page"
-          disabled={!canGoForward}
-          onClick={() => onPageChange(pageCount - 1)}
-          size="icon"
-          title="Last page"
-          type="button"
-          variant="outline"
-        >
-          <ChevronLast size={18} />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function SamplesTable({
+function SamplesGrid({
+  hiddenColumns,
   projectId,
   samples,
 }: {
+  hiddenColumns: Set<string>;
   projectId: string;
-  samples: SampleListItem[];
+  samples: SampleGridRow[];
 }) {
   const navigate = useNavigate();
   const openSample = (sampleId: string) => {
@@ -169,54 +115,104 @@ function SamplesTable({
       params: { projectId, sampleId },
     });
   };
+  const columns = useMemo<Column<SampleGridRow>[]>(
+    () => {
+      const allColumns: Column<SampleGridRow>[] = [
+        {
+          key: "sample",
+          name: "Sample",
+          minWidth: 260,
+          resizable: true,
+          renderCell: ({ row }) => (
+            <span className="block w-full truncate text-left font-semibold">
+              {row.sample_name ?? row.sample_id}
+            </span>
+          ),
+        },
+        {
+          key: "subject_id",
+          name: "Subject",
+          minWidth: 180,
+          resizable: true,
+          renderCell: ({ row }) => <CellValue value={row.subject_id} />,
+        },
+        {
+          key: "latest_run",
+          name: "Latest run",
+          minWidth: 240,
+          resizable: true,
+          renderCell: ({ row }) => (
+            <CellValue value={row.latest_run_name ?? row.latest_run_id} />
+          ),
+        },
+        {
+          key: "latest_run_created_at",
+          name: "Latest activity",
+          minWidth: 190,
+          resizable: true,
+          renderCell: ({ row }) => (
+            <CellValue
+              value={
+                row.latest_run_created_at
+                  ? formatDate(row.latest_run_created_at)
+                  : null
+              }
+            />
+          ),
+        },
+        {
+          key: "run_count",
+          name: "Runs",
+          minWidth: 110,
+          resizable: true,
+          renderCell: ({ row }) => (
+            <span className="block w-full truncate text-left">
+              {row.run_count.toLocaleString()}
+            </span>
+          ),
+        },
+      ];
+      return allColumns.filter((column) => !hiddenColumns.has(column.key));
+    },
+    [hiddenColumns],
+  );
 
   return (
-    <TableWrap>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Sample</TableHead>
-            <TableHead>Subject</TableHead>
-            <TableHead>Latest run</TableHead>
-            <TableHead>Latest activity</TableHead>
-            <TableHead>Runs</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {samples.map((sample) => (
-            <TableRow
-              key={sample.sample_id}
-              className="cursor-pointer hover:!bg-[#eef8f2] focus-visible:outline-2 focus-visible:outline-[#8edeb4] focus-visible:outline-offset-[-2px]"
-              onClick={() => openSample(sample.sample_id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openSample(sample.sample_id);
-                }
-              }}
-              role="link"
-              tabIndex={0}
-            >
-              <TableCell className="font-bold">
-                {sample.sample_name ?? sample.sample_id}
-                {sample.sample_name && (
-                  <div className="text-xs font-normal text-[#657082]">
-                    {sample.sample_id}
-                  </div>
-                )}
-              </TableCell>
-              <TableCell>{sample.subject_id ?? "—"}</TableCell>
-              <TableCell>{sample.latest_run_name ?? sample.latest_run_id ?? "—"}</TableCell>
-              <TableCell>
-                {sample.latest_run_created_at
-                  ? formatDate(sample.latest_run_created_at)
-                  : "—"}
-              </TableCell>
-              <TableCell>{sample.run_count.toLocaleString()}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </TableWrap>
+    <DataGrid
+      className="goodomics-data-grid h-full"
+      columns={columns}
+      rows={samples}
+      rowClass={() => "cursor-pointer"}
+      rowHeight={46}
+      headerRowHeight={42}
+      rowKeyGetter={(row) => row.__rowId}
+      onCellClick={({ row }) => openSample(row.sample_id)}
+    />
+  );
+}
+
+function CellValue({ value }: { value?: string | null }) {
+  return (
+    <span className="block w-full truncate text-left text-[#253044]">
+      {value || "—"}
+    </span>
+  );
+}
+
+function GridMessage({
+  children,
+  tone = "muted",
+}: {
+  children: string;
+  tone?: "muted" | "error";
+}) {
+  return (
+    <div
+      className={`flex h-full items-center justify-center text-sm ${
+        tone === "error" ? "text-[#b42318]" : "text-[#657082]"
+      }`}
+    >
+      {children}
+    </div>
   );
 }

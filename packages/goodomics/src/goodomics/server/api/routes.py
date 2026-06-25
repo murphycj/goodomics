@@ -35,14 +35,19 @@ from goodomics.server.db.models import (
     ReportTemplateRecord,
     ReportTemplateRevisionRecord,
 )
-from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
+    QCDecisionRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
+    SampleSetMemberRecord,
+    SampleSetRecord,
+    SubjectRecord,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -232,7 +237,22 @@ class QCPolicyRead(SQLModel):
 
 class DatabaseTableRead(SQLModel):
     name: str
-    editable: bool
+    store: str = "catalog"
+    rows: int = 0
+    columns: list[str] = Field(default_factory=list)
+    editable: bool = False
+
+
+class DatabaseTablePageRead(SQLModel):
+    name: str
+    store: str
+    columns: list[str]
+    rows: list[dict[str, JsonValue]]
+    total: int
+    limit: int
+    offset: int
+    sort_by: str | None = None
+    sort_direction: str | None = None
 
 
 class AnalyticsMetricRead(SQLModel):
@@ -286,6 +306,25 @@ class AIChatRequest(SQLModel):
     project_id: str | None = None
     conversation_id: str | None = None
 
+
+CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
+    "projects": (ProjectRecord, "project_id"),
+    "subjects": (SubjectRecord, "subject_id"),
+    "samples": (SampleRecord, "sample_id"),
+    "runs": (RunRecord, "run_id"),
+    "run_samples": (RunSampleRecord, "run_sample_id"),
+    "data_profiles": (DataProfileRecord, "data_profile_id"),
+    "files": (FileRecord, "file_id"),
+    "file_links": (FileLinkRecord, "id"),
+    "sample_sets": (SampleSetRecord, "sample_set_id"),
+    "sample_set_members": (SampleSetMemberRecord, "id"),
+    "qc_decisions": (QCDecisionRecord, "id"),
+    "report_templates": (ReportTemplateRecord, "template_id"),
+    "report_template_revisions": (ReportTemplateRevisionRecord, "id"),
+    "reports": (ReportRecord, "report_id"),
+    "cohorts": (CohortRecord, "cohort_id"),
+    "qc_policies": (QCPolicyRecord, "policy_id"),
+}
 
 EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     "projects": (
@@ -994,9 +1033,33 @@ async def patch_qc_policy(
 
 
 @router.get("/database/tables", response_model=list[DatabaseTableRead])
-async def list_database_tables() -> list[DatabaseTableRead]:
+async def list_database_tables(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[DatabaseTableRead]:
+    if project_id is not None:
+        await _require_project(request, project_id)
+    catalog_counts = await _control_table_counts(request, project_id=project_id)
+    analytics_store = _analytics_store_for_project(request, project_id)
+    analytics_counts = analytics_store.row_counts()
     return [
-        DatabaseTableRead(name=name, editable=True) for name in sorted(EDITABLE_TABLES)
+        DatabaseTableRead(
+            name=name,
+            store="catalog",
+            rows=catalog_counts.get(name, 0),
+            columns=_catalog_columns(model),
+            editable=name in EDITABLE_TABLES,
+        )
+        for name, (model, _) in sorted(CATALOG_TABLES.items())
+    ] + [
+        DatabaseTableRead(
+            name=name,
+            store="analytics",
+            rows=analytics_counts.get(name, 0),
+            columns=list(serializer.columns),
+            editable=False,
+        )
+        for name, serializer in sorted(SERIALIZERS_BY_TABLE.items())
     ]
 
 
@@ -1035,6 +1098,62 @@ async def list_database_rows(table_name: str, request: Request) -> list[dict[str
     model, _, _ = _editable_table(table_name)
     rows = await _list_table(request, model)
     return [_jsonable_row(row) for row in rows]
+
+
+@router.get(
+    "/database/{store}/tables/{table_name}/rows",
+    response_model=DatabaseTablePageRead,
+)
+async def preview_database_table(
+    store: str,
+    table_name: str,
+    request: Request,
+    project_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    sort_by: str | None = Query(default=None),
+    sort_direction: str = Query(default="asc", pattern="^(asc|desc)$"),
+) -> DatabaseTablePageRead:
+    if project_id is not None:
+        await _require_project(request, project_id)
+    if store == "catalog":
+        return await _catalog_table_page(
+            request,
+            table_name,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+    if store == "analytics":
+        analytics_store = _analytics_store_for_project(request, project_id)
+        try:
+            columns, rows, total = analytics_store.preview_table(
+                table_name,
+                limit=limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_direction=cast(Any, sort_direction),
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="Analytical table not found"
+            ) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return DatabaseTablePageRead(
+            name=table_name,
+            store=store,
+            columns=columns,
+            rows=cast(list[dict[str, JsonValue]], rows),
+            total=total,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_direction=sort_direction if sort_by is not None else None,
+        )
+    raise HTTPException(status_code=404, detail="Database store not found")
 
 
 @router.patch("/database/tables/{table_name}/rows/{row_id}")
@@ -1498,24 +1617,62 @@ async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]
         return list((await session.exec(select(model))).all())
 
 
+async def _catalog_table_page(
+    request: Request,
+    table_name: str,
+    *,
+    project_id: str | None,
+    limit: int,
+    offset: int,
+    sort_by: str | None,
+    sort_direction: str,
+) -> DatabaseTablePageRead:
+    model, primary_key = _catalog_table(table_name)
+    columns = _catalog_columns(model)
+    order_column_name = sort_by or primary_key
+    if order_column_name not in model.model_fields:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown column: {order_column_name}"
+        )
+    project_run_ids = await _project_run_ids(request, project_id)
+    model_any = cast(Any, model)
+    count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
+    row_statement = select(model)
+    if project_id is not None and "project_id" in model.model_fields:
+        count_statement = count_statement.where(model_any.project_id == project_id)
+        row_statement = row_statement.where(model_any.project_id == project_id)
+    elif project_run_ids is not None and "run_id" in model.model_fields:
+        count_statement = count_statement.where(model_any.run_id.in_(project_run_ids))
+        row_statement = row_statement.where(model_any.run_id.in_(project_run_ids))
+    order_column = getattr(model, order_column_name)
+    if sort_direction == "desc":
+        order_column = order_column.desc()
+    row_statement = row_statement.order_by(order_column).offset(offset).limit(limit)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        total = int((await session.exec(count_statement)).one())
+        rows = list((await session.exec(row_statement)).all())
+    return DatabaseTablePageRead(
+        name=table_name,
+        store="catalog",
+        columns=columns,
+        rows=cast(list[dict[str, JsonValue]], [_jsonable_row(row) for row in rows]),
+        total=total,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_direction=sort_direction if sort_by is not None else None,
+    )
+
+
 async def _control_table_counts(
     request: Request, project_id: str | None = None
 ) -> dict[str, int]:
     await _ensure_schema(request)
     async with _session(request) as session:
         counts: dict[str, int] = {}
-        project_run_ids: list[str] | None = None
-        if project_id is not None:
-            project_run_ids = list(
-                (
-                    await session.exec(
-                        select(RunRecord.run_id).where(
-                            RunRecord.project_id == project_id
-                        )
-                    )
-                ).all()
-            )
-        for name, (model, _, _) in EDITABLE_TABLES.items():
+        project_run_ids = await _project_run_ids(request, project_id, session=session)
+        for name, (model, _) in CATALOG_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
             if project_id is not None and "project_id" in model.model_fields:
@@ -1524,6 +1681,32 @@ async def _control_table_counts(
                 statement = statement.where(model_any.run_id.in_(project_run_ids))
             counts[name] = int((await session.exec(statement)).one())
         return counts
+
+
+async def _project_run_ids(
+    request: Request,
+    project_id: str | None,
+    *,
+    session: AsyncSession | None = None,
+) -> list[str] | None:
+    if project_id is None:
+        return None
+    own_session = False
+    if session is None:
+        await _ensure_schema(request)
+        session = _session(request)
+        own_session = True
+    try:
+        return list(
+            (
+                await session.exec(
+                    select(RunRecord.run_id).where(RunRecord.project_id == project_id)
+                )
+            ).all()
+        )
+    finally:
+        if own_session:
+            await session.close()
 
 
 async def _insert_values(
@@ -1584,6 +1767,17 @@ def _editable_table(table_name: str) -> tuple[type[SQLModel], str, set[str]]:
     if table_config is None:
         raise HTTPException(status_code=404, detail="Editable table not found")
     return table_config
+
+
+def _catalog_table(table_name: str) -> tuple[type[SQLModel], str]:
+    table_config = CATALOG_TABLES.get(table_name)
+    if table_config is None:
+        raise HTTPException(status_code=404, detail="Catalog table not found")
+    return table_config
+
+
+def _catalog_columns(model: type[SQLModel]) -> list[str]:
+    return list(model.model_fields)
 
 
 def _coerce_json_values(

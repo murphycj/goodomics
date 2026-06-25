@@ -50,3 +50,47 @@ input {
 code {
   font-family: var(--font-mono);
 }
+
+.goodomics-data-grid {
+  --rdg-color: #1d2430;
+  --rdg-border-color: #d5dde8;
+  --rdg-summary-border-color: #dce3eb;
+  --rdg-background-color: #ffffff;
+  --rdg-header-background-color: #f5f7fa;
+  --rdg-row-hover-background-color: #f6fbf8;
+  --rdg-selection-color: #21a66a;
+  --rdg-border-width: 1px;
+  border: 0;
+  font-size: 0.8125rem;
+}
+
+.goodomics-data-grid .rdg-header-row {
+  font-weight: 700;
+  color: #293241;
+}
+
+.goodomics-data-grid [role="columnheader"],
+.goodomics-data-grid [role="gridcell"] {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-inline: 14px;
+  text-align: left;
+  border-inline-end-color: #ccd6e3;
+  border-block-end-color: #e4eaf1;
+}
+
+.goodomics-data-grid [role="columnheader"] {
+  background: #f5f7fa;
+  color: #293241;
+}
+
+.goodomics-data-grid [role="gridcell"] {
+  color: #253044;
+  line-height: 1.45;
+}
+
+.goodomics-data-grid [role="gridcell"]:not(:last-child),
+.goodomics-data-grid [role="columnheader"]:not(:last-child) {
+  box-shadow: inset -1px 0 0 #ccd6e3;
+}

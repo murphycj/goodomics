@@ -132,6 +132,26 @@ const databaseSummarySchema = z.object({
   analytics_tables: z.array(tableCountSchema),
 });
 
+const databaseTableSchema = z.object({
+  name: z.string(),
+  store: z.enum(['catalog', 'analytics']),
+  rows: z.number(),
+  columns: z.array(z.string()),
+  editable: z.boolean(),
+});
+
+const databaseTablePageSchema = z.object({
+  name: z.string(),
+  store: z.enum(['catalog', 'analytics']),
+  columns: z.array(z.string()),
+  rows: z.array(z.record(z.string(), z.unknown())),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+  sort_by: z.string().nullable(),
+  sort_direction: z.enum(['asc', 'desc']).nullable(),
+});
+
 const templateSchema = z.object({
   template_id: z.string(),
   name: z.string(),
@@ -170,6 +190,8 @@ export type StoredFile = z.infer<typeof fileSchema>;
 export type AnalyticsMetric = z.infer<typeof analyticsMetricSchema>;
 export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
 export type DatabaseSummary = z.infer<typeof databaseSummarySchema>;
+export type DatabaseTable = z.infer<typeof databaseTableSchema>;
+export type DatabaseTablePage = z.infer<typeof databaseTablePageSchema>;
 export type ReportTemplate = z.infer<typeof templateSchema>;
 export type AiMessage = z.infer<typeof aiMessageSchema>;
 export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
@@ -346,6 +368,43 @@ export function getDatabaseSummary() {
 export function getProjectDatabaseSummary(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
   return getJson(`/api/v1/database/summary?${params.toString()}`, databaseSummarySchema);
+}
+
+export function listProjectDatabaseTables(projectId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(`/api/v1/database/tables?${params.toString()}`, z.array(databaseTableSchema));
+}
+
+export function previewProjectDatabaseTable({
+  projectId,
+  store,
+  table,
+  limit,
+  offset,
+  sortBy,
+  sortDirection,
+}: {
+  projectId: string;
+  store: DatabaseTable['store'];
+  table: string;
+  limit: number;
+  offset: number;
+  sortBy?: string | null;
+  sortDirection?: 'asc' | 'desc' | null;
+}) {
+  const params = new URLSearchParams({
+    project_id: projectId,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (sortBy && sortDirection) {
+    params.set('sort_by', sortBy);
+    params.set('sort_direction', sortDirection);
+  }
+  return getJson(
+    `/api/v1/database/${encodeURIComponent(store)}/tables/${encodeURIComponent(table)}/rows?${params.toString()}`,
+    databaseTablePageSchema,
+  );
 }
 
 export function listTemplates() {

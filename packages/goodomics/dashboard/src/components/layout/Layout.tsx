@@ -30,6 +30,7 @@ export function Layout() {
       defaultProjectName={selectedProject.data?.name}
     >
       <LayoutContent
+        pathname={pathname}
         projectId={projectId}
         projects={projects.data ?? []}
         selectedProject={selectedProject.data}
@@ -41,12 +42,14 @@ export function Layout() {
 }
 
 function LayoutContent({
+  pathname,
   projectId,
   projects,
   selectedProject,
   setSidebarMode,
   sidebarMode,
 }: {
+  pathname: string;
   projectId: string | null;
   projects: Awaited<ReturnType<typeof listProjects>>;
   selectedProject?: Awaited<ReturnType<typeof getProject>>;
@@ -57,6 +60,9 @@ function LayoutContent({
   const askOpen = useSearchStore((state) => state.askOpen);
   const askWidth = useSearchStore((state) => state.askWidth);
   const askInset = askOpen ? askWidth : 0;
+  const isTableCanvas =
+    pathname === `/project/${projectId}` ||
+    pathname === `/project/${projectId}/database`;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -88,7 +94,8 @@ function LayoutContent({
       )}
       <section
         className={cn(
-          "px-4 pb-8 pt-[72px] transition-[margin-left] duration-[170ms] md:px-8",
+          "transition-[margin-left] duration-[170ms]",
+          isTableCanvas ? "px-0 pt-[48px]" : "px-4 pb-8 pt-[72px] md:px-8",
           projectId && "md:ml-[58px]",
           projectId && sidebarMode === "expanded" && "md:ml-[232px]",
           !projectId && "mx-auto max-w-[1160px]",
