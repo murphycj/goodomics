@@ -153,7 +153,8 @@ def test_help_alias_uses_short_h() -> None:
 
     assert root_help.exit_code == 0
     assert ingest_help.exit_code == 0
-    assert "--help" in root_help.stdout
+    assert "-h" in root_help.stdout
+    assert "ingest" in root_help.stdout
     assert "--type" in ingest_help.stdout
     assert "-t" in ingest_help.stdout
     assert "--log-level" in ingest_help.stdout

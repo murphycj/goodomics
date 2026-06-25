@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fixtures import write_cbioportal_fixture
 from goodomics.ingest.cbioportal import ingest_cbioportal_study
 from goodomics.parsers.cbioportal import parse_cbioportal_study
@@ -27,6 +28,13 @@ from goodomics.storage.sqlalchemy import (
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+
+def _external_cbioportal_fixture(name: str) -> Path:
+    study = Path(__file__).parent / "cbioportal" / name
+    if not study.is_dir():
+        pytest.skip(f"External cBioPortal fixture is not checked in: {name}")
+    return study
 
 
 def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
@@ -237,7 +245,7 @@ def test_ingest_cbioportal_without_run_id_writes_sample_scoped_runs(
 def test_cbioportal_ccle_fixture_discovers_profiles_without_loading_large_files() -> (
     None
 ):
-    study = Path(__file__).parent / "cbioportal" / "ccle_broad_2019"
+    study = _external_cbioportal_fixture("ccle_broad_2019")
 
     parsed = parse_cbioportal_study(study, run_id="ccle-test")
 
@@ -251,7 +259,7 @@ def test_cbioportal_ccle_fixture_discovers_profiles_without_loading_large_files(
 
 
 def test_cbioportal_brca_fixture_defaults_to_sample_scoped_runs() -> None:
-    study = Path(__file__).parent / "cbioportal" / "brca_tcga_pub2015"
+    study = _external_cbioportal_fixture("brca_tcga_pub2015")
 
     parsed = parse_cbioportal_study(study)
 
