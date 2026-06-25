@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from goodomics.storage.database import DEFAULT_DATABASE_URL
+
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite+aiosqlite:///.goodomics/goodomics.db"
+    database_url: str = DEFAULT_DATABASE_URL
     analytics_path: str | None = None
     analytics_root: str = ".goodomics"
     file_root: str = ".goodomics/files"

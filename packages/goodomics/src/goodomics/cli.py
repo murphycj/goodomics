@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from enum import StrEnum
 from pathlib import Path
 
@@ -10,14 +9,10 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from goodomics.ingest.runner import (
-    DEFAULT_DATABASE_URL,
-    IngestType,
-    print_ingest_result,
-    run_ingest,
-)
+from goodomics.ingest.runner import IngestType, print_ingest_result, run_ingest
 from goodomics.report.html import load_report_template, write_report
 from goodomics.server.logging import build_uvicorn_log_config
+from goodomics.storage.database import resolve_database_url
 
 
 class LogLevel(StrEnum):
@@ -205,10 +200,7 @@ def init(
 ) -> None:
     """Initialize a local Goodomics database."""
     _configure_cli_logging(log_level)
-    resolved_url = database_url or os.environ.get(
-        "GOODOMICS_DATABASE_URL",
-        DEFAULT_DATABASE_URL,
-    )
+    resolved_url = resolve_database_url(database_url)
     try:
         from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
     except ImportError as exc:
