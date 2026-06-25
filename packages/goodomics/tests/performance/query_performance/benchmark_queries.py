@@ -21,11 +21,11 @@ class QueryCase:
 TARGET_RUN_CTE = """
 WITH target_run AS (
     SELECT min(run_id) AS run_id
-    FROM profile_observation_sets
+    FROM sample_metric_numeric
 ),
 target_run_samples AS (
     SELECT DISTINCT run_sample_key
-    FROM profile_observation_sets
+    FROM sample_metric_numeric
     WHERE run_id = (SELECT run_id FROM target_run)
 )
 """
@@ -33,38 +33,33 @@ target_run_samples AS (
 RUN_WIDE_QUERIES: tuple[str, ...] = (
     """
     SELECT *
-    FROM profile_observation_sets
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
-    """,
-    """
-    SELECT *
     FROM sample_metric_numeric
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM sample_metric_string
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM sample_metric_json
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM feature_value_numeric
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM feature_call
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM sample_interval_values
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
     {TARGET_RUN_CTE}
@@ -79,12 +74,12 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     """
     SELECT *
     FROM copy_number_segments
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM sample_variant_calls
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
     {TARGET_RUN_CTE}
@@ -119,7 +114,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     """
     SELECT *
     FROM sample_structural_variant_calls
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
     {TARGET_RUN_CTE}
@@ -140,7 +135,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     """
     SELECT *
     FROM profile_payloads
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
     {TARGET_RUN_CTE}
@@ -148,21 +143,15 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     FROM gene_alteration_state gas
     JOIN target_run_samples trs USING (run_sample_key)
     """,
-    f"""
-    {TARGET_RUN_CTE}
-    SELECT spc.*
-    FROM sample_profile_cache spc
-    JOIN target_run_samples trs USING (run_sample_key)
-    """,
     """
     SELECT *
     FROM tool_versions
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     """
     SELECT *
     FROM data_sources
-    WHERE run_id = (SELECT min(run_id) FROM profile_observation_sets)
+    WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
     {TARGET_RUN_CTE}
@@ -365,20 +354,37 @@ QUERIES: tuple[QueryCase, ...] = (
         """,
     ),
     QueryCase(
-        "Profile completeness and payloads",
+        "Observed profiles and payloads",
         """
+        WITH observed AS (
+            SELECT data_profile_key, run_sample_key FROM sample_metric_numeric
+            UNION
+            SELECT data_profile_key, run_sample_key FROM sample_metric_string
+            UNION
+            SELECT data_profile_key, run_sample_key FROM feature_value_numeric
+            UNION
+            SELECT data_profile_key, run_sample_key FROM feature_call
+            UNION
+            SELECT data_profile_key, run_sample_key FROM copy_number_segments
+            UNION
+            SELECT data_profile_key, run_sample_key FROM sample_variant_calls
+            UNION
+            SELECT data_profile_key, run_sample_key
+            FROM sample_structural_variant_calls
+            UNION
+            SELECT data_profile_key, run_sample_key FROM profile_payloads
+        )
         SELECT
-            pos.data_profile_key,
-            pos.availability_status,
-            count(DISTINCT pos.run_sample_key) AS samples,
+            observed.data_profile_key,
+            count(DISTINCT observed.run_sample_key) AS samples,
             count(DISTINCT pp.payload_id) AS payloads,
             sum(coalesce(pp.row_count, 0)) AS declared_payload_rows
-        FROM profile_observation_sets pos
+        FROM observed
         LEFT JOIN profile_payloads pp
-            ON pp.run_sample_key = pos.run_sample_key
-            AND pp.data_profile_key = pos.data_profile_key
-        GROUP BY pos.data_profile_key, pos.availability_status
-        ORDER BY pos.data_profile_key, pos.availability_status
+            ON pp.run_sample_key IS NOT DISTINCT FROM observed.run_sample_key
+            AND pp.data_profile_key = observed.data_profile_key
+        GROUP BY observed.data_profile_key
+        ORDER BY observed.data_profile_key
         """,
     ),
     QueryCase("All data for one run", RUN_WIDE_QUERIES),

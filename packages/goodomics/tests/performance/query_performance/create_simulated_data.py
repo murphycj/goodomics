@@ -311,10 +311,6 @@ def _load_run_scoped_tables(connection: duckdb.DuckDBPyConnection) -> None:
         ),
         ("entity_attribute_date", lambda: _insert_entity_attribute_date(connection)),
         ("entity_attribute_json", lambda: _insert_entity_attribute_json(connection)),
-        (
-            "profile_observation_sets",
-            lambda: _insert_profile_observation_sets(connection),
-        ),
         ("sample_metric_numeric", lambda: _insert_sample_metric_numeric(connection)),
         ("sample_metric_string", lambda: _insert_sample_metric_string(connection)),
         ("sample_metric_json", lambda: _insert_sample_metric_json(connection)),
@@ -714,41 +710,12 @@ def _insert_entity_attribute_json(connection: duckdb.DuckDBPyConnection) -> None
     )
 
 
-def _insert_profile_observation_sets(connection: duckdb.DuckDBPyConnection) -> None:
-    connection.execute(
-        """
-        INSERT INTO profile_observation_sets
-        SELECT
-            profile_key,
-            run_id,
-            run_sample_key,
-            sample_key,
-            subject_key,
-            'profiled',
-            feature_set_key,
-            NULL,
-            NULL,
-            json_object('project_id', ?, 'sample_role', sample_role)
-        FROM perf_run_samples
-        CROSS JOIN (
-            VALUES
-                ('rna_expression', 'set:transcriptome'),
-                ('somatic_variants', 'set:variant_annotation_genes'),
-                ('structural_variants', 'set:cancer_drivers'),
-                ('copy_number', 'set:cancer_drivers'),
-                ('multiqc_qc_metrics', NULL)
-        ) AS profiles(profile_key, feature_set_key)
-        """,
-        [DEFAULT_PROJECT_ID],
-    )
-
-
 def _insert_sample_metric_numeric(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         """
         INSERT INTO sample_metric_numeric
         SELECT
-            'multiqc_qc_metrics',
+            'multiqc:qc_metrics',
             rs.run_id,
             rs.run_sample_key,
             rs.sample_key,
@@ -773,7 +740,7 @@ def _insert_sample_metric_string(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO sample_metric_string
         SELECT
-            'multiqc_qc_metrics',
+            'multiqc:qc_metrics',
             run_id,
             run_sample_key,
             sample_key,
@@ -794,7 +761,7 @@ def _insert_sample_metric_json(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO sample_metric_json
         SELECT
-            'multiqc_qc_metrics',
+            'multiqc:qc_metrics',
             run_id,
             run_sample_key,
             sample_key,
@@ -1049,7 +1016,7 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
                 (
                     'multiqc_general_stats_preview',
                     'table',
-                    'multiqc_qc_metrics',
+                    'multiqc:qc_metrics',
                     json_object('columns', ['metric_key', 'value']),
                     ?,
                     ['metric_key', 'value'],
@@ -1078,7 +1045,7 @@ def _insert_cohort_summaries(connection: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO cohort_summaries
         SELECT
             'all_samples',
-            'multiqc_qc_metrics',
+            'multiqc:qc_metrics',
             metric_key,
             NULL,
             count(*),
@@ -1160,12 +1127,11 @@ def _insert_data_sources(connection: duckdb.DuckDBPyConnection) -> None:
 
 
 def _refresh_derived_tables(store: DuckDBAnalyticsStore) -> None:
-    print("refreshing gene_alteration_state and sample_profile_cache...")
+    print("refreshing gene_alteration_state...")
     with store._connect() as connection:
         connection.begin()
         try:
             store._refresh_gene_alteration_state(connection, run_id=None)
-            store._refresh_sample_profile_cache(connection, run_id=None)
             connection.commit()
         except Exception:
             connection.rollback()
