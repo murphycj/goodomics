@@ -674,6 +674,28 @@ def test_run_analytics_and_file_content_endpoints(
         report = next(file for file in files if file["kind"] == "multiqc_report")
         tables = test_client.get("/api/v1/database/tables").json()
         file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
+        catalog_preview = test_client.get(
+            "/api/v1/database/catalog/tables/files/rows",
+            params={
+                "project_id": DEFAULT_PROJECT_ID,
+                "limit": 1,
+                "sort_by": "file_id",
+                "sort_direction": "desc",
+            },
+        )
+        metric_preview = test_client.get(
+            "/api/v1/database/analytics/tables/sample_metric_numeric/rows",
+            params={
+                "project_id": DEFAULT_PROJECT_ID,
+                "limit": 2,
+                "sort_by": "metric_key",
+                "sort_direction": "asc",
+            },
+        )
+        bad_preview = test_client.get(
+            "/api/v1/database/analytics/tables/sample_metric_numeric/rows",
+            params={"sort_by": "missing_column"},
+        )
         content = test_client.get(f"/api/v1/files/{report['file_id']}/content")
         project_content = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['file_id']}/content"
@@ -704,8 +726,25 @@ def test_run_analytics_and_file_content_endpoints(
     assert project_files.status_code == 200
     assert project_files.json() == files
     assert "file_id" in report
-    assert any(table["name"] == "files" for table in tables)
+    assert any(
+        table["store"] == "catalog"
+        and table["name"] == "files"
+        and "file_id" in table["columns"]
+        for table in tables
+    )
+    assert any(
+        table["store"] == "analytics" and table["name"] == "sample_metric_numeric"
+        for table in tables
+    )
     assert "file_id" in file_rows[0]
+    assert catalog_preview.status_code == 200
+    assert catalog_preview.json()["total"] >= 1
+    assert catalog_preview.json()["rows"][0]["file_id"]
+    assert metric_preview.status_code == 200
+    assert metric_preview.json()["columns"]
+    assert len(metric_preview.json()["rows"]) == 2
+    assert metric_preview.json()["sort_by"] == "metric_key"
+    assert bad_preview.status_code == 400
     assert content.status_code == 200
     assert "MultiQC" in content.text
     assert project_content.status_code == 200
