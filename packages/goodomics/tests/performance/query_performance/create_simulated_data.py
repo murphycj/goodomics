@@ -56,9 +56,9 @@ def main() -> None:
         _load_run_scoped_tables(connection)
         _refresh_derived_tables(store)
 
-    asyncio.run(_write_control_database(args.runs, args.samples))
+    asyncio.run(_write_catalog_database(args.runs, args.samples))
     _print_summary(store, analytics_path)
-    print(f"control database: {DEFAULT_DATABASE_URL}")
+    print(f"catalog database: {DEFAULT_DATABASE_URL}")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -90,8 +90,8 @@ def _reset_database(path: Path) -> None:
             candidate.unlink()
 
 
-async def _write_control_database(runs: int, samples: int) -> None:
-    print("writing minimal UI control database...")
+async def _write_catalog_database(runs: int, samples: int) -> None:
+    print("writing minimal UI catalog database...")
     store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
     await store.ensure_schema()
     await store.ensure_default_project()
@@ -101,7 +101,7 @@ async def _write_control_database(runs: int, samples: int) -> None:
         project = await session.get(ProjectRecord, DEFAULT_PROJECT_ID)
         if project is not None:
             project.description = (
-                "Minimal control metadata for the DuckDB query pressure test."
+                "Minimal catalog metadata for the DuckDB query pressure test."
             )
             project.metadata_json = {
                 "purpose": "query_performance_pressure_test",

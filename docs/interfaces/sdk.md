@@ -25,8 +25,8 @@ with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
 ```
 
 Logged SDK metrics are written to the DuckDB analytical store as generic metric
-records, not to the SQL control database. The context manager records the run
-and sample control metadata in SQLite, then flushes metric observations to the
+records, not to the SQL catalog database. The context manager records the run
+and sample catalog metadata in SQLite, then flushes metric observations to the
 project DuckDB store when the block exits successfully.
 
 ## Pipeline integration

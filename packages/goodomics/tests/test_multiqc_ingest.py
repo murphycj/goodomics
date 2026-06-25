@@ -114,13 +114,13 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
 
-    control_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(control_store.get_run("run-1"))
+    catalog_store = SQLModelGoodomicsStore(database_url)
+    run = asyncio.run(catalog_store.get_run("run-1"))
     assert run is not None
     assert run.project == "demo"
 
     async def load_files() -> tuple[list[FileRecord], list[FileLinkRecord]]:
-        async with AsyncSession(control_store._get_engine()) as session:
+        async with AsyncSession(catalog_store._get_engine()) as session:
             files = (await session.exec(select(FileRecord))).all()
             links = (
                 await session.exec(
@@ -173,8 +173,8 @@ def test_ingest_multiqc_project_slug_uses_generated_project_ref(
         file_root=file_root,
     )
 
-    control_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(control_store.get_run("run-project-slug"))
+    catalog_store = SQLModelGoodomicsStore(database_url)
+    run = asyncio.run(catalog_store.get_run("run-project-slug"))
     assert run is not None
     assert run.project_id is not None
     assert run.project_id.startswith("prj_")
@@ -213,9 +213,9 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     assert run_ids == {"RAP1_IAA_30M_REP1", "WT_REP1"}
     assert all(result.outputs_found == 1 for result in results)
 
-    control_store = SQLModelGoodomicsStore(database_url)
-    wt_run = asyncio.run(control_store.get_run("WT_REP1"))
-    rap1_run = asyncio.run(control_store.get_run("RAP1_IAA_30M_REP1"))
+    catalog_store = SQLModelGoodomicsStore(database_url)
+    wt_run = asyncio.run(catalog_store.get_run("WT_REP1"))
+    rap1_run = asyncio.run(catalog_store.get_run("RAP1_IAA_30M_REP1"))
     assert wt_run is not None
     assert rap1_run is not None
     assert "WT_REP1" in {sample.sample_id for sample in wt_run.samples}

@@ -102,13 +102,13 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert result.files_registered > 0
     assert result.bulk_loads == 6
 
-    control_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(control_store.get_run("run-cbio"))
+    catalog_store = SQLModelGoodomicsStore(database_url)
+    run = asyncio.run(catalog_store.get_run("run-cbio"))
     assert run is not None
     assert run.run_kind == "import_run"
 
-    async def load_control_counts() -> tuple[int, int, int, int]:
-        async with AsyncSession(control_store._get_engine()) as session:
+    async def load_catalog_counts() -> tuple[int, int, int, int]:
+        async with AsyncSession(catalog_store._get_engine()) as session:
             files = (await session.exec(select(FileRecord))).all()
             links = (await session.exec(select(FileLinkRecord))).all()
             profiles = (await session.exec(select(DataProfileRecord))).all()
@@ -116,7 +116,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         return len(files), len(links), len(profiles), len(sample_sets)
 
     files_count, links_count, profiles_count, sample_sets_count = asyncio.run(
-        load_control_counts()
+        load_catalog_counts()
     )
     assert files_count > 0
     assert links_count >= files_count
@@ -204,10 +204,10 @@ def test_ingest_cbioportal_without_run_id_writes_sample_scoped_runs(
     assert result.run_id.startswith("demo_cbio:")
     import_group_id = result.run_id.rsplit(":", 1)[0]
 
-    control_store = SQLModelGoodomicsStore(database_url)
+    catalog_store = SQLModelGoodomicsStore(database_url)
 
     async def load_runs() -> list[str]:
-        async with AsyncSession(control_store._get_engine()) as session:
+        async with AsyncSession(catalog_store._get_engine()) as session:
             return [
                 row.run_id
                 for row in (
