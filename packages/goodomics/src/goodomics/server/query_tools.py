@@ -14,11 +14,12 @@ from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    FileLinkRecord,
+    FileRecord,
     ProjectRecord,
     RunRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
-    StoredFileRecord,
 )
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
@@ -262,42 +263,29 @@ class GoodomicsQueryTools:
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
         if not isinstance(run, dict):
-            return run_result | {"metrics": [], "analytics_metrics": []}
+            return run_result | {"metrics": []}
 
         term = (metric_query or "").strip().lower()
-        scalar_metrics = await self.context.store.list_metrics(run_id)
-        if term:
-            scalar_metrics = [
-                metric
-                for metric in scalar_metrics
-                if term in metric.name.lower()
-                or term in str(metric.value).lower()
-                or term in (metric.unit or "").lower()
-            ]
-
-        analytics_metrics: list[dict[str, Any]] = []
+        metrics: list[dict[str, Any]] = []
         try:
             values = self._analytics_store(run.get("project_id")).list_metric_values(
                 run_id
             )
-            analytics_metrics = [_analytics_metric_payload(value) for value in values]
+            metrics = [_analytics_metric_payload(value) for value in values]
             if term:
-                analytics_metrics = [
+                metrics = [
                     metric
-                    for metric in analytics_metrics
+                    for metric in metrics
                     if term in str(metric.get("metric_key", "")).lower()
                     or term in str(metric.get("value", "")).lower()
                 ]
         except Exception:
-            analytics_metrics = []
+            metrics = []
 
         bounded = _bounded_limit(limit)
         return {
             "run": run,
-            "metrics": [
-                metric.model_dump(mode="json") for metric in scalar_metrics[:bounded]
-            ],
-            "analytics_metrics": analytics_metrics[:bounded],
+            "metrics": metrics[:bounded],
         }
 
     async def list_run_files(
@@ -312,17 +300,24 @@ class GoodomicsQueryTools:
         if not isinstance(run, dict):
             return run_result | {"files": []}
         await self.context.store.ensure_schema()
-        statement = select(StoredFileRecord).where(StoredFileRecord.run_id == run_id)
+        statement = (
+            select(FileRecord, FileLinkRecord)
+            .join(
+                FileLinkRecord,
+                cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+            )
+            .where(FileLinkRecord.run_id == run_id)
+        )
         if kind:
             statement = statement.where(
-                func.lower(StoredFileRecord.kind) == kind.lower()
+                func.lower(FileRecord.file_role) == kind.lower()
             )
-        statement = statement.order_by(cast(Any, StoredFileRecord.id)).limit(
+        statement = statement.order_by(cast(Any, FileRecord.file_id)).limit(
             _bounded_limit(limit)
         )
         async with self._session() as session:
             rows = (await session.exec(statement)).all()
-        return {"run": run, "files": [_file_payload(row) for row in rows]}
+        return {"run": run, "files": [_file_payload(file, link) for file, link in rows]}
 
     async def _all_projects(self) -> list[ProjectRecord]:
         await self.context.store.ensure_default_project()
@@ -374,12 +369,12 @@ class GoodomicsQueryTools:
                 (
                     await session.exec(
                         select(func.count())
-                        .select_from(StoredFileRecord)
+                        .select_from(FileRecord)
                         .join(
-                            RunRecord,
-                            cast(Any, StoredFileRecord.run_id) == RunRecord.run_id,
+                            FileLinkRecord,
+                            cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
                         )
-                        .where(RunRecord.project_id == project.project_id)
+                        .where(FileLinkRecord.project_id == project.project_id)
                     )
                 ).one()
             )
@@ -524,14 +519,13 @@ def _run_record_payload(row: RunRecord) -> dict[str, Any]:
 
 
 def _run_payload(run: Any) -> dict[str, Any]:
-    payload = run.model_dump(mode="json", exclude={"samples", "metrics"})
+    payload = run.model_dump(mode="json", exclude={"samples"})
     app_path = _run_path(run.project_id, run.run_id)
     payload["app_path"] = app_path
     payload["markdown_link"] = (
         f"[{run.name or run.run_id}]({app_path})" if app_path else run.run_id
     )
     payload["sample_count"] = len(run.samples)
-    payload["metric_count"] = len(run.metrics)
     return payload
 
 
@@ -597,19 +591,22 @@ def _sample_path(project_id: str | None, sample_id: str) -> str | None:
     return f"{_project_path(project_id)}/samples/{quote(sample_id, safe='')}"
 
 
-def _file_payload(row: StoredFileRecord) -> dict[str, Any]:
+def _file_payload(file: FileRecord, link: FileLinkRecord) -> dict[str, Any]:
+    metadata_value = file.metadata_json
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
+    source_path = metadata.get("source_path")
     return {
-        "id": row.id,
-        "file_id": row.file_id,
-        "run_id": row.run_id,
-        "kind": row.kind,
-        "path": row.path,
-        "name": Path(row.path).name,
-        "size_bytes": row.size_bytes,
-        "sha256": row.sha256,
-        "source_path": row.source_path,
-        "created_at": row.created_at.isoformat()
-        if row.created_at is not None
+        "file_id": file.file_id,
+        "project_id": file.project_id,
+        "run_id": link.run_id,
+        "kind": file.file_role,
+        "path": file.path,
+        "name": Path(file.path).name if file.path is not None else file.file_id,
+        "size_bytes": file.size_bytes,
+        "sha256": file.sha256,
+        "source_path": source_path if isinstance(source_path, str) else None,
+        "created_at": file.created_at.isoformat()
+        if file.created_at is not None
         else None,
     }
 
