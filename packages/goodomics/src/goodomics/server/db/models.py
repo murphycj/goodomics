@@ -8,8 +8,6 @@ from typing import Any
 from sqlalchemy import JSON
 from sqlmodel import Field, SQLModel
 
-from goodomics.storage.sqlalchemy import metadata
-
 INITIAL_TABLES = (
     "runs",
     "samples",
@@ -72,21 +70,15 @@ class QCPolicyRecord(SQLModel, table=True):
     updated_at: datetime
 
 
-report_templates_table = ReportTemplateRecord.__table__
-report_template_revisions_table = ReportTemplateRevisionRecord.__table__
-reports_table = ReportRecord.__table__
-cohorts_table = CohortRecord.__table__
-qc_policies_table = QCPolicyRecord.__table__
-
 SERVER_TABLES: dict[str, Any] = {
-    table.name: table
-    for table in (
-        report_templates_table,
-        report_template_revisions_table,
-        reports_table,
-        cohorts_table,
-        qc_policies_table,
+    record.__tablename__: record.__table__
+    for record in (
+        ReportTemplateRecord,
+        ReportTemplateRevisionRecord,
+        ReportRecord,
+        CohortRecord,
+        QCPolicyRecord,
     )
 }
 
-server_metadata = metadata
+server_metadata = SQLModel.metadata
