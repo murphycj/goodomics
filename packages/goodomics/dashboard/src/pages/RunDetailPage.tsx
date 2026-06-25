@@ -88,7 +88,7 @@ export function RunDetailPage({
           ?.filter((file) => file.kind === "multiqc_report")
           .slice(0, 1)
           .map((file) => (
-            <Button asChild key={file.id}>
+            <Button asChild key={file.file_id}>
               <a
                 href={fileContentUrl(file, projectId)}
                 rel="noreferrer"
@@ -329,10 +329,10 @@ function FilesTable({
             </TableHeader>
             <TableBody>
               {files.map((file) => (
-                <TableRow key={file.id}>
+                <TableRow key={file.file_id}>
                   <TableCell>{file.kind}</TableCell>
                   <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
-                    {shortPath(file.path)}
+                      {shortPath(file.path ?? file.uri ?? file.file_id)}
                   </TableCell>
                   <TableCell>{formatBytes(file.size_bytes ?? 0)}</TableCell>
                   <TableCell className="font-mono">

@@ -13,8 +13,6 @@ from goodomics.storage.sqlalchemy import metadata
 INITIAL_TABLES = (
     "runs",
     "samples",
-    "metrics",
-    "stored_files",
     "qc_decisions",
     "report_templates",
     "report_template_revisions",

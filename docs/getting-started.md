@@ -53,8 +53,8 @@ context directly:
 ```python
 from goodomics import run
 
-with run("rnaseq-batch-042") as ctx:
-    ctx.metric("pct_mapped", 97.2)
+with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
+    ctx.log_metric("S1", "pct_mapped", 97.2, unit="percent")
 ```
 
 ## Run the server

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from goodomics.schemas.models import Metric, Run
+from goodomics.schemas.models import Run
 
 
 class GoodomicsStore(Protocol):
@@ -12,8 +12,4 @@ class GoodomicsStore(Protocol):
 
     async def get_run(self, run_id: str) -> Run | None:
         """Fetch a run by ID."""
-        ...
-
-    async def list_metrics(self, run_id: str) -> list[Metric]:
-        """List metrics for a run."""
         ...
