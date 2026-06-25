@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from types import UnionType
+from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
 import duckdb
 from pydantic import BaseModel
@@ -53,14 +54,45 @@ RecordT = TypeVar("RecordT", bound=BaseModel)
 
 @dataclass(frozen=True)
 class AnalyticalTableSerializer:
+    # One serializer is the complete adapter between an AnalyticsIngestBatch
+    # field, a Pydantic record model, and a physical DuckDB table.
     table_name: str
-    batch_field: str
     model_type: type[BaseModel]
-    columns: tuple[str, ...]
-    column_sql: tuple[str, ...]
     order_by: str
+    # Defaults to the table name because AnalyticsIngestBatch uses matching
+    # field names for almost every analytical table.
+    batch_field: str | None = None
+    # Tables with a run column can be replaced one run at a time during ingest.
     run_column: str | None = None
+    # Dimension/reference tables use natural keys so repeated imports update by
+    # deleting matching rows before inserting the latest records.
     unique_columns: tuple[str, ...] = ()
+    # Escape hatch for physical storage choices that Pydantic annotations do not
+    # fully express, such as keeping call_rank as INTEGER instead of BIGINT.
+    column_types: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def resolved_batch_field(self) -> str:
+        return self.batch_field or self.table_name
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        return tuple(
+            _field_column_name(field_name, field_info)
+            for field_name, field_info in self.model_type.model_fields.items()
+        )
+
+    @property
+    def column_sql(self) -> tuple[str, ...]:
+        sql: list[str] = []
+        for field_name, field_info in self.model_type.model_fields.items():
+            column = _field_column_name(field_name, field_info)
+            db_type = self.column_types.get(
+                column,
+                _duckdb_type_for_field(field_info.annotation, column),
+            )
+            sql.append(f"{column} {db_type}")
+        return tuple(sql)
 
     @property
     def create_sql(self) -> str:
@@ -75,6 +107,8 @@ class AnalyticalTableSerializer:
         connection.execute(self.create_sql)
 
     def create_sorted_view(self, connection: duckdb.DuckDBPyConnection) -> None:
+        # Sorted views give API/query callers deterministic row order without
+        # requiring every query to remember the table-specific ORDER BY clause.
         view_name = f"{self.table_name}_sorted"
         connection.execute(f"DROP VIEW IF EXISTS {view_name}")
         connection.execute(
@@ -96,6 +130,8 @@ class AnalyticalTableSerializer:
         connection: duckdb.DuckDBPyConnection,
         records: Sequence[BaseModel],
     ) -> None:
+        # Reference tables like features or metric definitions are not scoped to
+        # a single run, so replacement is based on their configured natural key.
         if not records or not self.unique_columns:
             return
         values = {
@@ -131,118 +167,40 @@ class AnalyticalTableSerializer:
         )
 
     def records_from_batch(self, batch: AnalyticsIngestBatch) -> list[BaseModel]:
-        raw_records = getattr(batch, self.batch_field)
+        # The batch field name and model type are paired here, which lets the
+        # write loop handle every analytical table with the same code path.
+        raw_records = getattr(batch, self.resolved_batch_field)
         return [self.model_type.model_validate(record) for record in raw_records]
 
 
+# SERIALIZERS is the DuckDB analytical schema registry. Adding a new analytical
+# table generally means adding a Pydantic model/list field to AnalyticsIngestBatch
+# and then adding one serializer entry here for table-specific behavior.
 SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "duckdb_metadata",
-        "duckdb_metadata",
         DuckDBMetadata,
-        (
-            "project_id",
-            "project_name",
-            "schema_version",
-            "created_at",
-            "updated_at",
-            "metadata_json",
-        ),
-        (
-            "project_id TEXT",
-            "project_name TEXT",
-            "schema_version TEXT",
-            "created_at TIMESTAMP",
-            "updated_at TIMESTAMP",
-            "metadata_json JSON",
-        ),
         "project_id",
         unique_columns=("project_id",),
     ),
     AnalyticalTableSerializer(
         "metric_definitions",
-        "metric_definitions",
         MetricDefinition,
-        (
-            "metric_key",
-            "metric_id",
-            "namespace",
-            "metric_name",
-            "display_name",
-            "value_type",
-            "unit",
-            "direction",
-            "description",
-            "producer_tool",
-            "producer_module",
-            "schema_version",
-        ),
-        (
-            "metric_key TEXT",
-            "metric_id TEXT",
-            "namespace TEXT",
-            "metric_name TEXT",
-            "display_name TEXT",
-            "value_type TEXT",
-            "unit TEXT",
-            "direction TEXT",
-            "description TEXT",
-            "producer_tool TEXT",
-            "producer_module TEXT",
-            "schema_version TEXT",
-        ),
         "metric_key, metric_id",
         unique_columns=("metric_key", "metric_id"),
     ),
     AnalyticalTableSerializer(
         "attribute_definitions",
-        "attribute_definitions",
         AttributeDefinition,
-        (
-            "attribute_key",
-            "attribute_id",
-            "entity_scope",
-            "display_name",
-            "value_type",
-            "unit",
-            "description",
-            "priority",
-            "metadata_json",
-        ),
-        (
-            "attribute_key TEXT",
-            "attribute_id TEXT",
-            "entity_scope TEXT",
-            "display_name TEXT",
-            "value_type TEXT",
-            "unit TEXT",
-            "description TEXT",
-            "priority TEXT",
-            "metadata_json JSON",
-        ),
         "entity_scope, attribute_key",
         unique_columns=("entity_scope", "attribute_key", "attribute_id"),
+        column_types={
+            "attribute_key": "TEXT",
+        },
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_numeric",
         "entity_attribute_numeric",
         EntityAttributeNumeric,
-        (
-            "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "entity_scope TEXT",
-            "entity_key TEXT",
-            "attribute_key TEXT",
-            "data_profile_key TEXT",
-            "source_file_id TEXT",
-            "value DOUBLE",
-        ),
         "entity_scope, entity_key, attribute_key",
         unique_columns=(
             "entity_scope",
@@ -252,25 +210,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         ),
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_string",
         "entity_attribute_string",
         EntityAttributeString,
-        (
-            "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "entity_scope TEXT",
-            "entity_key TEXT",
-            "attribute_key TEXT",
-            "data_profile_key TEXT",
-            "source_file_id TEXT",
-            "value TEXT",
-        ),
         "entity_scope, entity_key, attribute_key",
         unique_columns=(
             "entity_scope",
@@ -280,25 +221,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         ),
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_boolean",
         "entity_attribute_boolean",
         EntityAttributeBoolean,
-        (
-            "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "entity_scope TEXT",
-            "entity_key TEXT",
-            "attribute_key TEXT",
-            "data_profile_key TEXT",
-            "source_file_id TEXT",
-            "value BOOLEAN",
-        ),
         "entity_scope, entity_key, attribute_key",
         unique_columns=(
             "entity_scope",
@@ -308,25 +232,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         ),
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_date",
         "entity_attribute_date",
         EntityAttributeDate,
-        (
-            "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "entity_scope TEXT",
-            "entity_key TEXT",
-            "attribute_key TEXT",
-            "data_profile_key TEXT",
-            "source_file_id TEXT",
-            "value TIMESTAMP",
-        ),
         "entity_scope, entity_key, attribute_key",
         unique_columns=(
             "entity_scope",
@@ -336,25 +243,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         ),
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_json",
         "entity_attribute_json",
         EntityAttributeJson,
-        (
-            "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
-            "source_file_id",
-            "value_json",
-        ),
-        (
-            "entity_scope TEXT",
-            "entity_key TEXT",
-            "attribute_key TEXT",
-            "data_profile_key TEXT",
-            "source_file_id TEXT",
-            "value_json JSON",
-        ),
         "entity_scope, entity_key, attribute_key",
         unique_columns=(
             "entity_scope",
@@ -365,395 +255,94 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     ),
     AnalyticalTableSerializer(
         "sample_metric_numeric",
-        "sample_metric_numeric",
         SampleMetricNumeric,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "metric_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "metric_key TEXT",
-            "source_file_id TEXT",
-            "value DOUBLE",
-        ),
         "data_profile_key, run_id, run_sample_key, metric_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
-        "sample_metric_string",
         "sample_metric_string",
         SampleMetricString,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "metric_key",
-            "source_file_id",
-            "value",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "metric_key TEXT",
-            "source_file_id TEXT",
-            "value TEXT",
-        ),
         "data_profile_key, run_id, run_sample_key, metric_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
-        "sample_metric_json",
         "sample_metric_json",
         SampleMetricJson,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "metric_key",
-            "source_file_id",
-            "value_json",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "metric_key TEXT",
-            "source_file_id TEXT",
-            "value_json JSON",
-        ),
         "data_profile_key, run_id, run_sample_key, metric_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "features",
-        "features",
         Feature,
-        (
-            "feature_key",
-            "feature_id",
-            "feature_type",
-            "symbol",
-            "stable_id",
-            "namespace",
-            "genome_build",
-            "metadata_json",
-        ),
-        (
-            "feature_key TEXT",
-            "feature_id TEXT",
-            "feature_type TEXT",
-            "symbol TEXT",
-            "stable_id TEXT",
-            "namespace TEXT",
-            "genome_build TEXT",
-            "metadata_json JSON",
-        ),
         "feature_type, feature_key",
         unique_columns=("feature_key",),
     ),
     AnalyticalTableSerializer(
         "feature_aliases",
-        "feature_aliases",
         FeatureAlias,
-        ("feature_key", "alias", "namespace"),
-        ("feature_key TEXT", "alias TEXT", "namespace TEXT"),
         "feature_key, alias",
         unique_columns=("feature_key", "alias", "namespace"),
     ),
     AnalyticalTableSerializer(
         "feature_sets",
-        "feature_sets",
         FeatureSet,
-        (
-            "feature_set_key",
-            "feature_set_id",
-            "feature_set_type",
-            "name",
-            "description",
-            "metadata_json",
-        ),
-        (
-            "feature_set_key TEXT",
-            "feature_set_id TEXT",
-            "feature_set_type TEXT",
-            "name TEXT",
-            "description TEXT",
-            "metadata_json JSON",
-        ),
         "feature_set_type, feature_set_key",
         unique_columns=("feature_set_key",),
     ),
     AnalyticalTableSerializer(
         "feature_set_members",
-        "feature_set_members",
         FeatureSetMember,
-        ("feature_set_key", "feature_key", "member_role", "metadata_json"),
-        (
-            "feature_set_key TEXT",
-            "feature_key TEXT",
-            "member_role TEXT",
-            "metadata_json JSON",
-        ),
         "feature_set_key, feature_key",
         unique_columns=("feature_set_key", "feature_key"),
     ),
     AnalyticalTableSerializer(
         "profile_observation_sets",
-        "profile_observation_sets",
         ProfileObservationSet,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "subject_key",
-            "availability_status",
-            "feature_set_key",
-            "source_file_id",
-            "missing_reason",
-            "metadata_json",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "subject_key TEXT",
-            "availability_status TEXT",
-            "feature_set_key TEXT",
-            "source_file_id TEXT",
-            "missing_reason TEXT",
-            "metadata_json JSON",
-        ),
         "run_sample_key, data_profile_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "feature_value_numeric",
-        "feature_value_numeric",
         FeatureValueNumeric,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "feature_key",
-            "value",
-            "value_semantics",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "feature_key TEXT",
-            "value DOUBLE",
-            "value_semantics TEXT",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, feature_key, run_sample_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "feature_call",
-        "feature_call",
         FeatureCall,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "feature_key",
-            "call_code",
-            "call_label",
-            "call_rank",
-            "score",
-            "confidence",
-            "source_event_id",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "feature_key TEXT",
-            "call_code TEXT",
-            "call_label TEXT",
-            "call_rank INTEGER",
-            "score DOUBLE",
-            "confidence DOUBLE",
-            "source_event_id TEXT",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, feature_key, call_code, run_sample_key",
         run_column="run_id",
+        column_types={
+            "call_rank": "INTEGER",
+        },
     ),
     AnalyticalTableSerializer(
         "genomic_intervals",
-        "genomic_intervals",
         GenomicInterval,
-        (
-            "interval_key",
-            "genome_build",
-            "contig",
-            "start_pos",
-            "end_pos",
-            "strand",
-            "feature_key",
-            "interval_type",
-            "metadata_json",
-        ),
-        (
-            "interval_key TEXT",
-            "genome_build TEXT",
-            "contig TEXT",
-            "start_pos BIGINT",
-            "end_pos BIGINT",
-            "strand TEXT",
-            "feature_key TEXT",
-            "interval_type TEXT",
-            "metadata_json JSON",
-        ),
         "genome_build, contig, start_pos, end_pos",
         unique_columns=("interval_key",),
     ),
     AnalyticalTableSerializer(
         "sample_interval_values",
-        "sample_interval_values",
         SampleIntervalValue,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "interval_key",
-            "value",
-            "value_semantics",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "interval_key TEXT",
-            "value DOUBLE",
-            "value_semantics TEXT",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, run_sample_key, interval_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "copy_number_segments",
-        "copy_number_segments",
         CopyNumberSegment,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "genome_build",
-            "contig",
-            "start_pos",
-            "end_pos",
-            "num_probes",
-            "segment_mean",
-            "total_copy_number",
-            "minor_copy_number",
-            "call_label",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "genome_build TEXT",
-            "contig TEXT",
-            "start_pos BIGINT",
-            "end_pos BIGINT",
-            "num_probes BIGINT",
-            "segment_mean DOUBLE",
-            "total_copy_number DOUBLE",
-            "minor_copy_number DOUBLE",
-            "call_label TEXT",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, run_sample_key, contig, start_pos",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "variants",
-        "variants",
         Variant,
-        (
-            "variant_key",
-            "variant_id",
-            "genome_build",
-            "contig",
-            "pos",
-            "end_pos",
-            "ref",
-            "alt",
-            "variant_type",
-            "normalized_key",
-        ),
-        (
-            "variant_key TEXT",
-            "variant_id TEXT",
-            "genome_build TEXT",
-            "contig TEXT",
-            "pos BIGINT",
-            "end_pos BIGINT",
-            "ref TEXT",
-            "alt TEXT",
-            "variant_type TEXT",
-            "normalized_key TEXT",
-        ),
         "genome_build, contig, pos, end_pos, variant_key",
         unique_columns=("variant_key",),
     ),
     AnalyticalTableSerializer(
         "variant_annotations",
-        "variant_annotations",
         VariantAnnotation,
-        (
-            "data_profile_key",
-            "variant_key",
-            "feature_key",
-            "consequence",
-            "impact",
-            "clinvar_significance",
-            "gnomad_af",
-            "info_json",
-        ),
-        (
-            "data_profile_key TEXT",
-            "variant_key TEXT",
-            "feature_key TEXT",
-            "consequence TEXT",
-            "impact TEXT",
-            "clinvar_significance TEXT",
-            "gnomad_af DOUBLE",
-            "info_json JSON",
-        ),
         "variant_key, data_profile_key, feature_key",
         unique_columns=(
             "data_profile_key",
@@ -764,304 +353,55 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     ),
     AnalyticalTableSerializer(
         "variant_transcript_annotations",
-        "variant_transcript_annotations",
         VariantTranscriptAnnotation,
-        (
-            "data_profile_key",
-            "variant_key",
-            "transcript_feature_key",
-            "gene_feature_key",
-            "consequence",
-            "impact",
-            "protein_change",
-            "cdna_change",
-            "protein_pos_start",
-            "protein_pos_end",
-            "canonical",
-            "annotation_json",
-        ),
-        (
-            "data_profile_key TEXT",
-            "variant_key TEXT",
-            "transcript_feature_key TEXT",
-            "gene_feature_key TEXT",
-            "consequence TEXT",
-            "impact TEXT",
-            "protein_change TEXT",
-            "cdna_change TEXT",
-            "protein_pos_start BIGINT",
-            "protein_pos_end BIGINT",
-            "canonical BOOLEAN",
-            "annotation_json JSON",
-        ),
         "variant_key, transcript_feature_key",
         unique_columns=("data_profile_key", "variant_key", "transcript_feature_key"),
     ),
     AnalyticalTableSerializer(
         "sample_variant_calls",
-        "sample_variant_calls",
         SampleVariantCall,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "variant_key",
-            "genotype",
-            "depth",
-            "genotype_quality",
-            "allele_depth_ref",
-            "allele_depth_alt",
-            "allele_fraction",
-            "filter",
-            "format_json",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "variant_key TEXT",
-            "genotype TEXT",
-            "depth BIGINT",
-            "genotype_quality DOUBLE",
-            "allele_depth_ref BIGINT",
-            "allele_depth_alt BIGINT",
-            "allele_fraction DOUBLE",
-            "filter TEXT",
-            "format_json JSON",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, run_sample_key, variant_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "structural_variant_events",
-        "structural_variant_events",
         StructuralVariantEvent,
-        (
-            "structural_variant_key",
-            "event_id",
-            "event_class",
-            "genome_build",
-            "site1_feature_key",
-            "site2_feature_key",
-            "site1_contig",
-            "site1_pos",
-            "site2_contig",
-            "site2_pos",
-            "frame_status",
-            "event_info",
-            "annotation_json",
-        ),
-        (
-            "structural_variant_key TEXT",
-            "event_id TEXT",
-            "event_class TEXT",
-            "genome_build TEXT",
-            "site1_feature_key TEXT",
-            "site2_feature_key TEXT",
-            "site1_contig TEXT",
-            "site1_pos BIGINT",
-            "site2_contig TEXT",
-            "site2_pos BIGINT",
-            "frame_status TEXT",
-            "event_info TEXT",
-            "annotation_json JSON",
-        ),
         "structural_variant_key",
         unique_columns=("structural_variant_key",),
     ),
     AnalyticalTableSerializer(
         "sample_structural_variant_calls",
-        "sample_structural_variant_calls",
         SampleStructuralVariantCall,
-        (
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "sample_key",
-            "structural_variant_key",
-            "call_status",
-            "dna_support",
-            "rna_support",
-            "tumor_read_count",
-            "normal_read_count",
-            "split_read_count",
-            "paired_end_read_count",
-            "format_json",
-            "source_file_id",
-        ),
-        (
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "structural_variant_key TEXT",
-            "call_status TEXT",
-            "dna_support TEXT",
-            "rna_support TEXT",
-            "tumor_read_count BIGINT",
-            "normal_read_count BIGINT",
-            "split_read_count BIGINT",
-            "paired_end_read_count BIGINT",
-            "format_json JSON",
-            "source_file_id TEXT",
-        ),
         "data_profile_key, run_sample_key, structural_variant_key",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "timeline_events",
-        "timeline_events",
         TimelineEvent,
-        (
-            "event_key",
-            "subject_key",
-            "sample_key",
-            "run_sample_key",
-            "event_type",
-            "start_time",
-            "end_time",
-            "time_unit",
-            "event_status",
-            "metadata_json",
-        ),
-        (
-            "event_key TEXT",
-            "subject_key TEXT",
-            "sample_key TEXT",
-            "run_sample_key TEXT",
-            "event_type TEXT",
-            "start_time TEXT",
-            "end_time TEXT",
-            "time_unit TEXT",
-            "event_status TEXT",
-            "metadata_json JSON",
-        ),
         "subject_key, event_type, start_time",
         unique_columns=("event_key",),
     ),
     AnalyticalTableSerializer(
         "profile_payloads",
-        "profile_payloads",
         ProfilePayload,
-        (
-            "payload_id",
-            "data_profile_key",
-            "run_id",
-            "run_sample_key",
-            "payload_name",
-            "payload_kind",
-            "storage_format",
-            "path",
-            "uri",
-            "schema_json",
-            "row_count",
-            "source_file_id",
-            "metadata_json",
-        ),
-        (
-            "payload_id TEXT",
-            "data_profile_key TEXT",
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "payload_name TEXT",
-            "payload_kind TEXT",
-            "storage_format TEXT",
-            "path TEXT",
-            "uri TEXT",
-            "schema_json JSON",
-            "row_count BIGINT",
-            "source_file_id TEXT",
-            "metadata_json JSON",
-        ),
         "data_profile_key, run_id, run_sample_key, payload_name",
         run_column="run_id",
         unique_columns=("payload_id",),
     ),
     AnalyticalTableSerializer(
         "gene_alteration_state",
-        "gene_alteration_state",
         GeneAlterationState,
-        (
-            "run_sample_key",
-            "sample_key",
-            "subject_key",
-            "feature_key",
-            "data_profile_key",
-            "alteration_type",
-            "alteration_subtype",
-            "is_altered",
-            "value_numeric",
-            "value_string",
-            "driver_status",
-            "source_table",
-            "source_event_id",
-        ),
-        (
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "subject_key TEXT",
-            "feature_key TEXT",
-            "data_profile_key TEXT",
-            "alteration_type TEXT",
-            "alteration_subtype TEXT",
-            "is_altered BOOLEAN",
-            "value_numeric DOUBLE",
-            "value_string TEXT",
-            "driver_status TEXT",
-            "source_table TEXT",
-            "source_event_id TEXT",
-        ),
         "feature_key, alteration_type, data_profile_key, run_sample_key",
     ),
     AnalyticalTableSerializer(
         "sample_profile_cache",
-        "sample_profile_cache",
         SampleProfileCache,
-        ("run_sample_key", "profile_summary_json", "updated_at"),
-        ("run_sample_key TEXT", "profile_summary_json JSON", "updated_at TIMESTAMP"),
         "run_sample_key",
         unique_columns=("run_sample_key",),
     ),
     AnalyticalTableSerializer(
         "cohort_summaries",
-        "cohort_summaries",
         CohortSummary,
-        (
-            "sample_set_id",
-            "data_profile_key",
-            "metric_key",
-            "feature_key",
-            "n",
-            "mean",
-            "median",
-            "stddev",
-            "min",
-            "max",
-            "q05",
-            "q25",
-            "q75",
-            "q95",
-        ),
-        (
-            "sample_set_id TEXT",
-            "data_profile_key TEXT",
-            "metric_key TEXT",
-            "feature_key TEXT",
-            "n BIGINT",
-            "mean DOUBLE",
-            "median DOUBLE",
-            "stddev DOUBLE",
-            "min DOUBLE",
-            "max DOUBLE",
-            "q05 DOUBLE",
-            "q25 DOUBLE",
-            "q75 DOUBLE",
-            "q95 DOUBLE",
-        ),
         "sample_set_id, data_profile_key, metric_key, feature_key",
         unique_columns=(
             "sample_set_id",
@@ -1072,35 +412,24 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     ),
     AnalyticalTableSerializer(
         "tool_versions",
-        "tool_versions",
         ToolVersion,
-        ("run_id", "tool", "version", "source_file_id"),
-        ("run_id TEXT", "tool TEXT", "version TEXT", "source_file_id TEXT"),
         "run_id, tool",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "data_sources",
-        "data_sources",
         DataSource,
-        ("run_id", "run_sample_key", "sample_key", "tool", "module", "source_path"),
-        (
-            "run_id TEXT",
-            "run_sample_key TEXT",
-            "sample_key TEXT",
-            "tool TEXT",
-            "module TEXT",
-            "source_path TEXT",
-        ),
         "run_id, sample_key, tool, module",
         run_column="run_id",
     ),
 )
 
 SERIALIZERS_BY_FIELD = {
-    serializer.batch_field: serializer for serializer in SERIALIZERS
+    serializer.resolved_batch_field: serializer for serializer in SERIALIZERS
 }
 SERIALIZERS_BY_TABLE = {serializer.table_name: serializer for serializer in SERIALIZERS}
+# These derived registries keep lookup code explicit: fetch/validation starts
+# from a table name, while replacement needs only the run-scoped subset.
 RUN_SCOPED_TABLES = tuple(
     serializer for serializer in SERIALIZERS if serializer.run_column is not None
 )
@@ -1117,6 +446,7 @@ class DuckDBAnalyticsStore:
 
     def ensure_schema(self) -> None:
         with self._connect() as connection:
+            # The registry is the source of truth for physical DuckDB tables.
             for serializer in SERIALIZERS:
                 serializer.create_table(connection)
                 serializer.create_sorted_view(connection)
@@ -1127,16 +457,23 @@ class DuckDBAnalyticsStore:
         batch: AnalyticsIngestBatch,
         *,
         replace_run_id: str | None = None,
+        replace_run_ids: Sequence[str] | None = None,
         refresh_derived: bool = True,
     ) -> None:
         validated = AnalyticsIngestBatch.model_validate(batch)
+        run_ids_to_replace = list(replace_run_ids or [])
+        if replace_run_id is not None:
+            run_ids_to_replace.append(replace_run_id)
         self.ensure_schema()
         with self._connect() as connection:
             connection.begin()
             try:
-                if replace_run_id is not None:
+                for run_id in dict.fromkeys(run_ids_to_replace):
+                    # Replacing a run clears only tables that carry run-scoped
+                    # observations; shared definitions/features are refreshed by
+                    # natural key deletion below.
                     for serializer in RUN_SCOPED_TABLES:
-                        serializer.delete_run(connection, replace_run_id)
+                        serializer.delete_run(connection, run_id)
                     connection.execute(
                         """
                         DELETE FROM gene_alteration_state
@@ -1146,22 +483,76 @@ class DuckDBAnalyticsStore:
                             WHERE run_id = ?
                         )
                         """,
-                        [replace_run_id],
+                        [run_id],
                     )
 
                 for serializer in SERIALIZERS:
                     records = serializer.records_from_batch(validated)
+                    # Non-run tables are dimensions/reference data. Delete the
+                    # incoming natural keys first so imports stay idempotent.
                     if serializer.run_column is None:
                         serializer.delete_unique_values(connection, records)
                     serializer.insert_records(connection, records)
 
                 if refresh_derived:
+                    refresh_run_id = (
+                        replace_run_id
+                        if replace_run_id is not None and not replace_run_ids
+                        else None
+                    )
                     self._refresh_gene_alteration_state(
-                        connection, run_id=replace_run_id
+                        connection, run_id=refresh_run_id
                     )
                     self._refresh_sample_profile_cache(
-                        connection, run_id=replace_run_id
+                        connection, run_id=refresh_run_id
                     )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def write_batch_with_bulk_loads(
+        self,
+        batch: AnalyticsIngestBatch,
+        bulk_loads: Sequence[Any],
+        *,
+        replace_run_id: str | None = None,
+        replace_run_ids: Sequence[str] | None = None,
+        bulk_load_progress: Callable[[Any, int, int], None] | None = None,
+    ) -> None:
+        self.write_batch(
+            batch,
+            replace_run_id=replace_run_id,
+            replace_run_ids=replace_run_ids,
+            refresh_derived=False,
+        )
+        if not bulk_loads:
+            with self._connect() as connection:
+                refresh_run_id = (
+                    replace_run_id
+                    if replace_run_id is not None and not replace_run_ids
+                    else None
+                )
+                self._refresh_gene_alteration_state(connection, run_id=refresh_run_id)
+                self._refresh_sample_profile_cache(connection, run_id=refresh_run_id)
+            return
+
+        self.ensure_schema()
+        with self._connect() as connection:
+            connection.begin()
+            try:
+                total_bulk_loads = len(bulk_loads)
+                for index, bulk_load in enumerate(bulk_loads):
+                    if bulk_load_progress is not None:
+                        bulk_load_progress(bulk_load, index, total_bulk_loads)
+                    bulk_load.load(connection)
+                refresh_run_id = (
+                    replace_run_id
+                    if replace_run_id is not None and not replace_run_ids
+                    else None
+                )
+                self._refresh_gene_alteration_state(connection, run_id=refresh_run_id)
+                self._refresh_sample_profile_cache(connection, run_id=refresh_run_id)
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -1224,7 +615,11 @@ class DuckDBAnalyticsStore:
         ]
 
     def list_metric_values(
-        self, run_id: str
+        self,
+        run_id: str,
+        *,
+        sample_key: str | None = None,
+        run_sample_key: str | None = None,
     ) -> list[SampleMetricNumeric | SampleMetricString]:
         numeric = self.fetch_records(
             "sample_metric_numeric", SampleMetricNumeric, run_id=run_id
@@ -1232,7 +627,15 @@ class DuckDBAnalyticsStore:
         string = self.fetch_records(
             "sample_metric_string", SampleMetricString, run_id=run_id
         )
-        return [*numeric, *string]
+        values = [*numeric, *string]
+        if sample_key is None and run_sample_key is None:
+            return values
+        return [
+            value
+            for value in values
+            if (sample_key is not None and value.sample_key == sample_key)
+            or (run_sample_key is not None and value.run_sample_key == run_sample_key)
+        ]
 
     def list_profile_payloads(self, run_id: str) -> list[ProfilePayload]:
         return self.fetch_records("profile_payloads", ProfilePayload, run_id=run_id)
@@ -1494,10 +897,52 @@ def validate_records(
     return [serializer.model_type.model_validate(record) for record in records]
 
 
+def _field_column_name(field_name: str, field_info: Any) -> str:
+    return str(field_info.alias or field_name)
+
+
+def _field_name_for_column(model_type: type[BaseModel], column: str) -> str:
+    for field_name, field_info in model_type.model_fields.items():
+        if _field_column_name(field_name, field_info) == column:
+            return field_name
+    return column
+
+
+def _duckdb_type_for_field(annotation: Any, column: str) -> str:
+    if _is_json_column(column):
+        return "JSON"
+    annotation = _strip_optional(annotation)
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return "TEXT"
+    if origin in {dict, list}:
+        return "JSON"
+    if origin in {UnionType, Union}:
+        return "TEXT"
+    if annotation is str:
+        return "TEXT"
+    if annotation is int:
+        return "BIGINT"
+    if annotation is float:
+        return "DOUBLE"
+    if annotation is bool:
+        return "BOOLEAN"
+    if annotation in {date, datetime}:
+        return "TIMESTAMP"
+    return "TEXT"
+
+
+def _strip_optional(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin not in {UnionType, Union}:
+        return annotation
+    args = tuple(arg for arg in get_args(annotation) if arg is not type(None))
+    return args[0] if len(args) == 1 else annotation
+
+
 def _field_value(record: BaseModel, column: str) -> Any:
-    if column == "schema_json" and isinstance(record, ProfilePayload):
-        return record.payload_schema_json
-    return getattr(record, column)
+    field_name = _field_name_for_column(type(record), column)
+    return getattr(record, field_name)
 
 
 def _to_db_value(value: Any) -> Any:
