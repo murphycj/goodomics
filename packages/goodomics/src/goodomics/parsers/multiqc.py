@@ -10,7 +10,6 @@ from typing import Any
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataSource,
-    Metric,
     MetricDefinition,
     ProfileObservationSet,
     ProfilePayload,
@@ -78,20 +77,6 @@ class MultiQCParseResult:
             tool_versions=self.tool_versions,
             data_sources=self.data_sources,
         )
-
-
-def parse_multiqc(path: Path) -> list[Metric]:
-    """Parse scalar MultiQC metrics into the lightweight SDK metric model."""
-    parsed = parse_multiqc_bundle(path, run_id="multiqc")
-    return [
-        Metric(
-            sample_id=metric.sample_key,
-            name=metric.metric_key,
-            value=metric.value,
-            unit=None,
-        )
-        for metric in parsed.metrics
-    ]
 
 
 def parse_multiqc_bundle(path: Path, *, run_id: str) -> MultiQCParseResult:
