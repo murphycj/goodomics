@@ -58,9 +58,14 @@ code {
   --rdg-background-color: #ffffff;
   --rdg-header-background-color: #f5f7fa;
   --rdg-row-hover-background-color: #f6fbf8;
+  --rdg-row-selected-background-color: #eef2f6;
+  --rdg-row-selected-hover-background-color: #e8edf3;
   --rdg-selection-color: #21a66a;
+  --rdg-checkbox-focus-color: #21a66a;
   --rdg-border-width: 1px;
+  accent-color: #16784a;
   border: 0;
+  color-scheme: light;
   font-size: 0.8125rem;
 }
 
@@ -90,7 +95,96 @@ code {
   line-height: 1.45;
 }
 
+.goodomics-data-grid [aria-colindex="1"] {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.goodomics-data-grid input[type="checkbox"] {
+  display: grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  inline-size: 16px;
+  block-size: 16px;
+  aspect-ratio: 1;
+  margin: auto;
+  appearance: none;
+  border: 1px solid #b9c4d2;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #16784a;
+  cursor: pointer;
+}
+
+.goodomics-data-grid input[type="checkbox"]:checked,
+.goodomics-data-grid input[type="checkbox"]:indeterminate {
+  border-color: #21a66a;
+  background: #eef8f2;
+}
+
+.goodomics-data-grid input[type="checkbox"]::before {
+  width: 10px;
+  height: 10px;
+  content: "";
+  transform: scale(0);
+  transform-origin: center;
+  background: #16784a;
+}
+
+.goodomics-data-grid input[type="checkbox"]:checked::before {
+  transform: scale(1);
+  clip-path: polygon(14% 44%, 0 58%, 37% 95%, 100% 18%, 86% 5%, 36% 66%);
+}
+
+.goodomics-data-grid input[type="checkbox"]:indeterminate::before {
+  height: 2px;
+  transform: scale(1);
+  clip-path: none;
+}
+
+.goodomics-data-grid input[type="checkbox"]:focus-visible {
+  outline: 2px solid #8edeb4;
+  outline-offset: 2px;
+}
+
 .goodomics-data-grid [role="gridcell"]:not(:last-child),
 .goodomics-data-grid [role="columnheader"]:not(:last-child) {
   box-shadow: inset -1px 0 0 #ccd6e3;
+}
+
+.database-cell-preview-panel {
+  width: min(440px, 38vw);
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-left: 1px solid #dce3eb;
+  background: #fbfcfd;
+  transition:
+    width 180ms ease,
+    opacity 160ms ease,
+    transform 180ms ease,
+    border-color 180ms ease;
+}
+
+.database-cell-preview-panel-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.database-cell-preview-panel-closed {
+  width: 0;
+  opacity: 0;
+  transform: translateX(12px);
+  border-left-color: transparent;
+}
+
+.database-cell-preview-panel-inner {
+  display: flex;
+  width: min(440px, 38vw);
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
 }
