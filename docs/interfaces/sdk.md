@@ -34,6 +34,12 @@ project DuckDB store when the block exits successfully.
 The SDK should stay lightweight enough to use from Nextflow, Snakemake, WDL,
 shell workflows, notebooks, and internal Python pipelines.
 
+## Custom parsers
+
+Use the SDK-style [custom parser API](custom-parsers.md) when you need to read a
+lab-specific table or dataframe and emit structured Goodomics records. Parsers
+describe how to read data; Goodomics handles ingestion and persistence.
+
 !!! info "Context over control"
     Goodomics sits after whatever system already runs the workflow. It records
     and reviews outputs; it should not become the workflow orchestrator.
