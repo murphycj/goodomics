@@ -150,9 +150,7 @@ def _entry_point_sources() -> list[SourceSpec]:
             else loaded
         )
         if not isinstance(source, SourceSpec):
-            raise TypeError(
-                f"Entry point {entry_point.name} did not load a SourceSpec"
-            )
+            raise TypeError(f"Entry point {entry_point.name} did not load a SourceSpec")
         sources.append(source)
     return sources
 

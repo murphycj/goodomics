@@ -671,9 +671,7 @@ def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(file_id, str):
             continue
         existing = by_file_id.get(file_id)
-        if existing is None or _file_payload_rank(file) > _file_payload_rank(
-            existing
-        ):
+        if existing is None or _file_payload_rank(file) > _file_payload_rank(existing):
             by_file_id[file_id] = file
     return [by_file_id[file_id] for file_id in sorted(by_file_id)]
 

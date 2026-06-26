@@ -104,8 +104,8 @@ def parse_cbioportal_study(
         raise ValueError(f"cBioPortal study directory does not exist: {root}")
     metas = _discover_metas(resolved_root)
     study_meta = _read_meta_file(resolved_root / "meta_study.txt")
-    resolved_data_import_id = (
-        data_import_id or study_meta.get("cancer_study_identifier")
+    resolved_data_import_id = data_import_id or study_meta.get(
+        "cancer_study_identifier"
     )
     if not resolved_data_import_id:
         resolved_data_import_id = _normalize_id(resolved_root.name)
