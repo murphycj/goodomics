@@ -300,7 +300,7 @@ class GoodomicsQueryTools:
         if not isinstance(run, dict):
             return run_result | {"files": []}
         await self.context.store.ensure_schema()
-        statement = (
+        direct_statement = (
             select(FileRecord, FileLinkRecord)
             .join(
                 FileLinkRecord,
@@ -309,15 +309,55 @@ class GoodomicsQueryTools:
             .where(FileLinkRecord.run_id == run_id)
         )
         if kind:
-            statement = statement.where(
+            direct_statement = direct_statement.where(
                 func.lower(FileRecord.file_role) == kind.lower()
             )
-        statement = statement.order_by(cast(Any, FileRecord.file_id)).limit(
-            _bounded_limit(limit)
-        )
+        direct_statement = direct_statement.order_by(cast(Any, FileRecord.file_id))
+        data_import_id = run.get("data_import_id")
         async with self._session() as session:
-            rows = (await session.exec(statement)).all()
-        return {"run": run, "files": [_file_payload(file, link) for file, link in rows]}
+            rows = [
+                _file_payload(
+                    file,
+                    link,
+                    association_scope="direct_run",
+                    association_reason="File directly linked to this run.",
+                )
+                for file, link in (await session.exec(direct_statement)).all()
+            ]
+            if isinstance(data_import_id, str):
+                import_statement = (
+                    select(FileRecord, FileLinkRecord)
+                    .join(
+                        FileLinkRecord,
+                        cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                    )
+                    .where(
+                        FileLinkRecord.data_import_id == data_import_id,
+                        cast(Any, FileLinkRecord.run_id).is_(None),
+                    )
+                )
+                if kind:
+                    import_statement = import_statement.where(
+                        func.lower(FileRecord.file_role) == kind.lower()
+                    )
+                import_statement = import_statement.order_by(
+                    cast(Any, FileRecord.file_id)
+                )
+                rows.extend(
+                    _file_payload(
+                        file,
+                        link,
+                        association_scope="data_import",
+                        association_reason=(
+                            "Source file from the data import that produced this run."
+                        ),
+                    )
+                    for file, link in (await session.exec(import_statement)).all()
+                )
+        return {
+            "run": run,
+            "files": _dedupe_file_payloads(rows)[: _bounded_limit(limit)],
+        }
 
     async def _all_projects(self) -> list[ProjectRecord]:
         await self.context.store.ensure_default_project()
@@ -499,6 +539,7 @@ def _run_record_payload(row: RunRecord) -> dict[str, Any]:
     return {
         "run_id": row.run_id,
         "project_id": row.project_id,
+        "data_import_id": row.data_import_id,
         "project": row.project,
         "name": row.name,
         "app_path": app_path,
@@ -591,14 +632,26 @@ def _sample_path(project_id: str | None, sample_id: str) -> str | None:
     return f"{_project_path(project_id)}/samples/{quote(sample_id, safe='')}"
 
 
-def _file_payload(file: FileRecord, link: FileLinkRecord) -> dict[str, Any]:
+def _file_payload(
+    file: FileRecord,
+    link: FileLinkRecord,
+    *,
+    association_scope: str = "direct_run",
+    association_reason: str | None = None,
+) -> dict[str, Any]:
     metadata_value = file.metadata_json
     metadata = metadata_value if isinstance(metadata_value, dict) else {}
     source_path = metadata.get("source_path")
     return {
         "file_id": file.file_id,
         "project_id": file.project_id,
+        "data_import_id": link.data_import_id,
         "run_id": link.run_id,
+        "run_sample_id": link.run_sample_id,
+        "sample_id": link.sample_id,
+        "data_profile_id": link.data_profile_id,
+        "association_scope": association_scope,
+        "association_reason": association_reason,
         "kind": file.file_role,
         "path": file.path,
         "name": Path(file.path).name if file.path is not None else file.file_id,
@@ -609,6 +662,30 @@ def _file_payload(file: FileRecord, link: FileLinkRecord) -> dict[str, Any]:
         if file.created_at is not None
         else None,
     }
+
+
+def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_file_id: dict[str, dict[str, Any]] = {}
+    for file in files:
+        file_id = file.get("file_id")
+        if not isinstance(file_id, str):
+            continue
+        existing = by_file_id.get(file_id)
+        if existing is None or _file_payload_rank(file) > _file_payload_rank(existing):
+            by_file_id[file_id] = file
+    return [by_file_id[file_id] for file_id in sorted(by_file_id)]
+
+
+def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
+    scope = file.get("association_scope")
+    if not isinstance(scope, str):
+        scope = ""
+    scope_rank = {"direct_run": 3, "direct_sample": 3, "data_import": 2}.get(
+        scope,
+        1,
+    )
+    profile_rank = 1 if file.get("data_profile_id") is not None else 0
+    return scope_rank, profile_rank
 
 
 def _analytics_metric_payload(value: Any) -> dict[str, Any]:

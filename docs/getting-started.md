@@ -57,6 +57,12 @@ with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
     ctx.log_metric("S1", "pct_mapped", 97.2, unit="percent")
 ```
 
+## Parse custom outputs
+
+Use [custom parsers](interfaces/custom-parsers.md) when you have a lab-specific
+table, dataframe, or notebook object that Goodomics does not parse yet. You
+write a small Python parser; Goodomics handles persistence.
+
 ## Run the server
 
 Start the optional server when you want API, dashboard, database-backed run

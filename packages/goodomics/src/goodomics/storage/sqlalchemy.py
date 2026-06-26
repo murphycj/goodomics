@@ -19,6 +19,7 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.schemas.models import (
+    DataImport,
     DataProfile,
     FileAsset,
     FileLink,
@@ -41,6 +42,7 @@ class RunRecord(SQLModel, table=True):
 
     run_id: str = Field(primary_key=True, max_length=255)
     project_id: str | None = Field(default=None, max_length=255, index=True)
+    data_import_id: str | None = Field(default=None, max_length=255, index=True)
     project: str | None = Field(default=None, max_length=255)
     name: str | None = Field(default=None, max_length=255)
     run_kind: str = Field(default="pipeline_run", max_length=64)
@@ -102,7 +104,6 @@ class DataProfileRecord(SQLModel, table=True):
 
     data_profile_id: str = Field(primary_key=True, max_length=255)
     project_id: str | None = Field(default=None, max_length=255, index=True)
-    run_id: str | None = Field(default=None, max_length=255, index=True)
     name: str = Field(max_length=255)
     data_type: str = Field(max_length=128, index=True)
     assay: str | None = Field(default=None, max_length=255)
@@ -116,6 +117,25 @@ class DataProfileRecord(SQLModel, table=True):
     query_modes_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     mcp_description: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class DataImportRecord(SQLModel, table=True):
+    __tablename__ = "data_imports"
+
+    data_import_id: str = Field(primary_key=True, max_length=255)
+    project_id: str | None = Field(default=None, max_length=255, index=True)
+    source_type: str = Field(max_length=128, index=True)
+    source_uri: str | None = Field(default=None, max_length=2048)
+    source_path: str | None = Field(default=None, max_length=2048)
+    importer_name: str = Field(max_length=255)
+    importer_version: str | None = Field(default=None, max_length=255)
+    status: str = Field(default="complete", max_length=64)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    parameters_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    created_at: datetime
 
 
 class FileRecord(SQLModel, table=True):
@@ -141,6 +161,7 @@ class FileLinkRecord(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     file_id: str = Field(max_length=512, index=True)
     project_id: str | None = Field(default=None, max_length=255, index=True)
+    data_import_id: str | None = Field(default=None, max_length=255, index=True)
     run_id: str | None = Field(default=None, max_length=255, index=True)
     run_sample_id: str | None = Field(default=None, max_length=512, index=True)
     sample_id: str | None = Field(default=None, max_length=255, index=True)
@@ -317,6 +338,7 @@ class SQLModelGoodomicsStore:
         self,
         run: Run,
         *,
+        data_import: DataImport | None = None,
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
@@ -346,12 +368,18 @@ class SQLModelGoodomicsStore:
         member_records = list(sample_set_members or [])
 
         async with AsyncSession(self._get_engine()) as session:
+            if data_import is not None:
+                await _delete_data_import_scoped_catalog(
+                    session, data_import.data_import_id
+                )
             await _delete_run_scoped_catalog(session, resolved_run.run_id)
 
             existing = await session.get(RunRecord, resolved_run.run_id)
             if existing is not None:
                 await session.delete(existing)
 
+            if data_import is not None:
+                await _upsert_data_import(session, data_import, project.project_id)
             session.add(_run_record(resolved_run, project))
             for subject in subject_records:
                 row = await session.get(SubjectRecord, subject.subject_id)
@@ -398,29 +426,8 @@ class SQLModelGoodomicsStore:
                     for run_sample in run_sample_records
                 ]
             )
-            session.add_all(
-                [
-                    DataProfileRecord(
-                        data_profile_id=profile.data_profile_id,
-                        project_id=profile.project_id or project.project_id,
-                        run_id=profile.run_id or resolved_run.run_id,
-                        name=profile.name,
-                        data_type=profile.data_type,
-                        assay=profile.assay,
-                        producer_tool=profile.producer_tool,
-                        producer_tool_version=profile.producer_tool_version,
-                        producer_pipeline=profile.producer_pipeline,
-                        genome_build=profile.genome_build,
-                        feature_type=profile.feature_type,
-                        value_type=profile.value_type,
-                        unit=profile.unit,
-                        query_modes_json=dict(profile.query_modes_json),
-                        mcp_description=profile.mcp_description,
-                        metadata_json=dict(profile.metadata_json),
-                    )
-                    for profile in profile_records
-                ]
-            )
+            for profile in profile_records:
+                await _upsert_data_profile(session, profile)
             session.add_all(
                 [
                     FileRecord(
@@ -443,6 +450,7 @@ class SQLModelGoodomicsStore:
                     FileLinkRecord(
                         file_id=link.file_id,
                         project_id=link.project_id or project.project_id,
+                        data_import_id=link.data_import_id,
                         run_id=link.run_id or resolved_run.run_id,
                         run_sample_id=link.run_sample_id,
                         sample_id=link.sample_id,
@@ -483,6 +491,7 @@ class SQLModelGoodomicsStore:
         self,
         runs: list[Run],
         *,
+        data_import: DataImport | None = None,
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
@@ -510,12 +519,18 @@ class SQLModelGoodomicsStore:
         run_ids = {run.run_id for run in resolved_runs}
 
         async with AsyncSession(self._get_engine()) as session:
+            if data_import is not None:
+                await _delete_data_import_scoped_catalog(
+                    session, data_import.data_import_id
+                )
             for run_id in sorted(run_ids):
                 await _delete_run_scoped_catalog(session, run_id)
                 existing = await session.get(RunRecord, run_id)
                 if existing is not None:
                     await session.delete(existing)
 
+            if data_import is not None:
+                await _upsert_data_import(session, data_import, project.project_id)
             for run in resolved_runs:
                 session.add(_run_record(run, project))
 
@@ -540,29 +555,8 @@ class SQLModelGoodomicsStore:
                     for run_sample in run_samples or []
                 ]
             )
-            session.add_all(
-                [
-                    DataProfileRecord(
-                        data_profile_id=profile.data_profile_id,
-                        project_id=profile.project_id or project.project_id,
-                        run_id=profile.run_id,
-                        name=profile.name,
-                        data_type=profile.data_type,
-                        assay=profile.assay,
-                        producer_tool=profile.producer_tool,
-                        producer_tool_version=profile.producer_tool_version,
-                        producer_pipeline=profile.producer_pipeline,
-                        genome_build=profile.genome_build,
-                        feature_type=profile.feature_type,
-                        value_type=profile.value_type,
-                        unit=profile.unit,
-                        query_modes_json=dict(profile.query_modes_json),
-                        mcp_description=profile.mcp_description,
-                        metadata_json=dict(profile.metadata_json),
-                    )
-                    for profile in data_profiles or []
-                ]
-            )
+            for profile in data_profiles or []:
+                await _upsert_data_profile(session, profile)
 
             for file in files or []:
                 await _upsert_file(session, file, project.project_id)
@@ -572,6 +566,7 @@ class SQLModelGoodomicsStore:
                     FileLinkRecord(
                         file_id=link.file_id,
                         project_id=link.project_id or project.project_id,
+                        data_import_id=link.data_import_id,
                         run_id=link.run_id,
                         run_sample_id=link.run_sample_id,
                         sample_id=link.sample_id,
@@ -642,6 +637,7 @@ class SQLModelGoodomicsStore:
             run_id=run_row.run_id,
             project=run_row.project,
             project_id=run_row.project_id,
+            data_import_id=run_row.data_import_id,
             name=run_row.name,
             run_kind=run_row.run_kind,
             assay=run_row.assay,
@@ -685,6 +681,7 @@ class SQLModelGoodomicsStore:
                 FileLinkRecord(
                     file_id=link.file_id,
                     project_id=link.project_id or project_id,
+                    data_import_id=link.data_import_id,
                     run_id=link.run_id or run_id,
                     run_sample_id=link.run_sample_id,
                     sample_id=link.sample_id,
@@ -773,6 +770,88 @@ async def _upsert_file(
     session.add(row)
 
 
+async def _upsert_data_profile(
+    session: AsyncSession,
+    profile: DataProfile,
+) -> None:
+    # Data profiles are semantic contracts and may be reused across many runs.
+    row = await session.get(DataProfileRecord, profile.data_profile_id)
+    if row is None:
+        row = DataProfileRecord(
+            data_profile_id=profile.data_profile_id,
+            project_id=profile.project_id,
+            name=profile.name,
+            data_type=profile.data_type,
+            assay=profile.assay,
+            producer_tool=profile.producer_tool,
+            producer_tool_version=profile.producer_tool_version,
+            producer_pipeline=profile.producer_pipeline,
+            genome_build=profile.genome_build,
+            feature_type=profile.feature_type,
+            value_type=profile.value_type,
+            unit=profile.unit,
+            query_modes_json=dict(profile.query_modes_json),
+            mcp_description=profile.mcp_description,
+            metadata_json=dict(profile.metadata_json),
+        )
+    else:
+        row.project_id = profile.project_id
+        row.name = profile.name
+        row.data_type = profile.data_type
+        row.assay = profile.assay
+        row.producer_tool = profile.producer_tool
+        row.producer_tool_version = profile.producer_tool_version
+        row.producer_pipeline = profile.producer_pipeline
+        row.genome_build = profile.genome_build
+        row.feature_type = profile.feature_type
+        row.value_type = profile.value_type
+        row.unit = profile.unit
+        row.query_modes_json = dict(profile.query_modes_json)
+        row.mcp_description = profile.mcp_description
+        row.metadata_json = dict(profile.metadata_json)
+    session.add(row)
+
+
+async def _upsert_data_import(
+    session: AsyncSession,
+    data_import: DataImport,
+    project_id: str,
+) -> None:
+    row = await session.get(DataImportRecord, data_import.data_import_id)
+    if row is None:
+        row = DataImportRecord(
+            data_import_id=data_import.data_import_id,
+            project_id=data_import.project_id or project_id,
+            source_type=data_import.source_type,
+            source_uri=data_import.source_uri,
+            source_path=data_import.source_path,
+            importer_name=data_import.importer_name,
+            importer_version=data_import.importer_version,
+            status=data_import.status,
+            started_at=data_import.started_at,
+            ended_at=data_import.ended_at,
+            parameters_json=dict(data_import.parameters_json),
+            summary_json=dict(data_import.summary_json),
+            metadata_json=dict(data_import.metadata_json),
+            created_at=data_import.created_at,
+        )
+    else:
+        row.project_id = data_import.project_id or row.project_id
+        row.source_type = data_import.source_type
+        row.source_uri = data_import.source_uri
+        row.source_path = data_import.source_path
+        row.importer_name = data_import.importer_name
+        row.importer_version = data_import.importer_version
+        row.status = data_import.status
+        row.started_at = data_import.started_at
+        row.ended_at = data_import.ended_at
+        row.parameters_json = dict(data_import.parameters_json)
+        row.summary_json = dict(data_import.summary_json)
+        row.metadata_json = dict(data_import.metadata_json)
+        row.created_at = data_import.created_at
+    session.add(row)
+
+
 def _sample_from_row(row: SampleRecord) -> Sample:
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
@@ -789,6 +868,7 @@ def _run_record(run: Run, project: Project) -> RunRecord:
     return RunRecord(
         run_id=run.run_id,
         project_id=project.project_id,
+        data_import_id=run.data_import_id,
         project=run.project or project.slug or project.name,
         name=run.name,
         run_kind=run.run_kind,
@@ -804,6 +884,47 @@ def _run_record(run: Run, project: Project) -> RunRecord:
     )
 
 
+async def _delete_data_import_scoped_catalog(
+    session: AsyncSession,
+    data_import_id: str,
+) -> None:
+    # Replacing an import should remove source files and imported result runs
+    # previously owned by that import. Project-level samples/subjects remain.
+    run_ids = (
+        await session.exec(
+            select(RunRecord.run_id).where(RunRecord.data_import_id == data_import_id)
+        )
+    ).all()
+    file_ids = (
+        await session.exec(
+            select(FileLinkRecord.file_id).where(
+                FileLinkRecord.data_import_id == data_import_id
+            )
+        )
+    ).all()
+    await session.exec(
+        delete(FileLinkRecord).where(FileLinkRecord.data_import_id == data_import_id)
+    )
+    if run_ids:
+        await session.exec(
+            delete(RunSampleRecord).where(
+                cast(Any, RunSampleRecord.run_id).in_(list(run_ids))
+            )
+        )
+        await session.exec(
+            delete(RunRecord).where(cast(Any, RunRecord.run_id).in_(list(run_ids)))
+        )
+    if file_ids:
+        await session.exec(
+            delete(FileRecord).where(cast(Any, FileRecord.file_id).in_(list(file_ids)))
+        )
+    await session.exec(
+        delete(DataImportRecord).where(
+            DataImportRecord.data_import_id == data_import_id
+        )
+    )
+
+
 async def _delete_run_scoped_catalog(
     session: AsyncSession,
     run_id: str,
@@ -813,7 +934,7 @@ async def _delete_run_scoped_catalog(
     profile_ids = (
         await session.exec(
             select(DataProfileRecord.data_profile_id).where(
-                DataProfileRecord.run_id == run_id
+                DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
             )
         )
     ).all()
@@ -836,7 +957,9 @@ async def _delete_run_scoped_catalog(
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_id))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_id))
     await session.exec(
-        delete(DataProfileRecord).where(DataProfileRecord.run_id == run_id)
+        delete(DataProfileRecord).where(
+            DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
+        )
     )
     if profile_ids:
         await session.exec(

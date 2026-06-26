@@ -1,32 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 from rich.console import Console
 
-from goodomics.ingest.cbioportal import CbioPortalIngestResult, ingest_cbioportal_study
-from goodomics.ingest.multiqc import MultiQCIngestResult, ingest_multiqc_runs
+from goodomics.sources import SourceSpec, get_source
 from goodomics.storage.database import resolve_database_url
-
-
-class IngestType(StrEnum):
-    multiqc = "multiqc"
-    cbioportal = "cbioportal"
 
 
 @dataclass(frozen=True)
 class IngestRouteResult:
-    ingest_type: IngestType
-    payload: list[MultiQCIngestResult] | CbioPortalIngestResult
+    ingest_type: str
+    source: SourceSpec
+    payload: Any
 
 
 def run_ingest(
     results: Path,
     *,
-    ingest_type: IngestType | str,
+    ingest_type: str,
     project: str | None,
     assay: str | None,
     run_id: str | None,
@@ -36,54 +30,42 @@ def run_ingest(
     console: Console | None = None,
     show_progress: bool = False,
 ) -> IngestRouteResult:
-    resolved_ingest_type = IngestType(ingest_type)
+    source = get_source(str(ingest_type))
     resolved_database_url = resolve_database_url(database_url)
-    if resolved_ingest_type == IngestType.cbioportal:
-        return IngestRouteResult(
-            ingest_type=resolved_ingest_type,
-            payload=ingest_cbioportal_study(
-                results,
-                project=project,
-                assay=assay,
-                run_id=run_id,
-                database_url=resolved_database_url,
-                analytics_path=analytics_path,
-                show_progress=show_progress,
-                console=console,
-            ),
-        )
-
+    # SourceSpec owns the callable's keyword contract, which lets built-ins keep
+    # their historical parameter names while routing through one registry path.
+    kwargs = {
+        "project": project,
+        "assay": assay,
+        "database_url": resolved_database_url,
+        "analytics_path": analytics_path,
+        "file_root": file_root,
+        "console": console,
+        "show_progress": show_progress,
+    }
+    if run_id is not None:
+        kwargs[source.run_id_parameter] = run_id
+    callable_kwargs = {
+        key: value for key, value in kwargs.items() if key in source.ingest_parameters
+    }
     return IngestRouteResult(
-        ingest_type=resolved_ingest_type,
-        payload=ingest_multiqc_runs(
-            results,
-            project=project,
-            assay=assay,
-            run_id=run_id,
-            database_url=resolved_database_url,
-            analytics_path=analytics_path,
-            file_root=file_root,
-        ),
+        ingest_type=source.key,
+        source=source,
+        payload=source.load_ingest()(results, **callable_kwargs),
     )
 
 
 def print_ingest_result(result: IngestRouteResult, console: Console) -> None:
-    if result.ingest_type == IngestType.cbioportal:
-        _print_cbioportal_ingest_result(
-            cast(CbioPortalIngestResult, result.payload),
-            console,
-        )
+    printer = result.source.load_result_printer()
+    if printer is None:
+        # Third-party sources can omit custom printers and still get a useful
+        # structured CLI echo while they are being developed.
+        console.print({"source": result.ingest_type, "result": result.payload})
         return
-    _print_multiqc_ingest_results(
-        cast(list[MultiQCIngestResult], result.payload),
-        console,
-    )
+    printer(result.payload, console)
 
 
-def _print_multiqc_ingest_results(
-    results_ingested: list[MultiQCIngestResult],
-    console: Console,
-) -> None:
+def print_multiqc_ingest_results(results_ingested: Any, console: Console) -> None:
     if len(results_ingested) == 1:
         result = results_ingested[0]
         console.print(f"Ingested run [bold]{result.run_id}[/bold]")
@@ -93,6 +75,7 @@ def _print_multiqc_ingest_results(
         console.print(
             {
                 "run_id": result.run_id,
+                "data_import_id": result.data_import_id,
                 "outputs_found": result.outputs_found,
                 "metrics_ingested": result.metrics_ingested,
                 "payloads_ingested": result.payloads_ingested,
@@ -104,19 +87,18 @@ def _print_multiqc_ingest_results(
         )
 
 
-def _print_cbioportal_ingest_result(
-    result: CbioPortalIngestResult,
-    console: Console,
-) -> None:
+def print_cbioportal_ingest_result(result: Any, console: Console) -> None:
     if result.runs_ingested == 1:
-        console.print(f"Ingested cBioPortal run [bold]{result.run_id}[/bold]")
+        console.print(
+            f"Ingested cBioPortal import [bold]{result.data_import_id}[/bold]"
+        )
     else:
         console.print(
             f"Ingested [bold]{result.runs_ingested}[/bold] cBioPortal sample runs"
         )
     console.print(
         {
-            "run_id": result.run_id,
+            "data_import_id": result.data_import_id,
             "runs_ingested": result.runs_ingested,
             "profiles_ingested": result.profiles_ingested,
             "subjects_ingested": result.subjects_ingested,

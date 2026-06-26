@@ -2,8 +2,8 @@
 
 This file is the source of truth for Goodomics data model terminology and
 schema-direction discussions. Use it when working on core data concepts, table
-shapes, SQL vs DuckDB responsibilities, data profiles, processed samples, files,
-observations, and agent/MCP data-query behavior.
+shapes, SQL vs DuckDB responsibilities, data imports, data profiles, processed
+samples, files, observations, and agent/MCP data-query behavior.
 
 The guiding split:
 
@@ -18,9 +18,10 @@ The guiding split:
 | --- | --- | --- |
 | Project | Workspace or data boundary | Owns runs, samples, files, sample sets, profiles, and analytical store |
 | Subject | Optional patient, donor, organism, cell line, or individual | Links related samples |
-| Sample | Biological, material, or analytical input | Stable sample identity across runs |
-| Run | Computational, import, benchmark, or analysis event | Captures pipeline/tool execution context |
-| Processed sample | A sample within a specific run | Internal `run_sample` grain for comparison and metrics |
+| Sample | Biological or material sample users recognize and navigate | Stable sample identity across runs |
+| Data import | Data entry/audit event | Records how files/results entered Goodomics |
+| Run | Computational, benchmark, or imported analytical result | Captures one result-producing execution or result snapshot |
+| Processed sample | A sample within a specific run | Internal `run_sample` grain for latest-run lookup, comparison, and metrics |
 | File | Original or derived file | Tracks physical evidence and outputs |
 | Data profile | Smallest logical queryable dataset | Declares data type, provenance, and query behavior |
 | Sample set | Saved group of processed samples | General primitive behind cohorts and reference sets |
@@ -33,8 +34,9 @@ Short version:
 
 | Term | Meaning |
 | --- | --- |
-| Sample | What was processed |
-| Run | What happened |
+| Sample | The biological sample users care about |
+| Data import | How data entered Goodomics |
+| Run | Analytical or computational result represented in Goodomics |
 | Processed sample | That sample in that run |
 | Data profile | What kind of data was produced |
 | Observation | A value/call/measurement inside that profile |
@@ -69,7 +71,14 @@ studies.
 
 ### `samples`
 
-The biological, material, or analytical input.
+The stable biological or material sample users recognize. Samples are the
+primary way users interact with biological data: a sample page should be able to
+show the latest run data for that sample while still preserving older runs for
+comparison. The same sample can be processed by many pipelines, rerun by a newer
+pipeline version, or appear in many imports.
+
+Use sample metadata for stable biological context. Use runs and processed
+samples for execution context, tool outputs, and per-run status.
 
 | Column | Notes |
 | --- | --- |
@@ -79,16 +88,56 @@ The biological, material, or analytical input.
 | `sample_name` | Human-readable sample name |
 | `metadata_json` | Sample-level metadata |
 
+### `data_imports`
+
+An audit/provenance record for data entering Goodomics. Every explicit ingest
+path, such as cBioPortal, MultiQC, FastQC, BWA outputs, or user-provided files,
+should create a `data_imports` row. This table answers "how did this data get
+into Goodomics?" without forcing raw imports to masquerade as analytical runs.
+
+| Column | Notes |
+| --- | --- |
+| `data_import_id` | Primary key |
+| `project_id` | Owning project |
+| `source_type` | Source family, such as `cbioportal`, `multiqc`, `fastqc`, `bwa` |
+| `source_uri` | Optional remote/object-store source |
+| `source_path` | Optional local source path |
+| `importer_name` | Goodomics importer/parser name |
+| `importer_version` | Optional importer/parser version |
+| `status` | Import status |
+| `started_at` | Nullable import start timestamp |
+| `ended_at` | Nullable import end timestamp |
+| `parameters_json` | Import parameters/configuration |
+| `summary_json` | Counts and summary information |
+| `metadata_json` | Source-specific provenance metadata |
+| `created_at` | Creation timestamp |
+
 ### `runs`
 
-A computational, import, benchmark, or analysis event.
+A computational, benchmark, or imported analytical result. A run is one
+result-producing execution, result snapshot, notebook analysis, optimization
+attempt, model-training experiment, or imported external result represented
+inside Goodomics.
+
+Runs do not have to correspond to samples. For algorithm optimization,
+benchmarking, model training, or other sample-less work, keep the run without
+`run_samples`. When a run does correspond to biological samples, connect it
+through `run_samples` rather than baking sample identity into the run table
+itself.
+
+For sample-first sources such as cBioPortal, Goodomics creates one
+`data_imports` row plus one imported-result run per biological sample. It does
+not create an extra import-context run. Analytical facts reference the
+per-sample run IDs; source files link back to the `data_imports` row and the
+relevant data profiles.
 
 | Column | Notes |
 | --- | --- |
 | `run_id` | Primary key |
 | `project_id` | Owning project |
+| `data_import_id` | Nullable import that created this run |
 | `name` | Human-readable run name |
-| `run_kind` | Example: `pipeline_run`, `import_run`, `benchmark_run`, `notebook_run` |
+| `run_kind` | Example: `pipeline_run`, `imported_result`, `benchmark_run`, `notebook_run` |
 | `assay` | Nullable assay label |
 | `pipeline_name` | Nullable pipeline/workflow name |
 | `pipeline_version` | Nullable pipeline/workflow version |
@@ -103,7 +152,11 @@ A computational, import, benchmark, or analysis event.
 Internal linker/result table. User-facing wording should usually be
 **processed sample** or **sample result**.
 
-This is the key comparison grain.
+This is the key sample/run comparison grain. A sample can have many processed
+samples across time as users rerun the same pipeline, run new tools, or ingest
+new source data. Latest-run views for a sample should be derived from
+`run_samples` joined to `runs`, usually ordered by run timestamps/status rather
+than stored as a denormalized cache.
 
 | Column | Notes |
 | --- | --- |
@@ -118,21 +171,29 @@ This is the key comparison grain.
 
 ### `data_profiles`
 
-Smallest logical queryable dataset. A data profile declares what kind of data a
-run produced or imported, how it should be queried, and how agents should
-understand it.
+Stable semantic query contracts. A data profile declares what kind of data a
+parser, SDK workflow, or user-defined source writes, how it should be queried,
+and how agents should understand it. Built-in profile IDs are stable across
+projects, runs, samples, and source datasets, so MCP tools and agents can ask
+for `cbioportal:mutations:maf` or `multiqc:qc_metrics` without learning a
+specific import run ID.
 
-A data profile is not the same thing as a metric definition. A profile might be
-`picard_alignment_metrics`; the metrics inside it might be `duplication_rate`,
-`insert_size_mean`, and `mean_coverage`. Keep profile-level provenance and
-query behavior on `data_profiles`, and keep per-metric labels, units,
-directions, and descriptions in `metric_definitions`.
+A data profile is not a dataset instance and is not sample membership. Data
+imports, runs, files, file links, `data_sources`, fact-table `run_id` columns,
+payload metadata, and source metadata carry provenance such as cBioPortal study
+IDs, source filenames, generated import IDs, source `stable_id` values, and
+platform descriptions.
+
+A data profile is also not the same thing as a metric definition. A profile
+might be `multiqc:qc_metrics`; the metrics inside it might be
+`duplication_rate`, `insert_size_mean`, and `mean_coverage`. Keep profile-level
+query behavior and agent descriptions on `data_profiles`, and keep per-metric
+labels, units, directions, and descriptions in `metric_definitions`.
 
 | Column | Notes |
 | --- | --- |
 | `data_profile_id` | Primary key |
-| `project_id` | Owning project |
-| `run_id` | Nullable producing/importing run |
+| `project_id` | Nullable owner for user/project-defined profiles; built-ins are global |
 | `name` | Human-readable profile name |
 | `data_type` | Example: `generic_metrics`, `feature_matrix`, `feature_calls`, `small_variants`, `copy_number_segments` |
 | `assay` | Nullable assay label |
@@ -151,7 +212,9 @@ Examples:
 
 | Data profile | Data type | Producer |
 | --- | --- | --- |
-| `multiqc_qc_metrics` | `generic_metrics` | MultiQC |
+| `multiqc:qc_metrics` | `generic_metrics` | MultiQC |
+| `cbioportal:mutations:maf` | `small_variants` | cBioPortal |
+| `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal |
 | `picard_alignment_metrics` | `generic_metrics` | Picard |
 | `mutect2_somatic_variants` | `small_variants` | Mutect2 |
 | `salmon_gene_tpm` | `feature_matrix` | Salmon |
@@ -184,6 +247,7 @@ nullable ownership columns.
 | --- | --- |
 | `file_id` | Linked file |
 | `project_id` | Owning project |
+| `data_import_id` | Nullable linked data import |
 | `run_id` | Nullable linked run |
 | `run_sample_id` | Nullable linked processed sample |
 | `sample_id` | Nullable linked raw sample |
@@ -487,31 +551,15 @@ metric groups, interval sets, and reference feature universes.
 | `member_role` | Optional role |
 | `metadata_json` | Flexible member metadata |
 
-### `profile_observation_sets`
+### Observed Profile Availability
 
-Records what was profiled or attempted, even when no observation rows exist.
-This table is required for correct `profiled`, `not_profiled`, `missing`, and
-`not_mutated` semantics.
-
-| Column | Notes |
-| --- | --- |
-| `data_profile_key` | Profile this availability record belongs to |
-| `run_id` | Producing/importing run |
-| `run_sample_key` | Processed sample |
-| `sample_key` | Sample shortcut for filtering |
-| `subject_key` | Nullable subject shortcut |
-| `availability_status` | Example: `profiled`, `not_profiled`, `failed`, `not_applicable`, `unknown` |
-| `feature_set_key` | Nullable assayed feature set or gene panel |
-| `source_file_id` | Nullable source file |
-| `missing_reason` | Nullable reason |
-| `metadata_json` | Flexible availability metadata |
-
-Recommended physical layouts:
-
-| Layout | Physical order | Optimized for |
-| --- | --- | --- |
-| Canonical | `run_sample_key, data_profile_key` | Sample/profile availability matrix |
-| By profile | `data_profile_key, availability_status, run_sample_key` | Profile cohorts, profiled/not-profiled counts |
+Goodomics does not maintain a separate sample/profile availability fact table.
+Observed availability is derived from the typed fact tables and
+`profile_payloads`: if a run sample has rows for a `data_profile_key`, that
+profile is observed for that run sample. If a source needs to preserve
+"profiled but no emitted rows" semantics later, add an explicit source-specific
+fact or coverage table for that use case rather than duplicating every
+sample/profile relationship by default.
 
 ### `feature_value_numeric`
 
@@ -835,16 +883,6 @@ Recommended physical layouts:
 | Canonical | `feature_key, alteration_type, data_profile_key, run_sample_key` | Alteration frequency, filters, OncoPrint matrices |
 | By sample | `run_sample_key, feature_key, alteration_type` | Sample detail and sample-centric exports |
 
-### `sample_profile_cache`
-
-UI and MCP convenience cache. Not the analytical source of truth.
-
-| Column | Notes |
-| --- | --- |
-| `run_sample_key` | Processed sample |
-| `profile_summary_json` | Summary of available profiles, metrics, files, and status |
-| `updated_at` | Cache update timestamp |
-
 ### Cohort Summary Tables
 
 Precomputed reference-set and cohort statistics. Start with metric summaries,
@@ -918,13 +956,22 @@ Examples:
 | `P002_Normal_DNA` | `P002` | P002 normal DNA |
 | `P002_Tumor_RNA` | `P002` | P002 tumor RNA |
 
+### Data Imports
+
+| data_import_id | source_type | Notes |
+| --- | --- | --- |
+| `import_wes_batch_042` | `bwa` | Imported WES alignment and variant files |
+| `import_multiqc_rnaseq_042` | `multiqc` | Imported MultiQC report and data payloads |
+| `import_cbioportal_demo` | `cbioportal` | Imported external cBioPortal study snapshot |
+
 ### Runs
 
-| run_id | assay | pipeline_name | pipeline_version |
-| --- | --- | --- | --- |
-| `run_wes_batch_042` | `tumor_normal_wes` | `nf-core/sarek` | `3.5` |
-| `run_rnaseq_batch_042` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.18` |
-| `run_rnaseq_batch_042_rerun` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.19` |
+| run_id | data_import_id | assay | pipeline_name | pipeline_version |
+| --- | --- | --- | --- | --- |
+| `run_wes_batch_042` | `import_wes_batch_042` | `tumor_normal_wes` | `nf-core/sarek` | `3.5` |
+| `run_rnaseq_batch_042` | `import_multiqc_rnaseq_042` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.18` |
+| `run_rnaseq_batch_042_rerun` | null | `bulk_rnaseq` | `nf-core/rnaseq` | `3.19` |
+| `import_cbioportal_demo:TCGA-A` | `import_cbioportal_demo` | `external_oncology` | cBioPortal | null |
 
 ### Processed Samples
 
@@ -941,14 +988,13 @@ Examples:
 
 ### Data Profiles
 
-| data_profile_id | data_type | producer_tool | run_id | Notes |
-| --- | --- | --- | --- | --- |
-| `sarek_multiqc_qc_metrics` | `generic_metrics` | MultiQC | `run_wes_batch_042` | WES QC metrics |
-| `mutect2_somatic_variants` | `small_variants` | Mutect2 | `run_wes_batch_042` | Somatic SNV/indel calls |
-| `bwa_alignment_files` | `alignment_files` | BWA | `run_wes_batch_042` | BAM/BAI alignment files |
-| `rnaseq_multiqc_qc_metrics_v318` | `generic_metrics` | MultiQC | `run_rnaseq_batch_042` | RNA-seq QC metrics |
-| `salmon_gene_tpm_v318` | `feature_matrix` | Salmon | `run_rnaseq_batch_042` | Gene TPM profile |
-| `salmon_gene_tpm_v319` | `feature_matrix` | Salmon | `run_rnaseq_batch_042_rerun` | Gene TPM profile from rerun |
+| data_profile_id | data_type | producer_tool | Notes |
+| --- | --- | --- | --- |
+| `multiqc:qc_metrics` | `generic_metrics` | MultiQC | Built-in QC metric contract reused across runs |
+| `cbioportal:mutations:maf` | `small_variants` | cBioPortal | Built-in cBioPortal mutation contract |
+| `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal | Built-in segment-level CNA contract |
+| `goodomics:sdk_metrics` | `generic_metrics` | goodomics-sdk | Native SDK metric contract |
+| `project_rnaseq:salmon_gene_tpm` | `feature_matrix` | Salmon | Example project-defined profile |
 
 ### Files
 
@@ -958,7 +1004,7 @@ Examples:
 | `P001_T.bam.bai` | `bai` | `bwa_alignment_files` |
 | `P001.mutect2.vcf.gz` | `vcf` | `mutect2_somatic_variants` |
 | `P001.mutect2.vcf.gz.tbi` | `tbi` | `mutect2_somatic_variants` |
-| `multiqc_report.html` | `report` | `rnaseq_multiqc_qc_metrics_v318` |
+| `multiqc_report.html` | `report` | `multiqc:qc_metrics` |
 | `P001_salmon_quant.sf` | `expression_table` | `salmon_gene_tpm_v318` |
 | `P002_salmon_quant.sf` | `expression_table` | `salmon_gene_tpm_v318` |
 
@@ -966,8 +1012,8 @@ Examples:
 
 | data_profile_id | run_sample_id | metric | value |
 | --- | --- | --- | --- |
-| `rnaseq_multiqc_qc_metrics_v318` | `run_rnaseq_batch_042:P001_Tumor_RNA` | `pct_mapped` | `91.2` |
-| `rnaseq_multiqc_qc_metrics_v319` | `run_rnaseq_batch_042_rerun:P001_Tumor_RNA` | `pct_mapped` | `93.8` |
+| `multiqc:qc_metrics` | `run_rnaseq_batch_042:P001_Tumor_RNA` | `pct_mapped` | `91.2` |
+| `multiqc:qc_metrics` | `run_rnaseq_batch_042_rerun:P001_Tumor_RNA` | `pct_mapped` | `93.8` |
 
 ### Example Numeric Feature Observations
 

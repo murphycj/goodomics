@@ -9,7 +9,7 @@ from uuid import uuid4
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -37,6 +37,7 @@ from goodomics.server.db.models import (
 )
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataImportRecord,
     DataProfileRecord,
     FileLinkRecord,
     FileRecord,
@@ -147,7 +148,13 @@ class SearchResultRead(SQLModel):
 class FileRead(SQLModel):
     file_id: str
     project_id: str | None = None
+    data_import_id: str | None = None
     run_id: str | None = None
+    run_sample_id: str | None = None
+    sample_id: str | None = None
+    data_profile_id: str | None = None
+    association_scope: str = "direct_run"
+    association_reason: str | None = None
     kind: str = "file"
     path: str | None = None
     uri: str | None = None
@@ -313,6 +320,7 @@ CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
     "samples": (SampleRecord, "sample_id"),
     "runs": (RunRecord, "run_id"),
     "run_samples": (RunSampleRecord, "run_sample_id"),
+    "data_imports": (DataImportRecord, "data_import_id"),
     "data_profiles": (DataProfileRecord, "data_profile_id"),
     "files": (FileRecord, "file_id"),
     "file_links": (FileLinkRecord, "id"),
@@ -549,6 +557,43 @@ async def list_project_sample_runs(
 
 
 @router.get(
+    "/projects/{project_id}/samples/{sample_id}/files",
+    response_model=list[FileRead],
+)
+async def list_project_sample_files(
+    project_id: str,
+    sample_id: str,
+    request: Request,
+) -> list[FileRead]:
+    await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        await _require_project_sample(session, project_id, sample_id)
+        latest = await _latest_sample_run(session, project_id, sample_id)
+    if latest is None:
+        return []
+    run, _ = latest
+    return await _list_run_files(run.run_id, request, project_id=project_id)
+
+
+@router.get(
+    "/projects/{project_id}/samples/{sample_id}/runs/{run_id}/files",
+    response_model=list[FileRead],
+)
+async def list_project_sample_run_files(
+    project_id: str,
+    sample_id: str,
+    run_id: str,
+    request: Request,
+) -> list[FileRead]:
+    await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        await _get_sample_run_link(session, project_id, sample_id, run_id)
+    return await _list_run_files(run_id, request, project_id=project_id)
+
+
+@router.get(
     "/projects/{project_id}/samples/{sample_id}/runs/{run_id}/analytics/metrics",
     response_model=list[AnalyticsMetricRead],
 )
@@ -768,17 +813,62 @@ async def _list_run_files(
     run_id: str, request: Request, *, project_id: str | None = None
 ) -> list[FileRead]:
     await _ensure_schema(request)
-    statement = (
-        select(FileRecord, FileLinkRecord)
-        .join(FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.file_id)
-        .where(FileLinkRecord.run_id == run_id)
-        .order_by(FileRecord.file_id)
-    )
-    if project_id is not None:
-        statement = statement.where(FileLinkRecord.project_id == project_id)
     async with _session(request) as session:
-        rows = (await session.exec(statement)).all()
-    return [_file_from_rows(file, link) for file, link in rows]
+        run = await session.get(RunRecord, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if project_id is not None and run.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Run not found")
+        direct_statement = (
+            select(FileRecord, FileLinkRecord)
+            .join(
+                FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.file_id
+            )
+            .where(FileLinkRecord.run_id == run_id)
+            .order_by(FileRecord.file_id)
+        )
+        if project_id is not None:
+            direct_statement = direct_statement.where(
+                FileLinkRecord.project_id == project_id
+            )
+        rows = [
+            _file_from_rows(
+                file,
+                link,
+                association_scope="direct_run",
+                association_reason="File directly linked to this run.",
+            )
+            for file, link in (await session.exec(direct_statement)).all()
+        ]
+        if run.data_import_id is not None:
+            import_statement = (
+                select(FileRecord, FileLinkRecord)
+                .join(
+                    FileLinkRecord,
+                    cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                )
+                .where(
+                    FileLinkRecord.data_import_id == run.data_import_id,
+                    cast(Any, FileLinkRecord.run_id).is_(None),
+                )
+                .order_by(FileRecord.file_id)
+            )
+            if project_id is not None:
+                import_statement = import_statement.where(
+                    FileLinkRecord.project_id == project_id
+                )
+            rows.extend(
+                _file_from_rows(
+                    file,
+                    link,
+                    association_scope="data_import",
+                    association_reason=(
+                        "Source file from the data import that produced this run."
+                    ),
+                )
+                for file, link in (await session.exec(import_statement)).all()
+            )
+    return _dedupe_file_reads(rows)
 
 
 @router.get(
@@ -1638,7 +1728,18 @@ async def _catalog_table_page(
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
-    if project_id is not None and "project_id" in model.model_fields:
+    if (
+        project_id is not None
+        and table_name == "data_profiles"
+        and "project_id" in model.model_fields
+    ):
+        count_statement = count_statement.where(
+            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+        )
+        row_statement = row_statement.where(
+            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+        )
+    elif project_id is not None and "project_id" in model.model_fields:
         count_statement = count_statement.where(model_any.project_id == project_id)
         row_statement = row_statement.where(model_any.project_id == project_id)
     elif project_run_ids is not None and "run_id" in model.model_fields:
@@ -1675,7 +1776,18 @@ async def _control_table_counts(
         for name, (model, _) in CATALOG_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
-            if project_id is not None and "project_id" in model.model_fields:
+            if (
+                project_id is not None
+                and name == "data_profiles"
+                and "project_id" in model.model_fields
+            ):
+                statement = statement.where(
+                    or_(
+                        model_any.project_id == project_id,
+                        model_any.project_id.is_(None),
+                    )
+                )
+            elif project_id is not None and "project_id" in model.model_fields:
                 statement = statement.where(model_any.project_id == project_id)
             elif project_run_ids is not None and "run_id" in model.model_fields:
                 statement = statement.where(model_any.run_id.in_(project_run_ids))
@@ -1800,14 +1912,26 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     return data
 
 
-def _file_from_rows(file: FileRecord, link: FileLinkRecord | None = None) -> FileRead:
+def _file_from_rows(
+    file: FileRecord,
+    link: FileLinkRecord | None = None,
+    *,
+    association_scope: str = "direct_run",
+    association_reason: str | None = None,
+) -> FileRead:
     metadata_value = file.metadata_json
     metadata = metadata_value if isinstance(metadata_value, dict) else {}
     source_path = metadata.get("source_path")
     return FileRead(
         file_id=file.file_id,
         project_id=file.project_id,
+        data_import_id=link.data_import_id if link is not None else None,
         run_id=link.run_id if link is not None else None,
+        run_sample_id=link.run_sample_id if link is not None else None,
+        sample_id=link.sample_id if link is not None else None,
+        data_profile_id=link.data_profile_id if link is not None else None,
+        association_scope=association_scope,
+        association_reason=association_reason,
         kind=file.file_role,
         path=file.path,
         uri=file.uri,
@@ -1816,6 +1940,24 @@ def _file_from_rows(file: FileRecord, link: FileLinkRecord | None = None) -> Fil
         source_path=source_path if isinstance(source_path, str) else None,
         created_at=file.created_at,
     )
+
+
+def _dedupe_file_reads(files: list[FileRead]) -> list[FileRead]:
+    by_file_id: dict[str, FileRead] = {}
+    for file in files:
+        existing = by_file_id.get(file.file_id)
+        if existing is None or _file_read_rank(file) > _file_read_rank(existing):
+            by_file_id[file.file_id] = file
+    return sorted(by_file_id.values(), key=lambda item: item.file_id)
+
+
+def _file_read_rank(file: FileRead) -> tuple[int, int]:
+    scope_rank = {"direct_run": 3, "direct_sample": 3, "data_import": 2}.get(
+        file.association_scope,
+        1,
+    )
+    profile_rank = 1 if file.data_profile_id is not None else 0
+    return scope_rank, profile_rank
 
 
 def _model_field_name(model: type[SQLModel], requested_name: str) -> str:

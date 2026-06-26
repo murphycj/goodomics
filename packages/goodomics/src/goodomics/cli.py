@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from goodomics.ingest.runner import IngestType, print_ingest_result, run_ingest
+from goodomics.ingest.runner import print_ingest_result, run_ingest
 from goodomics.report.html import load_report_template, write_report
 from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.storage.database import resolve_database_url
@@ -57,9 +57,10 @@ TEMPLATE_OPTION = typer.Option(
 PROJECT_OPTION = typer.Option(None, "--project", "-p")
 ASSAY_OPTION = typer.Option(None, "--assay", "-a")
 INGEST_TYPE_OPTION = typer.Option(
-    IngestType.multiqc,
+    "multiqc",
     "--type",
     "-t",
+    # Registry validation keeps this option open to package-provided sources.
     help="Input type to ingest.",
 )
 REPORT_OPTION = typer.Option(None, "--report", "-r")
@@ -112,7 +113,7 @@ def _configure_cli_logging(log_level: LogLevel | str) -> None:
 @app.command(name="__default__", hidden=True)
 def default_ingest(
     results: Path = RESULTS_ARGUMENT,
-    ingest_type: IngestType = INGEST_TYPE_OPTION,
+    ingest_type: str = INGEST_TYPE_OPTION,
     project: str | None = PROJECT_OPTION,
     assay: str | None = ASSAY_OPTION,
     run_id: str | None = RUN_ID_OPTION,
@@ -158,7 +159,7 @@ def report(
 @app.command()
 def ingest(
     results: Path = RESULTS_ARGUMENT,
-    ingest_type: IngestType = INGEST_TYPE_OPTION,
+    ingest_type: str = INGEST_TYPE_OPTION,
     project: str | None = PROJECT_OPTION,
     assay: str | None = ASSAY_OPTION,
     report_name: str | None = REPORT_OPTION,

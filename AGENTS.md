@@ -10,8 +10,8 @@ operational, and focused on how to work in the repo.
   trust boundaries.
 - Use `instructions/DATA_MODEL.md` for data model terminology and schema
   direction, including projects, runs, samples, subjects, processed samples /
-  `run_samples`, files, data profiles, observations, SQL control tables, DuckDB
-  analytical tables, and MCP/data-query concepts.
+  `run_samples`, data imports, files, data profiles, observations, SQL control
+  tables, DuckDB analytical tables, and MCP/data-query concepts.
 - Do not duplicate product or data model briefs here. If product strategy
   changes, update `instructions/PRODUCT.md`; if data model direction changes,
   update `instructions/DATA_MODEL.md`.
@@ -26,6 +26,11 @@ operational, and focused on how to work in the repo.
 - Main CLI entry point: `packages/goodomics/src/goodomics/cli.py`.
 - Core schemas, parsing, ingest, reporting, SDK, and storage live under
   `packages/goodomics/src/goodomics/`.
+- Parser modules should be flat, descriptive files under
+  `packages/goodomics/src/goodomics/parsers/`, such as `cbioportal.py` or
+  `multiqc.py`. Do not create nested parser packages with generic names like
+  `parsers/<source>/parser.py` unless a parser genuinely needs multiple
+  source-specific modules.
 - API, MCP, server settings, and dashboard serving live under
   `packages/goodomics/src/goodomics/server/`.
 - React/Vite dashboard source lives in `packages/goodomics/dashboard/`.
@@ -80,10 +85,15 @@ docker build -f docker/Dockerfile.server -t goodomics/server:local .
 Use `uv run pytest` as the main verification command for Python changes. For
 packaging or CLI changes, also run Ruff, Pyright, and both package builds when
 feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
-For documentation changes, run `uv run mkdocs build` when feasible.
+For documentation changes, and for CLI or user-facing SDK/API changes that
+should update docs, run `uv run mkdocs build` when feasible.
 
 ## Coding Style
 
+- The app has not been deployed anywhere yet. For code changes, do not add
+  database migrations, backwards compatibility layers, compatibility shims, or
+  migration strategy docs unless the user explicitly asks for them. Prefer
+  directly updating the current schema, models, tests, fixtures, and docs.
 - Use Ruff as the canonical Python formatter and linter. Prefer
   `uv run ruff format .` for formatting and `uv run ruff check --fix .` for
   safe lint fixes before committing Python changes.
@@ -95,9 +105,10 @@ For documentation changes, run `uv run mkdocs build` when feasible.
 - Prefer readable structure over dense expressions: split complex conditions,
   payload construction, or nested transformations into named intermediate values
   when that makes the code easier to scan.
-- Add lightweight, high-signal comments in Python and React code when logic is
-  non-obvious, crosses trust boundaries, or encodes important constraints; avoid
-  noisy comments that restate the code.
+- Add docstrings or lightweight comments for public APIs, parser/ingest helpers,
+  storage boundaries, non-trivial transformations, trust boundaries, and
+  important constraints; skip obvious one-line helpers and comments that merely
+  restate the code.
 
 ## Documentation Guidelines
 
@@ -108,6 +119,9 @@ For documentation changes, run `uv run mkdocs build` when feasible.
 - Keep model definitions and shared product concepts in the canonical
   `goodomics` package; server code should consume shared schemas/storage rather
   than defining parallel concepts when practical.
+- When changing CLI behavior, CLI flags, user-facing SDK APIs, custom parser
+  APIs, or other user-facing Python interfaces, update the MkDocs documentation
+  in `docs/` and `mkdocs.yml` in the same change when relevant.
 - Use concrete, technical, approachable copy. Avoid generic SaaS language.
 - Do not rewrite unrelated copy, assets, formatting, lockfiles, generated
   dashboard assets, or docs.
