@@ -27,7 +27,7 @@ from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
 
 @dataclass(frozen=True)
 class CbioPortalIngestResult:
-    run_id: str
+    data_import_id: str
     runs_ingested: int
     profiles_ingested: int
     subjects_ingested: int
@@ -43,7 +43,7 @@ class CbioPortalIngestResult:
 def ingest_cbioportal_study(
     root: Path,
     *,
-    run_id: str | None = None,
+    data_import_id: str | None = None,
     project: str | None = None,
     assay: str | None = None,
     database_url: str = DEFAULT_DATABASE_URL,
@@ -65,19 +65,18 @@ def ingest_cbioportal_study(
         update_progress("Resolving project")
         catalog_store = SQLModelGoodomicsStore(database_url)
         project_record = asyncio.run(catalog_store.ensure_project(project))
-        generated_run_id = (
+        resolved_data_import_id = (
             f"{_study_identifier(root)}:{uuid4().hex[:12]}"
-            if run_id is None
-            else run_id
+            if data_import_id is None
+            else data_import_id
         )
 
         update_progress("Parsing cBioPortal study", completed=1)
         parsed = parse_cbioportal_study(
             root,
-            run_id=generated_run_id,
+            data_import_id=resolved_data_import_id,
             project_id=project_record.project_id,
             assay=assay,
-            sample_scoped_runs=run_id is None,
         )
         total_steps = 4 + len(parsed.bulk_loads)
         if progress is not None and task_id is not None:
@@ -87,6 +86,7 @@ def ingest_cbioportal_study(
         asyncio.run(
             catalog_store.replace_runs_catalog(
                 parsed.all_runs,
+                data_import=parsed.data_import,
                 subjects=parsed.subjects,
                 samples=parsed.samples,
                 run_samples=parsed.run_samples,
@@ -116,12 +116,15 @@ def ingest_cbioportal_study(
         DuckDBAnalyticsStore(resolved_analytics_path).write_batch_with_bulk_loads(
             parsed.analytics_batch,
             parsed.bulk_loads,
-            replace_run_ids=[run.run_id for run in parsed.all_runs],
+            replace_run_ids=[
+                resolved_data_import_id,
+                *[run.run_id for run in parsed.all_runs],
+            ],
             bulk_load_progress=bulk_load_progress if progress is not None else None,
         )
         update_progress("cBioPortal ingest complete", completed=total_steps)
         return CbioPortalIngestResult(
-            run_id=parsed.run.run_id,
+            data_import_id=resolved_data_import_id,
             runs_ingested=len(parsed.all_runs),
             profiles_ingested=len(parsed.data_profiles),
             subjects_ingested=len(parsed.subjects),

@@ -59,6 +59,7 @@ class Run(MutableGoodomicsModel):
 
     run_id: str
     project_id: str | None = None
+    data_import_id: str | None = None
     project: str | None = None
     name: str | None = None
     run_kind: str = "pipeline_run"
@@ -112,6 +113,25 @@ class DataProfile(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
+class DataImport(GoodomicsModel):
+    """Audit record for data entering Goodomics from an external source."""
+
+    data_import_id: str
+    project_id: str | None = None
+    source_type: str
+    source_uri: str | None = None
+    source_path: str | None = None
+    importer_name: str
+    importer_version: str | None = None
+    status: str = "complete"
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    parameters_json: JsonObject = Field(default_factory=dict)
+    summary_json: JsonObject = Field(default_factory=dict)
+    metadata_json: JsonObject = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class FileAsset(GoodomicsModel):
     """File-level asset tracked by Goodomics control storage."""
 
@@ -128,10 +148,11 @@ class FileAsset(GoodomicsModel):
 
 
 class FileLink(GoodomicsModel):
-    """Associates a file with runs, samples, run samples, or data profiles."""
+    """Associates a file with imports, runs, samples, or data profiles."""
 
     file_id: str
     project_id: str | None = None
+    data_import_id: str | None = None
     run_id: str | None = None
     run_sample_id: str | None = None
     sample_id: str | None = None

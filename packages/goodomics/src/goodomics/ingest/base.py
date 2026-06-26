@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    DataImport,
     DataProfile,
     FileAsset,
     FileLink,
@@ -35,6 +36,7 @@ class AnalyticsBulkLoad(Protocol):
 class NormalizedIngestResult:
     run: Run
     runs: list[Run] = field(default_factory=list)
+    data_import: DataImport | None = None
     subjects: list[Subject] = field(default_factory=list)
     samples: list[Sample] = field(default_factory=list)
     run_samples: list[RunSample] = field(default_factory=list)
