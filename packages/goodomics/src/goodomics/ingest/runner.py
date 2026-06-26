@@ -45,7 +45,7 @@ def run_ingest(
                 results,
                 project=project,
                 assay=assay,
-                run_id=run_id,
+                data_import_id=run_id,
                 database_url=resolved_database_url,
                 analytics_path=analytics_path,
                 show_progress=show_progress,
@@ -93,6 +93,7 @@ def _print_multiqc_ingest_results(
         console.print(
             {
                 "run_id": result.run_id,
+                "data_import_id": result.data_import_id,
                 "outputs_found": result.outputs_found,
                 "metrics_ingested": result.metrics_ingested,
                 "payloads_ingested": result.payloads_ingested,
@@ -109,14 +110,16 @@ def _print_cbioportal_ingest_result(
     console: Console,
 ) -> None:
     if result.runs_ingested == 1:
-        console.print(f"Ingested cBioPortal run [bold]{result.run_id}[/bold]")
+        console.print(
+            f"Ingested cBioPortal import [bold]{result.data_import_id}[/bold]"
+        )
     else:
         console.print(
             f"Ingested [bold]{result.runs_ingested}[/bold] cBioPortal sample runs"
         )
     console.print(
         {
-            "run_id": result.run_id,
+            "data_import_id": result.data_import_id,
             "runs_ingested": result.runs_ingested,
             "profiles_ingested": result.profiles_ingested,
             "subjects_ingested": result.subjects_ingested,
