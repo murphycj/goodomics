@@ -10,8 +10,8 @@ operational, and focused on how to work in the repo.
   trust boundaries.
 - Use `instructions/DATA_MODEL.md` for data model terminology and schema
   direction, including projects, runs, samples, subjects, processed samples /
-  `run_samples`, files, data profiles, observations, SQL control tables, DuckDB
-  analytical tables, and MCP/data-query concepts.
+  `run_samples`, data imports, files, data profiles, observations, SQL control
+  tables, DuckDB analytical tables, and MCP/data-query concepts.
 - Do not duplicate product or data model briefs here. If product strategy
   changes, update `instructions/PRODUCT.md`; if data model direction changes,
   update `instructions/DATA_MODEL.md`.

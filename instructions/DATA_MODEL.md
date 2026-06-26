@@ -2,8 +2,8 @@
 
 This file is the source of truth for Goodomics data model terminology and
 schema-direction discussions. Use it when working on core data concepts, table
-shapes, SQL vs DuckDB responsibilities, data profiles, processed samples, files,
-observations, and agent/MCP data-query behavior.
+shapes, SQL vs DuckDB responsibilities, data imports, data profiles, processed
+samples, files, observations, and agent/MCP data-query behavior.
 
 The guiding split:
 
@@ -19,7 +19,8 @@ The guiding split:
 | Project | Workspace or data boundary | Owns runs, samples, files, sample sets, profiles, and analytical store |
 | Subject | Optional patient, donor, organism, cell line, or individual | Links related samples |
 | Sample | Biological or material sample users recognize and navigate | Stable sample identity across runs |
-| Run | Computational, import, benchmark, or analysis event | Captures one execution or iteration; may be sample-linked or sample-less |
+| Data import | Data entry/audit event | Records how files/results entered Goodomics |
+| Run | Computational, benchmark, or imported analytical result | Captures one result-producing execution or result snapshot |
 | Processed sample | A sample within a specific run | Internal `run_sample` grain for latest-run lookup, comparison, and metrics |
 | File | Original or derived file | Tracks physical evidence and outputs |
 | Data profile | Smallest logical queryable dataset | Declares data type, provenance, and query behavior |
@@ -34,7 +35,8 @@ Short version:
 | Term | Meaning |
 | --- | --- |
 | Sample | The biological sample users care about |
-| Run | What happened to, from, or independently of samples |
+| Data import | How data entered Goodomics |
+| Run | Analytical or computational result represented in Goodomics |
 | Processed sample | That sample in that run |
 | Data profile | What kind of data was produced |
 | Observation | A value/call/measurement inside that profile |
@@ -86,11 +88,36 @@ samples for execution context, tool outputs, and per-run status.
 | `sample_name` | Human-readable sample name |
 | `metadata_json` | Sample-level metadata |
 
+### `data_imports`
+
+An audit/provenance record for data entering Goodomics. Every explicit ingest
+path, such as cBioPortal, MultiQC, FastQC, BWA outputs, or user-provided files,
+should create a `data_imports` row. This table answers "how did this data get
+into Goodomics?" without forcing raw imports to masquerade as analytical runs.
+
+| Column | Notes |
+| --- | --- |
+| `data_import_id` | Primary key |
+| `project_id` | Owning project |
+| `source_type` | Source family, such as `cbioportal`, `multiqc`, `fastqc`, `bwa` |
+| `source_uri` | Optional remote/object-store source |
+| `source_path` | Optional local source path |
+| `importer_name` | Goodomics importer/parser name |
+| `importer_version` | Optional importer/parser version |
+| `status` | Import status |
+| `started_at` | Nullable import start timestamp |
+| `ended_at` | Nullable import end timestamp |
+| `parameters_json` | Import parameters/configuration |
+| `summary_json` | Counts and summary information |
+| `metadata_json` | Source-specific provenance metadata |
+| `created_at` | Creation timestamp |
+
 ### `runs`
 
-A computational, import, benchmark, or analysis event. A run is one execution or
-iteration: a pipeline run, cBioPortal import slice, notebook analysis,
-optimization attempt, model-training experiment, or other produced result.
+A computational, benchmark, or imported analytical result. A run is one
+result-producing execution, result snapshot, notebook analysis, optimization
+attempt, model-training experiment, or imported external result represented
+inside Goodomics.
 
 Runs do not have to correspond to samples. For algorithm optimization,
 benchmarking, model training, or other sample-less work, keep the run without
@@ -98,17 +125,19 @@ benchmarking, model training, or other sample-less work, keep the run without
 through `run_samples` rather than baking sample identity into the run table
 itself.
 
-For sample-first imports such as cBioPortal, Goodomics may create one import
-context run that owns shared source-file provenance plus one sample-scoped run
-per biological sample. Analytical facts then reference the sample-scoped run ID,
-while shared source files can remain linked to the import context run.
+For sample-first sources such as cBioPortal, Goodomics creates one
+`data_imports` row plus one imported-result run per biological sample. It does
+not create an extra import-context run. Analytical facts reference the
+per-sample run IDs; source files link back to the `data_imports` row and the
+relevant data profiles.
 
 | Column | Notes |
 | --- | --- |
 | `run_id` | Primary key |
 | `project_id` | Owning project |
+| `data_import_id` | Nullable import that created this run |
 | `name` | Human-readable run name |
-| `run_kind` | Example: `pipeline_run`, `import_run`, `benchmark_run`, `notebook_run` |
+| `run_kind` | Example: `pipeline_run`, `imported_result`, `benchmark_run`, `notebook_run` |
 | `assay` | Nullable assay label |
 | `pipeline_name` | Nullable pipeline/workflow name |
 | `pipeline_version` | Nullable pipeline/workflow version |
@@ -149,11 +178,11 @@ projects, runs, samples, and source datasets, so MCP tools and agents can ask
 for `cbioportal:mutations:maf` or `multiqc:qc_metrics` without learning a
 specific import run ID.
 
-A data profile is not a dataset instance and is not sample membership. Runs,
-files, file links, `data_sources`, fact-table `run_id` columns, payload
-metadata, and source metadata carry provenance such as cBioPortal study IDs,
-source filenames, generated import IDs, source `stable_id` values, and platform
-descriptions.
+A data profile is not a dataset instance and is not sample membership. Data
+imports, runs, files, file links, `data_sources`, fact-table `run_id` columns,
+payload metadata, and source metadata carry provenance such as cBioPortal study
+IDs, source filenames, generated import IDs, source `stable_id` values, and
+platform descriptions.
 
 A data profile is also not the same thing as a metric definition. A profile
 might be `multiqc:qc_metrics`; the metrics inside it might be
@@ -218,6 +247,7 @@ nullable ownership columns.
 | --- | --- |
 | `file_id` | Linked file |
 | `project_id` | Owning project |
+| `data_import_id` | Nullable linked data import |
 | `run_id` | Nullable linked run |
 | `run_sample_id` | Nullable linked processed sample |
 | `sample_id` | Nullable linked raw sample |
@@ -926,13 +956,22 @@ Examples:
 | `P002_Normal_DNA` | `P002` | P002 normal DNA |
 | `P002_Tumor_RNA` | `P002` | P002 tumor RNA |
 
+### Data Imports
+
+| data_import_id | source_type | Notes |
+| --- | --- | --- |
+| `import_wes_batch_042` | `bwa` | Imported WES alignment and variant files |
+| `import_multiqc_rnaseq_042` | `multiqc` | Imported MultiQC report and data payloads |
+| `import_cbioportal_demo` | `cbioportal` | Imported external cBioPortal study snapshot |
+
 ### Runs
 
-| run_id | assay | pipeline_name | pipeline_version |
-| --- | --- | --- | --- |
-| `run_wes_batch_042` | `tumor_normal_wes` | `nf-core/sarek` | `3.5` |
-| `run_rnaseq_batch_042` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.18` |
-| `run_rnaseq_batch_042_rerun` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.19` |
+| run_id | data_import_id | assay | pipeline_name | pipeline_version |
+| --- | --- | --- | --- | --- |
+| `run_wes_batch_042` | `import_wes_batch_042` | `tumor_normal_wes` | `nf-core/sarek` | `3.5` |
+| `run_rnaseq_batch_042` | `import_multiqc_rnaseq_042` | `bulk_rnaseq` | `nf-core/rnaseq` | `3.18` |
+| `run_rnaseq_batch_042_rerun` | null | `bulk_rnaseq` | `nf-core/rnaseq` | `3.19` |
+| `import_cbioportal_demo:TCGA-A` | `import_cbioportal_demo` | `external_oncology` | cBioPortal | null |
 
 ### Processed Samples
 
