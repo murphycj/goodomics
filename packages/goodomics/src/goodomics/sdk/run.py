@@ -7,10 +7,10 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from goodomics.data_profiles import GOODOMICS_SDK_METRICS, built_in_data_profile
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    DataProfile,
     MetricDefinition,
     Run,
     RunSample,
@@ -96,7 +96,7 @@ class GoodomicsRun:
         data_profile_key: str | None = None,
     ) -> AnalyticsIngestBatch:
         resolved_run_id = run_id or self.name
-        resolved_profile_key = data_profile_key or f"{resolved_run_id}:sdk_metrics"
+        resolved_profile_key = data_profile_key or GOODOMICS_SDK_METRICS
         definitions: dict[str, MetricDefinition] = {}
         numeric_values: list[SampleMetricNumeric] = []
         string_values: list[SampleMetricString] = []
@@ -179,19 +179,11 @@ class GoodomicsRun:
             )
             for sample_id in sample_ids
         ]
-        data_profile_key = f"{run_id}:sdk_metrics"
+        data_profile_key = GOODOMICS_SDK_METRICS
         data_profiles = (
             [
-                DataProfile(
-                    data_profile_id=data_profile_key,
-                    project_id=project.project_id,
-                    run_id=run_id,
-                    name="SDK metrics",
-                    data_type="generic_metrics",
-                    assay=self.assay,
-                    producer_tool="goodomics-sdk",
-                    value_type="mixed",
-                    query_modes_json={"sample_metrics": True},
+                built_in_data_profile(data_profile_key).model_copy(
+                    update={"assay": self.assay}
                 )
             ]
             if self.metrics

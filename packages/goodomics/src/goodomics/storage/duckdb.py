@@ -32,13 +32,11 @@ from goodomics.schemas.models import (
     GeneAlterationState,
     GenomicInterval,
     MetricDefinition,
-    ProfileObservationSet,
     ProfilePayload,
     SampleIntervalValue,
     SampleMetricJson,
     SampleMetricNumeric,
     SampleMetricString,
-    SampleProfileCache,
     SampleStructuralVariantCall,
     SampleVariantCall,
     StructuralVariantEvent,
@@ -296,12 +294,6 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         unique_columns=("feature_set_key", "feature_key"),
     ),
     AnalyticalTableSerializer(
-        "profile_observation_sets",
-        ProfileObservationSet,
-        "run_sample_key, data_profile_key",
-        run_column="run_id",
-    ),
-    AnalyticalTableSerializer(
         "feature_value_numeric",
         FeatureValueNumeric,
         "data_profile_key, feature_key, run_sample_key",
@@ -394,12 +386,6 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         "feature_key, alteration_type, data_profile_key, run_sample_key",
     ),
     AnalyticalTableSerializer(
-        "sample_profile_cache",
-        SampleProfileCache,
-        "run_sample_key",
-        unique_columns=("run_sample_key",),
-    ),
-    AnalyticalTableSerializer(
         "cohort_summaries",
         CohortSummary,
         "sample_set_id, data_profile_key, metric_key, feature_key",
@@ -474,17 +460,6 @@ class DuckDBAnalyticsStore:
                     # natural key deletion below.
                     for serializer in RUN_SCOPED_TABLES:
                         serializer.delete_run(connection, run_id)
-                    connection.execute(
-                        """
-                        DELETE FROM gene_alteration_state
-                        WHERE run_sample_key IN (
-                            SELECT DISTINCT run_sample_key
-                            FROM profile_observation_sets
-                            WHERE run_id = ?
-                        )
-                        """,
-                        [run_id],
-                    )
 
                 for serializer in SERIALIZERS:
                     records = serializer.records_from_batch(validated)
@@ -501,9 +476,6 @@ class DuckDBAnalyticsStore:
                         else None
                     )
                     self._refresh_gene_alteration_state(
-                        connection, run_id=refresh_run_id
-                    )
-                    self._refresh_sample_profile_cache(
                         connection, run_id=refresh_run_id
                     )
                 connection.commit()
@@ -534,7 +506,6 @@ class DuckDBAnalyticsStore:
                     else None
                 )
                 self._refresh_gene_alteration_state(connection, run_id=refresh_run_id)
-                self._refresh_sample_profile_cache(connection, run_id=refresh_run_id)
             return
 
         self.ensure_schema()
@@ -552,7 +523,6 @@ class DuckDBAnalyticsStore:
                     else None
                 )
                 self._refresh_gene_alteration_state(connection, run_id=refresh_run_id)
-                self._refresh_sample_profile_cache(connection, run_id=refresh_run_id)
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -891,45 +861,6 @@ class DuckDBAnalyticsStore:
             parameters,
         )
 
-    def _refresh_sample_profile_cache(
-        self, connection: duckdb.DuckDBPyConnection, *, run_id: str | None
-    ) -> None:
-        if run_id is None:
-            connection.execute("DELETE FROM sample_profile_cache")
-            run_filter = "WHERE TRUE"
-            parameters: list[str] = []
-        else:
-            connection.execute(
-                """
-                DELETE FROM sample_profile_cache
-                WHERE run_sample_key IN (
-                    SELECT DISTINCT run_sample_key
-                    FROM profile_observation_sets
-                    WHERE run_id = ?
-                )
-                """,
-                [run_id],
-            )
-            run_filter = "WHERE run_id = ?"
-            parameters = [run_id]
-
-        connection.execute(
-            f"""
-            INSERT INTO sample_profile_cache
-            SELECT
-                run_sample_key,
-                json_object(
-                    'profiles', list(data_profile_key),
-                    'availability', list(availability_status)
-                ) AS profile_summary_json,
-                current_timestamp AS updated_at
-            FROM profile_observation_sets
-            {run_filter}
-            GROUP BY run_sample_key
-            """,
-            parameters,
-        )
-
 
 def validate_records(
     table_name: str,
@@ -1021,5 +952,4 @@ def _is_json_column(column: str) -> bool:
         "annotation_json",
         "metadata_json",
         "schema_json",
-        "profile_summary_json",
     }

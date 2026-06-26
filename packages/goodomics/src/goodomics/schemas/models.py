@@ -93,11 +93,10 @@ class RunSample(GoodomicsModel):
 
 
 class DataProfile(GoodomicsModel):
-    """Describes one analytical data layer produced by a run."""
+    """Describes a stable semantic analytical data layer."""
 
     data_profile_id: str
     project_id: str | None = None
-    run_id: str | None = None
     name: str
     data_type: str
     assay: str | None = None
@@ -325,23 +324,6 @@ class FeatureSetMember(AnalyticalRecord):
     feature_set_key: str
     feature_key: str
     member_role: str | None = None
-    metadata_json: JsonObject = Field(default_factory=dict)
-
-
-class ProfileObservationSet(AnalyticalRecord):
-    """Records whether a data profile was observed for a processed sample."""
-
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    subject_key: str | None = None
-    availability_status: Literal[
-        "profiled", "not_profiled", "failed", "not_applicable", "unknown"
-    ] = "unknown"
-    feature_set_key: str | None = None
-    source_file_id: str | None = None
-    missing_reason: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -602,14 +584,6 @@ class GeneAlterationState(AnalyticalRecord):
     source_event_id: str | None = None
 
 
-class SampleProfileCache(AnalyticalRecord):
-    """Cached profile summary for a processed sample."""
-
-    run_sample_key: str
-    profile_summary_json: JsonObject = Field(default_factory=dict)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
 class CohortSummary(AnalyticalRecord):
     """Precomputed summary statistics for a sample set and profile feature."""
 
@@ -667,7 +641,6 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     feature_aliases: list[FeatureAlias] = Field(default_factory=list)
     feature_sets: list[FeatureSet] = Field(default_factory=list)
     feature_set_members: list[FeatureSetMember] = Field(default_factory=list)
-    profile_observation_sets: list[ProfileObservationSet] = Field(default_factory=list)
     feature_value_numeric: list[FeatureValueNumeric] = Field(default_factory=list)
     feature_call: list[FeatureCall] = Field(default_factory=list)
     genomic_intervals: list[GenomicInterval] = Field(default_factory=list)
@@ -688,7 +661,6 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     timeline_events: list[TimelineEvent] = Field(default_factory=list)
     profile_payloads: list[ProfilePayload] = Field(default_factory=list)
     gene_alteration_state: list[GeneAlterationState] = Field(default_factory=list)
-    sample_profile_cache: list[SampleProfileCache] = Field(default_factory=list)
     cohort_summaries: list[CohortSummary] = Field(default_factory=list)
     tool_versions: list[ToolVersion] = Field(default_factory=list)
     data_sources: list[DataSource] = Field(default_factory=list)

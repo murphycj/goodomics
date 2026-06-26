@@ -9,7 +9,7 @@ from uuid import uuid4
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -1638,7 +1638,18 @@ async def _catalog_table_page(
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
-    if project_id is not None and "project_id" in model.model_fields:
+    if (
+        project_id is not None
+        and table_name == "data_profiles"
+        and "project_id" in model.model_fields
+    ):
+        count_statement = count_statement.where(
+            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+        )
+        row_statement = row_statement.where(
+            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+        )
+    elif project_id is not None and "project_id" in model.model_fields:
         count_statement = count_statement.where(model_any.project_id == project_id)
         row_statement = row_statement.where(model_any.project_id == project_id)
     elif project_run_ids is not None and "run_id" in model.model_fields:
@@ -1675,7 +1686,18 @@ async def _control_table_counts(
         for name, (model, _) in CATALOG_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
-            if project_id is not None and "project_id" in model.model_fields:
+            if (
+                project_id is not None
+                and name == "data_profiles"
+                and "project_id" in model.model_fields
+            ):
+                statement = statement.where(
+                    or_(
+                        model_any.project_id == project_id,
+                        model_any.project_id.is_(None),
+                    )
+                )
+            elif project_id is not None and "project_id" in model.model_fields:
                 statement = statement.where(model_any.project_id == project_id)
             elif project_run_ids is not None and "run_id" in model.model_fields:
                 statement = statement.where(model_any.run_id.in_(project_run_ids))

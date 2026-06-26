@@ -102,7 +102,6 @@ class DataProfileRecord(SQLModel, table=True):
 
     data_profile_id: str = Field(primary_key=True, max_length=255)
     project_id: str | None = Field(default=None, max_length=255, index=True)
-    run_id: str | None = Field(default=None, max_length=255, index=True)
     name: str = Field(max_length=255)
     data_type: str = Field(max_length=128, index=True)
     assay: str | None = Field(default=None, max_length=255)
@@ -398,29 +397,8 @@ class SQLModelGoodomicsStore:
                     for run_sample in run_sample_records
                 ]
             )
-            session.add_all(
-                [
-                    DataProfileRecord(
-                        data_profile_id=profile.data_profile_id,
-                        project_id=profile.project_id or project.project_id,
-                        run_id=profile.run_id or resolved_run.run_id,
-                        name=profile.name,
-                        data_type=profile.data_type,
-                        assay=profile.assay,
-                        producer_tool=profile.producer_tool,
-                        producer_tool_version=profile.producer_tool_version,
-                        producer_pipeline=profile.producer_pipeline,
-                        genome_build=profile.genome_build,
-                        feature_type=profile.feature_type,
-                        value_type=profile.value_type,
-                        unit=profile.unit,
-                        query_modes_json=dict(profile.query_modes_json),
-                        mcp_description=profile.mcp_description,
-                        metadata_json=dict(profile.metadata_json),
-                    )
-                    for profile in profile_records
-                ]
-            )
+            for profile in profile_records:
+                await _upsert_data_profile(session, profile)
             session.add_all(
                 [
                     FileRecord(
@@ -540,29 +518,8 @@ class SQLModelGoodomicsStore:
                     for run_sample in run_samples or []
                 ]
             )
-            session.add_all(
-                [
-                    DataProfileRecord(
-                        data_profile_id=profile.data_profile_id,
-                        project_id=profile.project_id or project.project_id,
-                        run_id=profile.run_id,
-                        name=profile.name,
-                        data_type=profile.data_type,
-                        assay=profile.assay,
-                        producer_tool=profile.producer_tool,
-                        producer_tool_version=profile.producer_tool_version,
-                        producer_pipeline=profile.producer_pipeline,
-                        genome_build=profile.genome_build,
-                        feature_type=profile.feature_type,
-                        value_type=profile.value_type,
-                        unit=profile.unit,
-                        query_modes_json=dict(profile.query_modes_json),
-                        mcp_description=profile.mcp_description,
-                        metadata_json=dict(profile.metadata_json),
-                    )
-                    for profile in data_profiles or []
-                ]
-            )
+            for profile in data_profiles or []:
+                await _upsert_data_profile(session, profile)
 
             for file in files or []:
                 await _upsert_file(session, file, project.project_id)
@@ -773,6 +730,48 @@ async def _upsert_file(
     session.add(row)
 
 
+async def _upsert_data_profile(
+    session: AsyncSession,
+    profile: DataProfile,
+) -> None:
+    # Data profiles are semantic contracts and may be reused across many runs.
+    row = await session.get(DataProfileRecord, profile.data_profile_id)
+    if row is None:
+        row = DataProfileRecord(
+            data_profile_id=profile.data_profile_id,
+            project_id=profile.project_id,
+            name=profile.name,
+            data_type=profile.data_type,
+            assay=profile.assay,
+            producer_tool=profile.producer_tool,
+            producer_tool_version=profile.producer_tool_version,
+            producer_pipeline=profile.producer_pipeline,
+            genome_build=profile.genome_build,
+            feature_type=profile.feature_type,
+            value_type=profile.value_type,
+            unit=profile.unit,
+            query_modes_json=dict(profile.query_modes_json),
+            mcp_description=profile.mcp_description,
+            metadata_json=dict(profile.metadata_json),
+        )
+    else:
+        row.project_id = profile.project_id
+        row.name = profile.name
+        row.data_type = profile.data_type
+        row.assay = profile.assay
+        row.producer_tool = profile.producer_tool
+        row.producer_tool_version = profile.producer_tool_version
+        row.producer_pipeline = profile.producer_pipeline
+        row.genome_build = profile.genome_build
+        row.feature_type = profile.feature_type
+        row.value_type = profile.value_type
+        row.unit = profile.unit
+        row.query_modes_json = dict(profile.query_modes_json)
+        row.mcp_description = profile.mcp_description
+        row.metadata_json = dict(profile.metadata_json)
+    session.add(row)
+
+
 def _sample_from_row(row: SampleRecord) -> Sample:
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
@@ -813,7 +812,7 @@ async def _delete_run_scoped_catalog(
     profile_ids = (
         await session.exec(
             select(DataProfileRecord.data_profile_id).where(
-                DataProfileRecord.run_id == run_id
+                DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
             )
         )
     ).all()
@@ -836,7 +835,9 @@ async def _delete_run_scoped_catalog(
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_id))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_id))
     await session.exec(
-        delete(DataProfileRecord).where(DataProfileRecord.run_id == run_id)
+        delete(DataProfileRecord).where(
+            DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
+        )
     )
     if profile_ids:
         await session.exec(
