@@ -304,8 +304,7 @@ def test_cbioportal_run_files_include_inherited_import_files(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/files"
         )
         sample_run_files = client.get(
-            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/"
-            "run-cbio:S1/files"
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/run-cbio:S1/files"
         )
 
     assert run_files.status_code == 200
@@ -395,9 +394,7 @@ def test_cbioportal_brca_fixture_creates_sample_runs() -> None:
     assert len(parsed.samples) == 818
     assert len(parsed.all_runs) == len(parsed.samples)
     assert len(parsed.run_samples) == len(parsed.samples)
-    assert all(
-        run.run_id.startswith("brca_tcga_pub2015:") for run in parsed.all_runs
-    )
+    assert all(run.run_id.startswith("brca_tcga_pub2015:") for run in parsed.all_runs)
     assert "brca_tcga_pub2015" not in {
         run_sample.run_id for run_sample in parsed.run_samples
     }

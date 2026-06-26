@@ -41,6 +41,10 @@ goodomics ingest ./results \
   --run-id 2026-06-16_batch_042
 ```
 
+Built-in CLI ingest types include `multiqc` and `cbioportal`. Custom parsers
+defined in notebooks are Python-process local; package reusable parsers with a
+`goodomics.sources` entry point when they should be discovered by the CLI.
+
 ## Start local services
 
 ```bash

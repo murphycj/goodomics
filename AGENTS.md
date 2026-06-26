@@ -85,7 +85,8 @@ docker build -f docker/Dockerfile.server -t goodomics/server:local .
 Use `uv run pytest` as the main verification command for Python changes. For
 packaging or CLI changes, also run Ruff, Pyright, and both package builds when
 feasible. For dashboard or Docker changes, run the relevant npm or Docker build.
-For documentation changes, run `uv run mkdocs build` when feasible.
+For documentation changes, and for CLI or user-facing SDK/API changes that
+should update docs, run `uv run mkdocs build` when feasible.
 
 ## Coding Style
 
@@ -104,9 +105,10 @@ For documentation changes, run `uv run mkdocs build` when feasible.
 - Prefer readable structure over dense expressions: split complex conditions,
   payload construction, or nested transformations into named intermediate values
   when that makes the code easier to scan.
-- Add lightweight, high-signal comments in Python and React code when logic is
-  non-obvious, crosses trust boundaries, or encodes important constraints; avoid
-  noisy comments that restate the code.
+- Add docstrings or lightweight comments for public APIs, parser/ingest helpers,
+  storage boundaries, non-trivial transformations, trust boundaries, and
+  important constraints; skip obvious one-line helpers and comments that merely
+  restate the code.
 
 ## Documentation Guidelines
 
@@ -117,6 +119,9 @@ For documentation changes, run `uv run mkdocs build` when feasible.
 - Keep model definitions and shared product concepts in the canonical
   `goodomics` package; server code should consume shared schemas/storage rather
   than defining parallel concepts when practical.
+- When changing CLI behavior, CLI flags, user-facing SDK APIs, custom parser
+  APIs, or other user-facing Python interfaces, update the MkDocs documentation
+  in `docs/` and `mkdocs.yml` in the same change when relevant.
 - Use concrete, technical, approachable copy. Avoid generic SaaS language.
 - Do not rewrite unrelated copy, assets, formatting, lockfiles, generated
   dashboard assets, or docs.

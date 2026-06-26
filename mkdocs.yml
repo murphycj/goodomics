@@ -66,6 +66,7 @@ nav:
   - Interfaces:
       - CLI: interfaces/cli.md
       - Python SDK: interfaces/sdk.md
+      - Custom parsers: interfaces/custom-parsers.md
       - Server: interfaces/server.md
       - Dashboard: interfaces/dashboard.md
       - MCP integration: interfaces/mcp.md

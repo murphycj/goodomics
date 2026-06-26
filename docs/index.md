@@ -28,6 +28,8 @@ Goodomics is useful in a few modes:
   line.
 - [Python SDK](interfaces/sdk.md): record runs, samples, metrics, and files from
   Python code.
+- [Custom parsers](interfaces/custom-parsers.md): ingest lab-specific tables,
+  dataframes, and notebook objects without writing a full plugin.
 - [Server](interfaces/server.md): run the optional FastAPI, MCP, database, and
   dashboard server.
 - [Dashboard](interfaces/dashboard.md): browse runs and edit report templates.
