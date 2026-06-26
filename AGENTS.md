@@ -26,6 +26,11 @@ operational, and focused on how to work in the repo.
 - Main CLI entry point: `packages/goodomics/src/goodomics/cli.py`.
 - Core schemas, parsing, ingest, reporting, SDK, and storage live under
   `packages/goodomics/src/goodomics/`.
+- Parser modules should be flat, descriptive files under
+  `packages/goodomics/src/goodomics/parsers/`, such as `cbioportal.py` or
+  `multiqc.py`. Do not create nested parser packages with generic names like
+  `parsers/<source>/parser.py` unless a parser genuinely needs multiple
+  source-specific modules.
 - API, MCP, server settings, and dashboard serving live under
   `packages/goodomics/src/goodomics/server/`.
 - React/Vite dashboard source lives in `packages/goodomics/dashboard/`.
@@ -84,6 +89,10 @@ For documentation changes, run `uv run mkdocs build` when feasible.
 
 ## Coding Style
 
+- The app has not been deployed anywhere yet. For code changes, do not add
+  database migrations, backwards compatibility layers, compatibility shims, or
+  migration strategy docs unless the user explicitly asks for them. Prefer
+  directly updating the current schema, models, tests, fixtures, and docs.
 - Use Ruff as the canonical Python formatter and linter. Prefer
   `uv run ruff format .` for formatting and `uv run ruff check --fix .` for
   safe lint fixes before committing Python changes.
