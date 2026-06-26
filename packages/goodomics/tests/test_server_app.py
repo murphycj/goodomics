@@ -674,6 +674,9 @@ def test_run_analytics_and_file_content_endpoints(
         report = next(file for file in files if file["kind"] == "multiqc_report")
         tables = test_client.get("/api/v1/database/tables").json()
         file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
+        import_rows = test_client.get(
+            "/api/v1/database/catalog/tables/data_imports/rows"
+        ).json()
         catalog_preview = test_client.get(
             "/api/v1/database/catalog/tables/files/rows",
             params={
@@ -733,10 +736,17 @@ def test_run_analytics_and_file_content_endpoints(
         for table in tables
     )
     assert any(
+        table["store"] == "catalog"
+        and table["name"] == "data_imports"
+        and "data_import_id" in table["columns"]
+        for table in tables
+    )
+    assert any(
         table["store"] == "analytics" and table["name"] == "sample_metric_numeric"
         for table in tables
     )
     assert "file_id" in file_rows[0]
+    assert import_rows["rows"][0]["data_import_id"] == "run-1"
     assert catalog_preview.status_code == 200
     assert catalog_preview.json()["total"] >= 1
     assert catalog_preview.json()["rows"][0]["file_id"]

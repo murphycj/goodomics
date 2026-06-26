@@ -10,6 +10,7 @@ from goodomics.parsers.multiqc import discover_multiqc_outputs, parse_multiqc_bu
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataImportRecord,
     FileLinkRecord,
     FileRecord,
     SQLModelGoodomicsStore,
@@ -110,6 +111,7 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     )
 
     assert result.metrics_ingested > 0
+    assert result.data_import_id == "run-1"
     assert result.files_stored == 2
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
@@ -119,19 +121,24 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     assert run is not None
     assert run.project == "demo"
 
-    async def load_files() -> tuple[list[FileRecord], list[FileLinkRecord]]:
+    async def load_files() -> tuple[
+        list[DataImportRecord], list[FileRecord], list[FileLinkRecord]
+    ]:
         async with AsyncSession(catalog_store._get_engine()) as session:
+            imports = (await session.exec(select(DataImportRecord))).all()
             files = (await session.exec(select(FileRecord))).all()
             links = (
                 await session.exec(
                     select(FileLinkRecord).where(FileLinkRecord.run_id == "run-1")
                 )
             ).all()
-        return list(files), list(links)
+        return list(imports), list(files), list(links)
 
-    files, links = asyncio.run(load_files())
+    imports, files, links = asyncio.run(load_files())
+    assert [data_import.data_import_id for data_import in imports] == ["run-1"]
     assert {file.file_role for file in files} == {"multiqc_data", "multiqc_report"}
     assert {link.file_id for link in links} == {file.file_id for file in files}
+    assert {link.data_import_id for link in links} == {"run-1"}
 
 
 def test_ingest_multiqc_defaults_to_project_analytics_path(

@@ -7,19 +7,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from goodomics.data_profiles import MULTIQC_METRICS, MULTIQC_PAYLOADS
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataSource,
     MetricDefinition,
-    ProfileObservationSet,
     ProfilePayload,
     SampleMetricNumeric,
     SampleMetricString,
     ToolVersion,
 )
 
-MULTIQC_METRICS_PROFILE = "multiqc_qc_metrics"
-MULTIQC_PAYLOAD_PROFILE = "multiqc_payloads"
+MULTIQC_METRICS_PROFILE = MULTIQC_METRICS
+MULTIQC_PAYLOAD_PROFILE = MULTIQC_PAYLOADS
 
 
 @dataclass(frozen=True)
@@ -64,16 +64,6 @@ class MultiQCParseResult:
             sample_metric_numeric=self.sample_metric_numeric,
             sample_metric_string=self.sample_metric_string,
             profile_payloads=self.payloads,
-            profile_observation_sets=[
-                ProfileObservationSet(
-                    data_profile_key=MULTIQC_METRICS_PROFILE,
-                    run_id=run_id,
-                    run_sample_key=f"{run_id}:{sample_id}",
-                    sample_key=sample_id,
-                    availability_status="profiled",
-                )
-                for sample_id in sorted(self.sample_ids)
-            ],
             tool_versions=self.tool_versions,
             data_sources=self.data_sources,
         )

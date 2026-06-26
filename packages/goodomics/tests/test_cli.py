@@ -105,7 +105,7 @@ def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Ingested cBioPortal run" in result.stdout
+    assert "Ingested 2 cBioPortal sample runs" in result.stdout
     assert "cbio-run" in result.stdout
     assert database_path.exists()
     assert analytics_path.exists()

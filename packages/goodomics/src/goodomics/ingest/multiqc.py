@@ -10,6 +10,11 @@ from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.data_profiles import (
+    MULTIQC_METRICS,
+    MULTIQC_PAYLOADS,
+    built_in_data_profile,
+)
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
     discover_multiqc_outputs,
@@ -17,7 +22,14 @@ from goodomics.parsers.multiqc import (
     parse_multiqc_outputs,
 )
 from goodomics.projects import analytics_path_for_project
-from goodomics.schemas.models import FileAsset, FileLink, Run, Sample
+from goodomics.schemas.models import (
+    DataImport,
+    FileAsset,
+    FileLink,
+    Run,
+    RunSample,
+    Sample,
+)
 from goodomics.storage.database import (
     DEFAULT_DATABASE_URL,
     create_async_database_engine,
@@ -32,6 +44,7 @@ from goodomics.storage.sqlalchemy import (
 @dataclass(frozen=True)
 class MultiQCIngestResult:
     run_id: str
+    data_import_id: str
     outputs_found: int
     metrics_ingested: int
     payloads_ingested: int
@@ -170,9 +183,29 @@ def _save_multiqc_parse_result(
     resolved_analytics_path = analytics_path or analytics_path_for_project(
         Path(".goodomics"), project_record.project_id
     )
+    data_import = DataImport(
+        data_import_id=run_id,
+        project_id=project_record.project_id,
+        source_type="multiqc",
+        source_path=str(parsed.outputs[0].root_dir)
+        if len(parsed.outputs) == 1
+        else None,
+        importer_name="multiqc",
+        status="complete",
+        parameters_json={"assay": assay},
+        summary_json={
+            "outputs_found": len(parsed.outputs),
+            "metrics_ingested": len(parsed.metrics),
+            "payloads_ingested": len(parsed.payloads),
+        },
+        metadata_json={
+            "source_paths": [str(output.root_dir) for output in parsed.outputs],
+        },
+    )
     run = Run(
         run_id=run_id,
         project_id=project_record.project_id,
+        data_import_id=data_import.data_import_id,
         project=project_record.slug,
         assay=assay,
         samples=[
@@ -180,7 +213,17 @@ def _save_multiqc_parse_result(
             for sample_id in sorted(parsed.sample_ids)
         ],
     )
-    asyncio.run(catalog_store.save_run(run))
+    run_samples = [
+        RunSample(
+            run_sample_id=f"{run_id}:{sample.sample_id}",
+            project_id=project_record.project_id,
+            run_id=run_id,
+            sample_id=sample.sample_id,
+            assay=assay,
+            status="complete",
+        )
+        for sample in run.samples
+    ]
 
     files = _copy_multiqc_files(
         parsed.outputs,
@@ -192,18 +235,23 @@ def _save_multiqc_parse_result(
         FileLink(
             file_id=file.file_id,
             project_id=project_record.project_id,
+            data_import_id=data_import.data_import_id,
             run_id=run_id,
             link_role="source" if file.file_role == "multiqc_data" else "report",
         )
         for file in files
     ]
     asyncio.run(
-        _replace_files(
-            database_url,
-            run_id,
-            files,
-            file_links,
-            project_id=project_record.project_id,
+        catalog_store.replace_run_catalog(
+            run,
+            data_import=data_import,
+            run_samples=run_samples,
+            data_profiles=[
+                built_in_data_profile(MULTIQC_METRICS),
+                built_in_data_profile(MULTIQC_PAYLOADS),
+            ],
+            files=files,
+            file_links=file_links,
         )
     )
 
@@ -214,6 +262,7 @@ def _save_multiqc_parse_result(
 
     return MultiQCIngestResult(
         run_id=run_id,
+        data_import_id=data_import.data_import_id,
         outputs_found=len(parsed.outputs),
         metrics_ingested=len(parsed.metrics),
         payloads_ingested=len(parsed.payloads),

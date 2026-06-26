@@ -9,17 +9,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from goodomics.data_profiles import cbioportal_data_profile_for_meta
 from goodomics.ingest.base import AnalyticsBulkLoad, NormalizedIngestResult
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     AttributeDefinition,
+    DataImport,
     DataProfile,
     EntityAttributeNumeric,
     EntityAttributeString,
     FeatureSet,
     FileAsset,
     FileLink,
-    ProfileObservationSet,
     ProfilePayload,
     Run,
     RunSample,
@@ -58,12 +59,14 @@ class CbioPortalMeta:
 @dataclass
 class CbioPortalParseContext:
     root: Path
-    run_id: str
-    sample_scoped_runs: bool
+    data_import_id: str
+    # cBioPortal imports are always sample-first: DataImport owns source-level
+    # provenance, and each biological sample gets its own analytical run.
     project_id: str | None
     assay: str | None
     study_meta: dict[str, str]
     profiles_by_file: dict[str, DataProfile]
+    metas_by_file: dict[str, CbioPortalMeta]
     source_files_by_path: dict[Path, FileAsset] = field(default_factory=dict)
     file_links: list[FileLink] = field(default_factory=list)
     subjects: dict[str, Subject] = field(default_factory=dict)
@@ -75,9 +78,7 @@ class CbioPortalParseContext:
     bulk_loads: list[AnalyticsBulkLoad] = field(default_factory=list)
 
     def run_id_for_sample(self, sample_id: str) -> str:
-        if not self.sample_scoped_runs:
-            return self.run_id
-        return f"{self.run_id}:{_normalize_id(sample_id)}"
+        return f"{self.data_import_id}:{_normalize_id(sample_id)}"
 
     def run_sample_id_for_sample(self, sample_id: str) -> str:
         return _run_sample_id(self.run_id_for_sample(sample_id), sample_id)
@@ -85,50 +86,47 @@ class CbioPortalParseContext:
     def data_profile_id_for_sample(
         self,
         profile: DataProfile,
-        sample_id: str,
+        sample_id: str,  # noqa: ARG002
     ) -> str:
-        if not self.sample_scoped_runs:
-            return profile.data_profile_id
-        return f"{self.run_id_for_sample(sample_id)}:{_profile_suffix(profile)}"
+        # Data profiles are stable semantic contracts, not per-sample objects.
+        return profile.data_profile_id
 
 
 def parse_cbioportal_study(
     root: Path,
     *,
-    run_id: str | None = None,
+    data_import_id: str | None = None,
     project_id: str | None = None,
     assay: str | None = None,
-    sample_scoped_runs: bool | None = None,
 ) -> NormalizedIngestResult:
     resolved_root = root.resolve()
     if not resolved_root.is_dir():
         raise ValueError(f"cBioPortal study directory does not exist: {root}")
     metas = _discover_metas(resolved_root)
     study_meta = _read_meta_file(resolved_root / "meta_study.txt")
-    resolved_run_id = run_id or study_meta.get("cancer_study_identifier")
-    if not resolved_run_id:
-        resolved_run_id = _normalize_id(resolved_root.name)
+    resolved_data_import_id = (
+        data_import_id or study_meta.get("cancer_study_identifier")
+    )
+    if not resolved_data_import_id:
+        resolved_data_import_id = _normalize_id(resolved_root.name)
 
     profiles_by_file = {
         meta.data_filename: _profile_from_meta(
             meta,
-            run_id=resolved_run_id,
-            project_id=project_id,
             assay=assay,
         )
         for meta in metas
         if meta.data_filename
     }
+    metas_by_file = {meta.data_filename: meta for meta in metas if meta.data_filename}
     context = CbioPortalParseContext(
         root=resolved_root,
-        run_id=resolved_run_id,
-        sample_scoped_runs=run_id is None
-        if sample_scoped_runs is None
-        else sample_scoped_runs,
+        data_import_id=resolved_data_import_id,
         project_id=project_id,
         assay=assay,
         study_meta=study_meta,
         profiles_by_file=profiles_by_file,
+        metas_by_file=metas_by_file,
     )
 
     _register_source_files(context, metas)
@@ -136,11 +134,28 @@ def parse_cbioportal_study(
     _parse_case_lists(context)
     _plan_profile_loads(context)
 
-    base_run = Run(
-        run_id=resolved_run_id,
+    data_import = DataImport(
+        data_import_id=resolved_data_import_id,
         project_id=project_id,
-        name=study_meta.get("name") or study_meta.get("short_name") or resolved_run_id,
-        run_kind="import_run",
+        source_type="cbioportal",
+        source_path=str(resolved_root),
+        importer_name=CBIOPORTAL_TOOL,
+        status="complete",
+        summary_json={
+            "profiles_found": len(profiles_by_file),
+            "files_registered": len(context.source_files_by_path),
+            "bulk_loads": len(context.bulk_loads),
+        },
+        metadata_json={"study": study_meta},
+    )
+    run_template = Run(
+        run_id=resolved_data_import_id,
+        project_id=project_id,
+        data_import_id=resolved_data_import_id,
+        name=study_meta.get("name")
+        or study_meta.get("short_name")
+        or resolved_data_import_id,
+        run_kind="imported_result",
         assay=assay,
         pipeline_name=CBIOPORTAL_TOOL,
         status="complete",
@@ -151,10 +166,11 @@ def parse_cbioportal_study(
         },
         samples=sorted(context.samples.values(), key=lambda sample: sample.sample_id),
     )
-    runs = _runs_from_context(context, base_run)
+    runs = _runs_from_context(context, run_template)
     return NormalizedIngestResult(
-        run=runs[0] if runs else base_run,
+        run=runs[0] if runs else run_template,
         runs=runs,
+        data_import=data_import,
         subjects=sorted(
             context.subjects.values(), key=lambda subject: subject.subject_id
         ),
@@ -209,40 +225,13 @@ def _read_meta_file(path: Path) -> dict[str, str]:
 def _profile_from_meta(
     meta: CbioPortalMeta,
     *,
-    run_id: str,
-    project_id: str | None,
     assay: str | None,
 ) -> DataProfile:
-    data_type, feature_type, value_type = _profile_shape(meta)
-    stable_part = meta.stable_id or Path(meta.data_filename or meta.path.stem).stem
-    profile_id = f"{run_id}:{_normalize_id(stable_part)}"
-    genome_build = (
-        meta.values.get("reference_genome_id")
-        or meta.values.get("reference_genome")
-        or _genome_from_build(meta.values.get("ncbi_build"))
+    profile = cbioportal_data_profile_for_meta(
+        meta.values,
+        source_meta_file=meta.path.name,
     )
-    return DataProfile(
-        data_profile_id=profile_id,
-        project_id=project_id,
-        run_id=run_id,
-        name=meta.values.get("profile_name")
-        or meta.values.get("description")
-        or stable_part,
-        data_type=data_type,
-        assay=assay,
-        producer_tool=CBIOPORTAL_TOOL,
-        genome_build=genome_build,
-        feature_type=feature_type,
-        value_type=value_type,
-        query_modes_json=_query_modes(data_type),
-        mcp_description=meta.values.get("profile_description")
-        or meta.values.get("description"),
-        metadata_json={
-            "source_format": "cbioportal",
-            "source_meta_file": meta.path.name,
-            "cbioportal": dict(meta.values),
-        },
-    )
+    return profile.model_copy(update={"assay": assay or profile.assay})
 
 
 def _profile_shape(meta: CbioPortalMeta) -> tuple[str, str | None, str | None]:
@@ -300,7 +289,7 @@ def _register_source_files(
                     FileLink(
                         file_id=file.file_id,
                         project_id=context.project_id,
-                        run_id=context.run_id,
+                        data_import_id=context.data_import_id,
                         data_profile_id=profile.data_profile_id,
                         link_role="source",
                     )
@@ -320,7 +309,10 @@ def _register_file(
     if existing is not None:
         return existing
     file = FileAsset(
-        file_id=f"{context.run_id}:source:{_normalize_id(str(path.relative_to(context.root)))}",
+        file_id=(
+            f"{context.data_import_id}:source:"
+            f"{_normalize_id(str(path.relative_to(context.root)))}"
+        ),
         project_id=context.project_id,
         path=str(resolved),
         file_role=role,
@@ -336,7 +328,7 @@ def _register_file(
         FileLink(
             file_id=file.file_id,
             project_id=context.project_id,
-            run_id=context.run_id,
+            data_import_id=context.data_import_id,
             link_role="source",
         )
     )
@@ -345,11 +337,8 @@ def _register_file(
 
 def _parse_clinical_files(context: CbioPortalParseContext) -> None:
     for filename, profile in context.profiles_by_file.items():
-        meta = profile.metadata_json.get("cbioportal", {})
-        if (
-            not isinstance(meta, dict)
-            or meta.get("genetic_alteration_type") != "CLINICAL"
-        ):
+        meta = context.metas_by_file[filename].values
+        if meta.get("genetic_alteration_type") != "CLINICAL":
             continue
         path = context.root / filename
         source_file = context.source_files_by_path.get(path.resolve())
@@ -523,7 +512,7 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
         values = _read_meta_file(path)
         stable_id = values.get("stable_id") or path.stem
         sample_set = SampleSet(
-            sample_set_id=f"{context.run_id}:{_normalize_id(stable_id)}",
+            sample_set_id=f"{context.data_import_id}:{_normalize_id(stable_id)}",
             project_id=context.project_id,
             name=values.get("case_list_name") or stable_id,
             kind="cohort"
@@ -531,7 +520,10 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
             else "case_group",
             description=values.get("case_list_description"),
             definition_json={"source": "cbioportal_case_list", "stable_id": stable_id},
-            metadata_json={"cbioportal": values, "source_run_id": context.run_id},
+            metadata_json={
+                "cbioportal": values,
+                "source_data_import_id": context.data_import_id,
+            },
         )
         context.sample_sets.append(sample_set)
         for sample_id in _split_case_ids(values.get("case_list_ids")):
@@ -546,9 +538,7 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
 
 def _plan_profile_loads(context: CbioPortalParseContext) -> None:
     for filename, profile in sorted(context.profiles_by_file.items()):
-        meta = profile.metadata_json.get("cbioportal", {})
-        if not isinstance(meta, dict):
-            continue
+        meta = context.metas_by_file[filename].values
         if meta.get("genetic_alteration_type") == "CLINICAL":
             continue
         path = context.root / filename
@@ -559,53 +549,62 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
         if alteration == "GENE_PANEL_MATRIX":
             _parse_gene_panel_matrix(context, profile, path, source_file_id)
         elif alteration == "COPY_NUMBER_ALTERATION" and datatype == "DISCRETE":
+            # Bulk loaders map each source sample column/row to that sample's
+            # analytical run.
             context.bulk_loads.append(
                 CnaMatrixBulkLoad(
-                    context.run_id,
+                    context.data_import_id,
                     profile,
                     path,
                     source_file_id,
-                    sample_scoped_runs=context.sample_scoped_runs,
                 )
             )
         elif alteration == "COPY_NUMBER_ALTERATION" and datatype == "SEG":
             context.bulk_loads.append(
                 SegmentBulkLoad(
-                    context.run_id,
+                    context.data_import_id,
                     profile,
                     path,
                     source_file_id,
-                    sample_scoped_runs=context.sample_scoped_runs,
+                    genome_build=_genome_build_from_meta(meta),
                 )
             )
         elif alteration == "MUTATION_EXTENDED":
             context.bulk_loads.append(
                 MutationBulkLoad(
-                    context.run_id,
+                    context.data_import_id,
                     profile,
                     path,
                     source_file_id,
-                    sample_scoped_runs=context.sample_scoped_runs,
+                    genome_build=_genome_build_from_meta(meta),
                 )
             )
         elif alteration == "STRUCTURAL_VARIANT":
             context.bulk_loads.append(
                 StructuralVariantBulkLoad(
-                    context.run_id,
+                    context.data_import_id,
                     profile,
                     path,
                     source_file_id,
-                    sample_scoped_runs=context.sample_scoped_runs,
+                    genome_build=_genome_build_from_meta(meta),
                 )
             )
-        elif alteration in {"MRNA_EXPRESSION", "PROTEIN_LEVEL", "GENERIC_ASSAY"}:
+        elif (
+            alteration in {"MRNA_EXPRESSION", "PROTEIN_LEVEL", "METHYLATION"}
+            or (
+                alteration == "COPY_NUMBER_ALTERATION"
+                and datatype in {"CONTINUOUS", "LOG2-VALUE"}
+            )
+            or alteration == "GENERIC_ASSAY"
+            and datatype == "LIMIT-VALUE"
+        ):
             context.bulk_loads.append(
                 FeatureMatrixBulkLoad(
-                    context.run_id,
+                    context.data_import_id,
                     profile,
                     path,
                     source_file_id,
-                    sample_scoped_runs=context.sample_scoped_runs,
+                    value_semantics=_value_semantics_from_meta(meta, profile),
                 )
             )
         else:
@@ -619,13 +618,6 @@ def _parse_gene_panel_matrix(
     source_file_id: str | None,
 ) -> None:
     rows = _read_tsv_rows(path)
-    profile_lookup = {
-        _normalize_id(
-            candidate.metadata_json.get("cbioportal", {}).get("stable_id", "")
-        ): candidate
-        for candidate in context.profiles_by_file.values()
-        if isinstance(candidate.metadata_json.get("cbioportal"), dict)
-    }
     seen_panels: set[str] = set()
     for row in rows:
         sample_id = _clean(row.get("SAMPLE_ID"))
@@ -647,22 +639,6 @@ def _parse_gene_panel_matrix(
                         metadata_json={"source": "cbioportal_gene_panel_matrix"},
                     )
                 )
-            target_profile = profile_lookup.get(_normalize_id(column)) or profile
-            run_id = context.run_id_for_sample(sample_id)
-            context.batch.profile_observation_sets.append(
-                ProfileObservationSet(
-                    data_profile_key=context.data_profile_id_for_sample(
-                        target_profile,
-                        sample_id,
-                    ),
-                    run_id=run_id,
-                    run_sample_key=_run_sample_id(run_id, sample_id),
-                    sample_key=sample_id,
-                    availability_status="profiled",
-                    feature_set_key=panel_key,
-                    source_file_id=source_file_id,
-                )
-            )
     _add_payload(context, profile, path, source_file_id, "gene_panel_matrix")
 
 
@@ -672,11 +648,11 @@ class FeatureMatrixBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    sample_scoped_runs: bool = False
+    value_semantics: str
 
     def load(self, connection: Any) -> None:
         feature_type = self.profile.feature_type or "generic_entity"
-        value_semantics = _value_semantics(self.profile)
+        value_semantics = self.value_semantics
         source = _feature_matrix_source_sql(
             self.path,
             feature_type=feature_type,
@@ -708,8 +684,7 @@ class FeatureMatrixBulkLoad:
         mapped = _mapped_sample_source_sql(
             source,
             base_run_id=self.run_id,
-            profile_suffix=_profile_suffix(self.profile),
-            sample_scoped_runs=self.sample_scoped_runs,
+            base_profile_id=self.profile.data_profile_id,
         )
         connection.execute(
             f"""
@@ -740,7 +715,6 @@ class CnaMatrixBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    sample_scoped_runs: bool = False
 
     def load(self, connection: Any) -> None:
         source = _cna_source_sql(self.path, include_values=False)
@@ -766,8 +740,7 @@ class CnaMatrixBulkLoad:
         mapped = _mapped_sample_source_sql(
             source,
             base_run_id=self.run_id,
-            profile_suffix=_profile_suffix(self.profile),
-            sample_scoped_runs=self.sample_scoped_runs,
+            base_profile_id=self.profile.data_profile_id,
         )
         connection.execute(
             f"""
@@ -815,19 +788,15 @@ class SegmentBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    sample_scoped_runs: bool = False
+    genome_build: str | None = None
 
     def load(self, connection: Any) -> None:
         mapped_run_id = _mapped_run_id_sql(
             "ID",
             base_run_id=self.run_id,
-            sample_scoped_runs=self.sample_scoped_runs,
         )
         data_profile_key = _mapped_data_profile_key_sql(
-            mapped_run_id,
             base_profile_id=self.profile.data_profile_id,
-            profile_suffix=_profile_suffix(self.profile),
-            sample_scoped_runs=self.sample_scoped_runs,
         )
         connection.execute(
             f"""
@@ -858,7 +827,7 @@ class SegmentBulkLoad:
             AND try_cast("seg.mean" AS DOUBLE) IS NOT NULL
             """,
             [
-                self.profile.genome_build or "unknown",
+                self.genome_build or self.profile.genome_build or "unknown",
                 self.source_file_id,
                 str(self.path),
             ],
@@ -871,10 +840,13 @@ class MutationBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    sample_scoped_runs: bool = False
+    genome_build: str | None = None
 
     def load(self, connection: Any) -> None:
-        source = _mutation_source_sql(self.path, self.profile.genome_build)
+        source = _mutation_source_sql(
+            self.path,
+            self.genome_build or self.profile.genome_build,
+        )
         params = [str(self.path)]
         _replace_features_from_source(connection, source, params)
         connection.execute(
@@ -977,8 +949,7 @@ class MutationBulkLoad:
                 _mapped_sample_source_sql(
                     source,
                     base_run_id=self.run_id,
-                    profile_suffix=_profile_suffix(self.profile),
-                    sample_scoped_runs=self.sample_scoped_runs,
+                    base_profile_id=self.profile.data_profile_id,
                 )
             })
             """,
@@ -995,7 +966,7 @@ class StructuralVariantBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    sample_scoped_runs: bool = False
+    genome_build: str | None = None
 
     def load(self, connection: Any) -> None:
         features: list[tuple[Any, ...]] = []
@@ -1035,6 +1006,7 @@ class StructuralVariantBulkLoad:
                         event_key,
                         _event_class(row),
                         _genome_from_build(row.get("NCBI_Build"))
+                        or self.genome_build
                         or self.profile.genome_build,
                         site1_feature,
                         site2_feature,
@@ -1049,23 +1021,10 @@ class StructuralVariantBulkLoad:
                 )
             calls.append(
                 (
-                    _data_profile_id_for_sample(
-                        self.run_id,
-                        self.profile,
-                        sample_id,
-                        sample_scoped_runs=self.sample_scoped_runs,
-                    ),
-                    _run_id_for_sample(
-                        self.run_id,
-                        sample_id,
-                        sample_scoped_runs=self.sample_scoped_runs,
-                    ),
+                    self.profile.data_profile_id,
+                    _run_id_for_sample(self.run_id, sample_id),
                     _run_sample_id(
-                        _run_id_for_sample(
-                            self.run_id,
-                            sample_id,
-                            sample_scoped_runs=self.sample_scoped_runs,
-                        ),
+                        _run_id_for_sample(self.run_id, sample_id),
                         sample_id,
                     ),
                     sample_id,
@@ -1222,9 +1181,9 @@ def _add_payload(
 ) -> None:
     if not path.exists():
         return
-    sample_ids = sorted(context.samples) if context.sample_scoped_runs else [None]
+    sample_ids = [None]
     for sample_id in sample_ids:
-        payload_run_id = context.run_id
+        payload_run_id = context.data_import_id
         payload_profile_id = profile.data_profile_id
         run_sample_id = None
         payload_metadata: dict[str, Any] = {"source_format": "cbioportal"}
@@ -1289,6 +1248,8 @@ def _ensure_sample(
             metadata_json={"cbioportal": _compact_row(row)},
         )
         context.samples[sample_id] = sample
+    # `run_samples` is the join point between the stable biological sample and
+    # the run that produced facts for that sample.
     sample_run_id = context.run_id_for_sample(sample_id)
     run_sample_id = _run_sample_id(sample_run_id, sample_id)
     if run_sample_id not in context.run_samples:
@@ -1741,11 +1702,22 @@ def _feature_row(
     )
 
 
-def _value_semantics(profile: DataProfile) -> str:
-    datatype = profile.metadata_json.get("cbioportal", {}).get("datatype")
-    stable_id = profile.metadata_json.get("cbioportal", {}).get("stable_id")
+def _value_semantics_from_meta(
+    meta: dict[str, str],
+    profile: DataProfile,
+) -> str:
+    datatype = meta.get("datatype")
+    stable_id = meta.get("stable_id")
     raw = stable_id or datatype or profile.data_profile_id
     return _normalize_id(str(raw))
+
+
+def _genome_build_from_meta(meta: dict[str, str]) -> str | None:
+    return (
+        meta.get("reference_genome_id")
+        or meta.get("reference_genome")
+        or _genome_from_build(meta.get("ncbi_build"))
+    )
 
 
 def _attribute_value_type(
@@ -1822,8 +1794,8 @@ def _split_case_ids(value: str | None) -> list[str]:
 
 
 def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[Run]:
-    if not context.sample_scoped_runs:
-        return [base_run]
+    # cBioPortal source-level provenance lives on DataImport. The catalog runs
+    # here are only per-sample imported analytical results.
     runs: list[Run] = []
     for sample in sorted(context.samples.values(), key=lambda item: item.sample_id):
         run_id = context.run_id_for_sample(sample.sample_id)
@@ -1835,7 +1807,7 @@ def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[R
                     "samples": [sample],
                     "metadata_json": {
                         **base_run.metadata_json,
-                        "source_import_run_id": context.run_id,
+                        "source_data_import_id": context.data_import_id,
                         "source_sample_id": sample.sample_id,
                     },
                 }
@@ -1845,118 +1817,18 @@ def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[R
 
 
 def _data_profiles_from_context(context: CbioPortalParseContext) -> list[DataProfile]:
-    profiles = list(context.profiles_by_file.values())
-    if not context.sample_scoped_runs:
-        return profiles
-
-    expanded = [
-        profile.model_copy(
-            update={
-                "run_id": None,
-                "metadata_json": {
-                    **profile.metadata_json,
-                    "profile_scope": "study",
-                },
-            }
-        )
-        for profile in profiles
-    ]
-    for sample in sorted(context.samples.values(), key=lambda item: item.sample_id):
-        run_id = context.run_id_for_sample(sample.sample_id)
-        for profile in profiles:
-            expanded.append(
-                profile.model_copy(
-                    update={
-                        "data_profile_id": context.data_profile_id_for_sample(
-                            profile,
-                            sample.sample_id,
-                        ),
-                        "run_id": run_id,
-                        "metadata_json": {
-                            **profile.metadata_json,
-                            "source_data_profile_id": profile.data_profile_id,
-                            "source_import_run_id": context.run_id,
-                            "source_sample_id": sample.sample_id,
-                        },
-                    }
-                )
-            )
-    return expanded
+    profiles: dict[str, DataProfile] = {}
+    for profile in context.profiles_by_file.values():
+        profiles.setdefault(profile.data_profile_id, profile)
+    return list(profiles.values())
 
 
 def _file_links_from_context(context: CbioPortalParseContext) -> list[FileLink]:
-    if not context.sample_scoped_runs:
-        return context.file_links
-
-    links: list[FileLink] = []
-    samples = sorted(context.samples.values(), key=lambda item: item.sample_id)
-    for link in context.file_links:
-        if link.run_id != context.run_id:
-            links.append(link)
-            continue
-        for sample in samples:
-            run_id = context.run_id_for_sample(sample.sample_id)
-            run_sample_id = context.run_sample_id_for_sample(sample.sample_id)
-            data_profile_id = link.data_profile_id
-            if data_profile_id is not None:
-                profile = next(
-                    (
-                        candidate
-                        for candidate in context.profiles_by_file.values()
-                        if candidate.data_profile_id == data_profile_id
-                    ),
-                    None,
-                )
-                if profile is not None:
-                    data_profile_id = context.data_profile_id_for_sample(
-                        profile,
-                        sample.sample_id,
-                    )
-            links.append(
-                link.model_copy(
-                    update={
-                        "run_id": run_id,
-                        "run_sample_id": run_sample_id,
-                        "sample_id": sample.sample_id,
-                        "data_profile_id": data_profile_id,
-                    }
-                )
-            )
-    return links
+    return context.file_links
 
 
-def _profile_suffix(profile: DataProfile) -> str:
-    if profile.run_id and profile.data_profile_id.startswith(f"{profile.run_id}:"):
-        return profile.data_profile_id.removeprefix(f"{profile.run_id}:")
-    return _normalize_id(profile.data_profile_id)
-
-
-def _run_id_for_sample(
-    base_run_id: str,
-    sample_id: str,
-    *,
-    sample_scoped_runs: bool,
-) -> str:
-    if not sample_scoped_runs:
-        return base_run_id
+def _run_id_for_sample(base_run_id: str, sample_id: str) -> str:
     return f"{base_run_id}:{_normalize_id(sample_id)}"
-
-
-def _data_profile_id_for_sample(
-    base_run_id: str,
-    profile: DataProfile,
-    sample_id: str,
-    *,
-    sample_scoped_runs: bool,
-) -> str:
-    if not sample_scoped_runs:
-        return profile.data_profile_id
-    sample_run_id = _run_id_for_sample(
-        base_run_id,
-        sample_id,
-        sample_scoped_runs=True,
-    )
-    return f"{sample_run_id}:{_profile_suffix(profile)}"
 
 
 def _sql_string(value: str) -> str:
@@ -1967,10 +1839,8 @@ def _mapped_run_id_sql(
     sample_column: str,
     *,
     base_run_id: str,
-    sample_scoped_runs: bool,
 ) -> str:
-    if not sample_scoped_runs:
-        return _sql_string(base_run_id)
+    # Keep SQL bulk-load run IDs consistent with `run_id_for_sample`.
     normalized_sample = (
         f"trim(BOTH '_' FROM regexp_replace(trim(CAST({sample_column} AS VARCHAR)), "
         "'[^A-Za-z0-9_.:-]+', '_', 'g'))"
@@ -1978,35 +1848,22 @@ def _mapped_run_id_sql(
     return f"{_sql_string(base_run_id)} || ':' || {normalized_sample}"
 
 
-def _mapped_data_profile_key_sql(
-    mapped_run_id_sql: str,
-    *,
-    base_profile_id: str,
-    profile_suffix: str,
-    sample_scoped_runs: bool,
-) -> str:
-    if not sample_scoped_runs:
-        return _sql_string(base_profile_id)
-    return f"{mapped_run_id_sql} || ':' || {_sql_string(profile_suffix)}"
+def _mapped_data_profile_key_sql(*, base_profile_id: str) -> str:
+    return _sql_string(base_profile_id)
 
 
 def _mapped_sample_source_sql(
     source_sql: str,
     *,
     base_run_id: str,
-    profile_suffix: str,
-    sample_scoped_runs: bool,
+    base_profile_id: str,
 ) -> str:
     mapped_run_id = _mapped_run_id_sql(
         "sample_key",
         base_run_id=base_run_id,
-        sample_scoped_runs=sample_scoped_runs,
     )
     data_profile_key = _mapped_data_profile_key_sql(
-        mapped_run_id,
-        base_profile_id=f"{base_run_id}:{profile_suffix}",
-        profile_suffix=profile_suffix,
-        sample_scoped_runs=sample_scoped_runs,
+        base_profile_id=base_profile_id,
     )
     return f"""
         SELECT
