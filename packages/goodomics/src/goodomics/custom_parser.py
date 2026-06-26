@@ -158,9 +158,9 @@ class ParserOutput:
         common = {
             "data_profile_key": profile_id,
             "run_id": self.run_id,
-            "run_sample_key": self.run_sample_id(sample_id)
-            if sample_id is not None
-            else None,
+            "run_sample_key": (
+                self.run_sample_id(sample_id) if sample_id is not None else None
+            ),
             "sample_key": sample_id,
             "metric_key": metric_key,
         }
@@ -282,9 +282,9 @@ class ParserOutput:
                 payload_id=f"{self.run_id}:{name}:{len(self.batch.profile_payloads)}",
                 data_profile_key=data_profile_key,
                 run_id=self.run_id,
-                run_sample_key=self.run_sample_id(sample_id)
-                if sample_id is not None
-                else None,
+                run_sample_key=(
+                    self.run_sample_id(sample_id) if sample_id is not None else None
+                ),
                 payload_name=name,
                 payload_kind=payload_kind,
                 storage_format="inline_json",
@@ -409,8 +409,7 @@ class ParserOutput:
     ) -> None:
         """Add one metric definition unless it is already staged."""
         if any(
-            metric.metric_key == metric_key
-            for metric in self.batch.metric_definitions
+            metric.metric_key == metric_key for metric in self.batch.metric_definitions
         ):
             return
         self.batch.metric_definitions.append(
@@ -518,7 +517,9 @@ class CustomParser:
             profiles_ingested=len(normalized.data_profiles),
             metrics_ingested=len(normalized.analytics_batch.sample_metric_numeric)
             + len(normalized.analytics_batch.sample_metric_string),
-            feature_values_ingested=len(normalized.analytics_batch.feature_value_numeric),
+            feature_values_ingested=len(
+                normalized.analytics_batch.feature_value_numeric
+            ),
             feature_calls_ingested=len(normalized.analytics_batch.feature_call),
             payloads_ingested=len(normalized.analytics_batch.profile_payloads),
             files_registered=len(normalized.files),
