@@ -105,9 +105,10 @@ should update docs, run `uv run mkdocs build` when feasible.
 - Prefer readable structure over dense expressions: split complex conditions,
   payload construction, or nested transformations into named intermediate values
   when that makes the code easier to scan.
-- Add lightweight, high-signal comments in Python and React code when logic is
-  non-obvious, crosses trust boundaries, or encodes important constraints; avoid
-  noisy comments that restate the code.
+- Add docstrings or lightweight comments for public APIs, parser/ingest helpers,
+  storage boundaries, non-trivial transformations, trust boundaries, and
+  important constraints; skip obvious one-line helpers and comments that merely
+  restate the code.
 
 ## Documentation Guidelines
 
