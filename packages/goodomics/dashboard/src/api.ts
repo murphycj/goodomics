@@ -93,18 +93,18 @@ const fileSchema = z.object({
 
 const analyticsMetricSchema = z.object({
   run_id: z.string(),
-  data_profile_key: z.string(),
-  run_sample_key: z.string().nullable(),
-  sample_key: z.string().nullable(),
-  metric_key: z.string(),
+  data_profile_id: z.string(),
+  run_sample_id: z.string().nullable(),
+  sample_id: z.string().nullable(),
+  metric_id: z.string(),
   value: z.union([z.number(), z.string()]),
   source_file_id: z.string().nullable(),
 });
 
 const analyticsPayloadSchema = z.object({
   run_id: z.string(),
-  data_profile_key: z.string(),
-  run_sample_key: z.string().nullable(),
+  data_profile_id: z.string(),
+  run_sample_id: z.string().nullable(),
   payload_name: z.string(),
   payload_kind: z.string(),
   storage_format: z.string(),

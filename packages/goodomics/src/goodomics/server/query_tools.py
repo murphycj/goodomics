@@ -14,12 +14,17 @@ from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataImportRecord,
+    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
     RunRecord,
+    RunSampleRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
+    SubjectRecord,
+    get_record_by_field,
 )
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
@@ -200,7 +205,9 @@ class GoodomicsQueryTools:
         if project_id is None:
             return {"project_resolution": resolution, "samples": []}
         await self.context.store.ensure_schema()
-        statement = select(SampleRecord).where(SampleRecord.project_id == project_id)
+        project_row = await self._get_project(project_id)
+        project_pk = project_row.id if project_row is not None else None
+        statement = select(SampleRecord).where(SampleRecord.project_id == project_pk)
         term = (query or "").strip().lower()
         if term:
             pattern = f"%{term}%"
@@ -213,9 +220,10 @@ class GoodomicsQueryTools:
         )
         async with self._session() as session:
             rows = (await session.exec(statement)).all()
+            samples = [await _sample_payload_public(session, row) for row in rows]
         return {
             "project_resolution": resolution,
-            "samples": [_sample_payload(row) for row in rows],
+            "samples": samples,
         }
 
     async def get_run(self, run_id: str, project: str | None = None) -> dict[str, Any]:
@@ -268,15 +276,21 @@ class GoodomicsQueryTools:
         term = (metric_query or "").strip().lower()
         metrics: list[dict[str, Any]] = []
         try:
+            async with self._session() as session:
+                run_row = await get_record_by_field(
+                    session, RunRecord, RunRecord.run_id, run_id
+                )
+            if run_row is None:
+                return run_result | {"metrics": []}
             values = self._analytics_store(run.get("project_id")).list_metric_values(
-                run_id
+                run_row.id
             )
             metrics = [_analytics_metric_payload(value) for value in values]
             if term:
                 metrics = [
                     metric
                     for metric in metrics
-                    if term in str(metric.get("metric_key", "")).lower()
+                    if term in str(metric.get("metric_id", "")).lower()
                     or term in str(metric.get("value", "")).lower()
                 ]
         except Exception:
@@ -300,13 +314,19 @@ class GoodomicsQueryTools:
         if not isinstance(run, dict):
             return run_result | {"files": []}
         await self.context.store.ensure_schema()
+        async with self._session() as session:
+            run_row = await get_record_by_field(
+                session, RunRecord, RunRecord.run_id, run_id
+            )
+        if run_row is None:
+            return run_result | {"files": []}
         direct_statement = (
             select(FileRecord, FileLinkRecord)
             .join(
                 FileLinkRecord,
-                cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                cast(Any, FileLinkRecord.file_id) == FileRecord.id,
             )
-            .where(FileLinkRecord.run_id == run_id)
+            .where(FileLinkRecord.run_id == run_row.id)
         )
         if kind:
             direct_statement = direct_statement.where(
@@ -315,24 +335,35 @@ class GoodomicsQueryTools:
         direct_statement = direct_statement.order_by(cast(Any, FileRecord.file_id))
         data_import_id = run.get("data_import_id")
         async with self._session() as session:
-            rows = [
-                _file_payload(
-                    file,
-                    link,
-                    association_scope="direct_run",
-                    association_reason="File directly linked to this run.",
+            rows: list[dict[str, Any]] = []
+            for file, link in (await session.exec(direct_statement)).all():
+                rows.append(
+                    await _file_payload_public(
+                        session,
+                        file,
+                        link,
+                        association_scope="direct_run",
+                        association_reason="File directly linked to this run.",
+                    )
                 )
-                for file, link in (await session.exec(direct_statement)).all()
-            ]
             if isinstance(data_import_id, str):
+                data_import_row = await get_record_by_field(
+                    session,
+                    DataImportRecord,
+                    DataImportRecord.data_import_id,
+                    data_import_id,
+                )
+                data_import_pk = (
+                    data_import_row.id if data_import_row is not None else None
+                )
                 import_statement = (
                     select(FileRecord, FileLinkRecord)
                     .join(
                         FileLinkRecord,
-                        cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                        cast(Any, FileLinkRecord.file_id) == FileRecord.id,
                     )
                     .where(
-                        FileLinkRecord.data_import_id == data_import_id,
+                        FileLinkRecord.data_import_id == data_import_pk,
                         cast(Any, FileLinkRecord.run_id).is_(None),
                     )
                 )
@@ -343,17 +374,19 @@ class GoodomicsQueryTools:
                 import_statement = import_statement.order_by(
                     cast(Any, FileRecord.file_id)
                 )
-                rows.extend(
-                    _file_payload(
-                        file,
-                        link,
-                        association_scope="data_import",
-                        association_reason=(
-                            "Source file from the data import that produced this run."
-                        ),
+                for file, link in (await session.exec(import_statement)).all():
+                    rows.append(
+                        await _file_payload_public(
+                            session,
+                            file,
+                            link,
+                            association_scope="data_import",
+                            association_reason=(
+                                "Source file from the data import that produced "
+                                "this run."
+                            ),
+                        )
                     )
-                    for file, link in (await session.exec(import_statement)).all()
-                )
         return {
             "run": run,
             "files": _dedupe_file_payloads(rows)[: _bounded_limit(limit)],
@@ -376,7 +409,9 @@ class GoodomicsQueryTools:
     async def _get_project(self, project_id: str) -> ProjectRecord | None:
         await self.context.store.ensure_schema()
         async with self._session() as session:
-            return await session.get(ProjectRecord, project_id)
+            return await get_record_by_field(
+                session, ProjectRecord, ProjectRecord.project_id, project_id
+            )
 
     async def _project_summary(self, project: ProjectRecord) -> dict[str, Any]:
         async with self._session() as session:
@@ -385,7 +420,7 @@ class GoodomicsQueryTools:
                     await session.exec(
                         select(func.count())
                         .select_from(RunRecord)
-                        .where(RunRecord.project_id == project.project_id)
+                        .where(RunRecord.project_id == project.id)
                     )
                 ).one()
             )
@@ -394,14 +429,14 @@ class GoodomicsQueryTools:
                     await session.exec(
                         select(func.count())
                         .select_from(SampleRecord)
-                        .where(SampleRecord.project_id == project.project_id)
+                        .where(SampleRecord.project_id == project.id)
                     )
                 ).one()
             )
             latest_activity_at = (
                 await session.exec(
                     select(func.max(RunRecord.created_at)).where(
-                        RunRecord.project_id == project.project_id
+                        RunRecord.project_id == project.id
                     )
                 )
             ).one()
@@ -412,9 +447,9 @@ class GoodomicsQueryTools:
                         .select_from(FileRecord)
                         .join(
                             FileLinkRecord,
-                            cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                            cast(Any, FileLinkRecord.file_id) == FileRecord.id,
                         )
-                        .where(FileLinkRecord.project_id == project.project_id)
+                        .where(FileLinkRecord.project_id == project.id)
                     )
                 ).one()
             )
@@ -429,9 +464,11 @@ class GoodomicsQueryTools:
             "run_count": run_count,
             "sample_count": sample_count,
             "file_count": file_count,
-            "latest_activity_at": latest_activity_at.isoformat()
-            if latest_activity_at is not None
-            else None,
+            "latest_activity_at": (
+                latest_activity_at.isoformat()
+                if latest_activity_at is not None
+                else None
+            ),
         }
 
     async def _project_candidate(
@@ -462,7 +499,9 @@ class GoodomicsQueryTools:
         await self.context.store.ensure_schema()
         statement = select(RunRecord)
         if project_id is not None:
-            statement = statement.where(RunRecord.project_id == project_id)
+            project_row = await self._get_project(project_id)
+            project_pk = project_row.id if project_row is not None else None
+            statement = statement.where(RunRecord.project_id == project_pk)
         if status:
             statement = statement.where(func.lower(RunRecord.status) == status.lower())
         if assay:
@@ -477,7 +516,7 @@ class GoodomicsQueryTools:
         statement = statement.limit(_bounded_limit(limit))
         async with self._session() as session:
             rows = (await session.exec(statement)).all()
-        return [_run_record_payload(row) for row in rows]
+            return [await _run_record_payload_public(session, row) for row in rows]
 
     async def _optional_project_id(
         self, project: str | None
@@ -534,27 +573,35 @@ def _bounded_limit(limit: int, *, maximum: int = 50) -> int:
     return max(1, min(limit, maximum))
 
 
-def _run_record_payload(row: RunRecord) -> dict[str, Any]:
-    app_path = _run_path(row.project_id, row.run_id)
+async def _run_record_payload_public(
+    session: AsyncSession, row: RunRecord
+) -> dict[str, Any]:
+    project_id = await _public_label(
+        session, ProjectRecord, "project_id", row.project_id
+    )
+    data_import_id = await _public_label(
+        session, DataImportRecord, "data_import_id", row.data_import_id
+    )
+    app_path = _run_path(project_id, row.run_id)
     return {
         "run_id": row.run_id,
-        "project_id": row.project_id,
-        "data_import_id": row.data_import_id,
+        "project_id": project_id,
+        "data_import_id": data_import_id,
         "project": row.project,
         "name": row.name,
         "app_path": app_path,
-        "markdown_link": f"[{row.name or row.run_id}]({app_path})"
-        if app_path
-        else row.run_id,
+        "markdown_link": (
+            f"[{row.name or row.run_id}]({app_path})" if app_path else row.run_id
+        ),
         "run_kind": row.run_kind,
         "assay": row.assay,
         "pipeline_name": row.pipeline_name,
         "pipeline_version": row.pipeline_version,
         "status": row.status,
         "created_at": row.created_at.isoformat(),
-        "started_at": row.started_at.isoformat()
-        if row.started_at is not None
-        else None,
+        "started_at": (
+            row.started_at.isoformat() if row.started_at is not None else None
+        ),
         "ended_at": row.ended_at.isoformat() if row.ended_at is not None else None,
     }
 
@@ -570,15 +617,22 @@ def _run_payload(run: Any) -> dict[str, Any]:
     return payload
 
 
-def _sample_payload(row: SampleRecord) -> dict[str, Any]:
+async def _sample_payload_public(
+    session: AsyncSession, row: SampleRecord
+) -> dict[str, Any]:
+    project_id = await _public_label(
+        session, ProjectRecord, "project_id", row.project_id
+    )
     payload = _sample_link_fields(
-        project_id=row.project_id,
+        project_id=project_id,
         sample_id=row.sample_id,
         sample_name=row.sample_name,
     )
     payload.update(
         {
-            "subject_id": row.subject_id,
+            "subject_id": await _public_label(
+                session, SubjectRecord, "subject_id", row.subject_id
+            ),
         }
     )
     return payload
@@ -658,10 +712,62 @@ def _file_payload(
         "size_bytes": file.size_bytes,
         "sha256": file.sha256,
         "source_path": source_path if isinstance(source_path, str) else None,
-        "created_at": file.created_at.isoformat()
-        if file.created_at is not None
-        else None,
+        "created_at": (
+            file.created_at.isoformat() if file.created_at is not None else None
+        ),
     }
+
+
+async def _file_payload_public(
+    session: AsyncSession,
+    file: FileRecord,
+    link: FileLinkRecord,
+    *,
+    association_scope: str = "direct_run",
+    association_reason: str | None = None,
+) -> dict[str, Any]:
+    payload = _file_payload(
+        file,
+        link,
+        association_scope=association_scope,
+        association_reason=association_reason,
+    )
+    payload.update(
+        {
+            "project_id": await _public_label(
+                session, ProjectRecord, "project_id", link.project_id
+            ),
+            "data_import_id": await _public_label(
+                session, DataImportRecord, "data_import_id", link.data_import_id
+            ),
+            "run_id": await _public_label(session, RunRecord, "run_id", link.run_id),
+            "run_sample_id": await _public_label(
+                session, RunSampleRecord, "run_sample_id", link.run_sample_id
+            ),
+            "sample_id": await _public_label(
+                session, SampleRecord, "sample_id", link.sample_id
+            ),
+            "data_profile_id": await _public_label(
+                session, DataProfileRecord, "data_profile_id", link.data_profile_id
+            ),
+        }
+    )
+    return payload
+
+
+async def _public_label(
+    session: AsyncSession,
+    model: type[Any],
+    label_name: str,
+    identifier: int | None,
+) -> str | None:
+    if identifier is None:
+        return None
+    row = await get_record_by_field(session, model, cast(Any, model).id, identifier)
+    if row is None:
+        return None
+    label = getattr(row, label_name)
+    return str(label) if label is not None else None
 
 
 def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -691,10 +797,10 @@ def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
 def _analytics_metric_payload(value: Any) -> dict[str, Any]:
     return {
         "run_id": value.run_id,
-        "data_profile_key": value.data_profile_key,
-        "run_sample_key": value.run_sample_key,
-        "sample_key": value.sample_key,
-        "metric_key": value.metric_key,
+        "data_profile_id": value.data_profile_id,
+        "run_sample_id": value.run_sample_id,
+        "sample_id": value.sample_id,
+        "metric_id": value.metric_id,
         "value": value.value,
         "source_file_id": value.source_file_id,
     }

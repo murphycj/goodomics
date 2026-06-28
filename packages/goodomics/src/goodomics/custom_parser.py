@@ -17,22 +17,25 @@ from goodomics.schemas.models import (
     DataImport,
     DataProfile,
     Feature,
-    FeatureCall,
-    FeatureValueNumeric,
     FileAsset,
     FileLink,
     MetricDefinition,
-    ProfilePayload,
     Run,
     RunSample,
     Sample,
-    SampleMetricNumeric,
-    SampleMetricString,
+    UnresolvedAnalyticalRecord,
 )
 from goodomics.sources import SourceSpec, register_source
+from goodomics.storage.analytics_resolution import (
+    resolve_analytics_batch_catalog_ids,
+    resolve_catalog_id,
+)
 from goodomics.storage.database import ensure_sqlite_parent, resolve_database_url
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    SQLModelGoodomicsStore,
+    catalog_id_maps_from_records,
+)
 
 ParserFunction = Callable[[Any, "ParserOutput"], None]
 
@@ -150,29 +153,29 @@ class ParserOutput:
         metric-only parsers stay lightweight.
         """
         profile_id = self._profile_id(profile)
-        metric_key = f"{profile_id}:{name}"
+        metric_id = f"{profile_id}:{name}"
         value_type = "numeric" if isinstance(value, int | float) else "string"
         # Metric definitions are the metric catalog; metric observations below
         # are the actual sample/run values stored in DuckDB.
-        self._add_metric_definition(metric_key, name, profile_id, value_type, unit)
+        self._add_metric_definition(metric_id, name, profile_id, value_type, unit)
         common = {
-            "data_profile_key": profile_id,
+            "data_profile_id": profile_id,
             "run_id": self.run_id,
-            "run_sample_key": (
+            "run_sample_id": (
                 self.run_sample_id(sample_id) if sample_id is not None else None
             ),
-            "sample_key": sample_id,
-            "metric_key": metric_key,
+            "sample_id": sample_id,
+            "metric_id": metric_id,
         }
         if sample_id is not None:
             self.sample(sample_id)
         if value_type == "numeric":
             self.batch.sample_metric_numeric.append(
-                SampleMetricNumeric(value=float(value), **common)
+                UnresolvedAnalyticalRecord(**common, value=float(value))
             )
         else:
             self.batch.sample_metric_string.append(
-                SampleMetricString(value=str(value), **common)
+                UnresolvedAnalyticalRecord(**common, value=str(value))
             )
 
     def feature_value(
@@ -192,27 +195,27 @@ class ParserOutput:
         `feature_type` controls the feature namespace, so `gene` and `protein`
         values with the same `feature_id` remain distinct.
         """
-        data_profile_key = self._profile_id(profile)
-        feature_key = f"{feature_type}:{feature_id}"
+        data_profile_id = self._profile_id(profile)
+        feature_label = f"{feature_type}:{feature_id}"
         self.sample(sample_id)
         # Feature records are dimensional rows. They are deduped before writing
         # so parser loops can emit values naturally without managing a feature
         # registry themselves.
         self.batch.features.append(
             Feature(
-                feature_key=feature_key,
-                feature_id=feature_id,
+                feature_id=feature_label,
+                source_feature_id=feature_id,
                 feature_type=feature_type,
                 symbol=feature_id,
             )
         )
         self.batch.feature_value_numeric.append(
-            FeatureValueNumeric(
-                data_profile_key=data_profile_key,
+            UnresolvedAnalyticalRecord(
+                data_profile_id=data_profile_id,
                 run_id=self.run_id,
-                run_sample_key=self.run_sample_id(sample_id),
-                sample_key=sample_id,
-                feature_key=feature_key,
+                run_sample_id=self.run_sample_id(sample_id),
+                sample_id=sample_id,
+                feature_id=feature_label,
                 value=float(value),
                 value_semantics=value_semantics,
             )
@@ -234,24 +237,24 @@ class ParserOutput:
         binary assay calls, or other discrete feature states. `call_code` is the
         stable machine-readable value; `call_label` can be a display label.
         """
-        data_profile_key = self._profile_id(profile)
-        feature_key = f"{feature_type}:{feature_id}"
+        data_profile_id = self._profile_id(profile)
+        feature_label = f"{feature_type}:{feature_id}"
         self.sample(sample_id)
         self.batch.features.append(
             Feature(
-                feature_key=feature_key,
-                feature_id=feature_id,
+                feature_id=feature_label,
+                source_feature_id=feature_id,
                 feature_type=feature_type,
                 symbol=feature_id,
             )
         )
         self.batch.feature_call.append(
-            FeatureCall(
-                data_profile_key=data_profile_key,
+            UnresolvedAnalyticalRecord(
+                data_profile_id=data_profile_id,
                 run_id=self.run_id,
-                run_sample_key=self.run_sample_id(sample_id),
-                sample_key=sample_id,
-                feature_key=feature_key,
+                run_sample_id=self.run_sample_id(sample_id),
+                sample_id=sample_id,
+                feature_id=feature_label,
                 call_code=call_code,
                 call_label=call_label,
             )
@@ -273,16 +276,16 @@ class ParserOutput:
         source summaries, or early parser development. Large payloads should
         eventually move to file-backed storage or typed DuckDB tables.
         """
-        data_profile_key = self._profile_id(profile)
+        data_profile_id = self._profile_id(profile)
         if sample_id is not None:
             self.sample(sample_id)
         columns = list(rows[0]) if rows else []
         self.batch.profile_payloads.append(
-            ProfilePayload(
+            UnresolvedAnalyticalRecord(
                 payload_id=f"{self.run_id}:{name}:{len(self.batch.profile_payloads)}",
-                data_profile_key=data_profile_key,
+                data_profile_id=data_profile_id,
                 run_id=self.run_id,
-                run_sample_key=(
+                run_sample_id=(
                     self.run_sample_id(sample_id) if sample_id is not None else None
                 ),
                 payload_name=name,
@@ -292,7 +295,7 @@ class ParserOutput:
                 metadata_json={
                     "columns": columns,
                     "rows": rows,
-                    "sample_key": sample_id,
+                    "sample_id": sample_id,
                 },
             )
         )
@@ -401,7 +404,7 @@ class ParserOutput:
 
     def _add_metric_definition(
         self,
-        metric_key: str,
+        metric_id: str,
         name: str,
         namespace: str,
         value_type: str,
@@ -409,13 +412,12 @@ class ParserOutput:
     ) -> None:
         """Add one metric definition unless it is already staged."""
         if any(
-            metric.metric_key == metric_key for metric in self.batch.metric_definitions
+            metric.metric_id == metric_id for metric in self.batch.metric_definitions
         ):
             return
         self.batch.metric_definitions.append(
             MetricDefinition(
-                metric_key=metric_key,
-                metric_id=name,
+                metric_id=metric_id,
                 namespace=namespace,
                 metric_name=name,
                 display_name=name,
@@ -428,7 +430,7 @@ class ParserOutput:
     def _deduped_batch(self) -> AnalyticsIngestBatch:
         """Remove duplicate dimension records emitted by natural parser loops."""
         self.batch.features = list(
-            {feature.feature_key: feature for feature in self.batch.features}.values()
+            {feature.feature_id: feature for feature in self.batch.features}.values()
         )
         return self.batch
 
@@ -492,7 +494,7 @@ class CustomParser:
             source_path=str(value) if isinstance(value, str | Path) else None,
             project_slug=project_record.slug,
         )
-        asyncio.run(
+        catalog_result = asyncio.run(
             store.replace_run_catalog(
                 normalized.run,
                 data_import=normalized.data_import,
@@ -503,12 +505,20 @@ class CustomParser:
                 file_links=normalized.file_links,
             )
         )
+        catalog_id_maps = catalog_id_maps_from_records(catalog_result)
+        resolved_batch = resolve_analytics_batch_catalog_ids(
+            normalized.analytics_batch,
+            catalog_id_maps,
+        )
+        resolved_duckdb_run_id = resolve_catalog_id(
+            "run_id", resolved_run_id, catalog_id_maps
+        )
         resolved_analytics_path = analytics_path or analytics_path_for_project(
             Path(".goodomics"), project_record.project_id
         )
         DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
-            resolved_run_id,
-            normalized.analytics_batch,
+            resolved_duckdb_run_id,
+            resolved_batch,
         )
         return CustomParserResult(
             run_id=resolved_run_id,

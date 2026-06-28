@@ -20,9 +20,16 @@ from rich.text import Text
 
 from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import analytics_path_for_project
+from goodomics.storage.analytics_resolution import (
+    resolve_analytics_batch_catalog_ids,
+    resolve_catalog_id,
+)
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    SQLModelGoodomicsStore,
+    catalog_id_maps_from_records,
+)
 
 
 @dataclass(frozen=True)
@@ -83,7 +90,7 @@ def ingest_cbioportal_study(
             progress.update(task_id, total=total_steps, completed=2)
 
         update_progress("Writing SQL catalog metadata", completed=2)
-        asyncio.run(
+        catalog_result = asyncio.run(
             catalog_store.replace_runs_catalog(
                 parsed.all_runs,
                 data_import=parsed.data_import,
@@ -102,6 +109,22 @@ def ingest_cbioportal_study(
         resolved_analytics_path = analytics_path or analytics_path_for_project(
             Path(".goodomics"), project_record.project_id
         )
+        catalog_id_maps = catalog_id_maps_from_records(catalog_result)
+        resolved_batch = resolve_analytics_batch_catalog_ids(
+            parsed.analytics_batch,
+            catalog_id_maps,
+        )
+        resolved_bulk_loads = [
+            bulk_load.resolve_catalog_ids(catalog_id_maps)
+            for bulk_load in parsed.bulk_loads
+        ]
+        resolved_replace_run_ids = [
+            resolve_catalog_id("run_id", run_id, catalog_id_maps)
+            for run_id in [
+                resolved_data_import_id,
+                *[run.run_id for run in parsed.all_runs],
+            ]
+        ]
 
         def bulk_load_progress(
             bulk_load: Any,
@@ -109,17 +132,14 @@ def ingest_cbioportal_study(
             total: int,
         ) -> None:
             update_progress(
-                f"Loading DuckDB facts: {_bulk_load_label(bulk_load)}",
+                f"Loading DuckDB rows: {_bulk_load_label(bulk_load)}",
                 completed=4 + index,
             )
 
         DuckDBAnalyticsStore(resolved_analytics_path).write_batch_with_bulk_loads(
-            parsed.analytics_batch,
-            parsed.bulk_loads,
-            replace_run_ids=[
-                resolved_data_import_id,
-                *[run.run_id for run in parsed.all_runs],
-            ],
+            resolved_batch,
+            resolved_bulk_loads,
+            replace_run_ids=resolved_replace_run_ids,
             bulk_load_progress=bulk_load_progress if progress is not None else None,
         )
         update_progress("cBioPortal ingest complete", completed=total_steps)

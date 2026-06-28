@@ -2,21 +2,76 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fixtures import write_multiqc_fixture
 from goodomics.ingest.multiqc import ingest_multiqc, ingest_multiqc_runs
 from goodomics.parsers.multiqc import discover_multiqc_outputs, parse_multiqc_bundle
 from goodomics.projects import DEFAULT_PROJECT_ID
+from goodomics.storage.analytics_resolution import (
+    resolve_analytics_batch_catalog_ids,
+)
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
     FileLinkRecord,
     FileRecord,
+    RunRecord,
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+
+def _scalar(row: tuple[Any, ...] | None) -> Any:
+    assert row is not None
+    return row[0]
+
+
+def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int]]:
+    sample_ids = sorted(parsed.sample_ids)
+    data_profile_ids = sorted(
+        {
+            record.data_profile_id
+            for record in [*parsed.metrics, *parsed.payloads]
+            if isinstance(record.data_profile_id, str)
+        }
+    )
+    return {
+        "data_profile_id": {
+            data_profile_id: index
+            for index, data_profile_id in enumerate(data_profile_ids, start=1)
+        },
+        "run_id": {run_id: 1},
+        "run_sample_id": {
+            f"{run_id}:{sample_id}": index
+            for index, sample_id in enumerate(sample_ids, start=1)
+        },
+        "sample_id": {
+            sample_id: index for index, sample_id in enumerate(sample_ids, start=1)
+        },
+    }
+
+
+def _resolved_multiqc_batch(parsed: Any, *, run_id: str) -> Any:
+    return resolve_analytics_batch_catalog_ids(
+        parsed.to_batch(run_id=run_id),
+        _direct_catalog_maps(parsed, run_id=run_id),
+    )
+
+
+def _run_pk(database_url: str, run_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def test_discover_multiqc_outputs(tmp_path: Path) -> None:
@@ -36,9 +91,9 @@ def test_parse_multiqc_bundle_extracts_metrics_sources_versions_and_payloads(
 
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
 
-    metric_keys = {metric.metric_key for metric in parsed.metrics}
-    assert "general_stats.salmon_percent_mapped" in metric_keys
-    assert "multiqc_salmon.percent_mapped" in metric_keys
+    metric_ids = {metric.metric_id for metric in parsed.metrics}
+    assert "general_stats.salmon_percent_mapped" in metric_ids
+    assert "multiqc_salmon.percent_mapped" in metric_ids
     assert parsed.data_sources[0].source_path == "/work/S1/libParams/flenDist.txt"
     assert {version.tool for version in parsed.tool_versions} == {"fastqc", "salmon"}
     salmon_payloads = [
@@ -54,21 +109,21 @@ def test_duckdb_store_round_trips_metrics_and_payloads(tmp_path: Path) -> None:
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
     store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
 
-    store.replace_run_data(
-        "run-1",
-        metrics=parsed.metrics,
-        definitions=parsed.definitions,
-        payloads=parsed.payloads,
-        tool_versions=parsed.tool_versions,
-        data_sources=parsed.data_sources,
-    )
+    store.replace_run_data(1, _resolved_multiqc_batch(parsed, run_id="run-1"))
 
-    metrics = store.list_metric_values("run-1")
-    payloads = store.list_table_payloads("run-1")
+    metrics = store.list_metric_values(1)
+    payloads = store.list_table_payloads(1)
+    with store._connect() as connection:
+        percent_mapped_metric_id = connection.execute(
+            """
+            SELECT metric_id
+            FROM dim_metrics
+            WHERE metric_label = 'general_stats.salmon_percent_mapped'
+            """
+        ).fetchone()
+        percent_mapped_metric_id = _scalar(percent_mapped_metric_id)
 
-    assert any(
-        metric.metric_key == "general_stats.salmon_percent_mapped" for metric in metrics
-    )
+    assert any(metric.metric_id == percent_mapped_metric_id for metric in metrics)
     assert any(payload.payload_name == "salmon_plot" for payload in payloads)
     assert payloads[0].rows
 
@@ -83,14 +138,20 @@ def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
     parsed.sample_metric_string[0] = parsed.sample_metric_string[0].model_copy(
         update={"value": "[330, 612, 1140, 1989, 4614]"}
     )
-    store.replace_run_data("run-1", parsed.to_batch(run_id="run-1"))
+    store.replace_run_data(1, _resolved_multiqc_batch(parsed, run_id="run-1"))
 
-    metrics = store.list_metric_values("run-1")
+    metrics = store.list_metric_values(1)
+    with store._connect() as connection:
+        string_metric_id = connection.execute(
+            "SELECT metric_id FROM dim_metrics WHERE metric_label = ?",
+            [parsed.sample_metric_string[0].metric_id],
+        ).fetchone()
+        string_metric_id = _scalar(string_metric_id)
 
     assert any(
         metric.value == "[330, 612, 1140, 1989, 4614]"
         for metric in metrics
-        if metric.metric_key == parsed.sample_metric_string[0].metric_key
+        if metric.metric_id == string_metric_id
     )
 
 
@@ -127,9 +188,12 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
         async with AsyncSession(catalog_store._get_engine()) as session:
             imports = (await session.exec(select(DataImportRecord))).all()
             files = (await session.exec(select(FileRecord))).all()
+            run_row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == "run-1"))
+            ).one()
             links = (
                 await session.exec(
-                    select(FileLinkRecord).where(FileLinkRecord.run_id == "run-1")
+                    select(FileLinkRecord).where(FileLinkRecord.run_id == run_row.id)
                 )
             ).all()
         return list(imports), list(files), list(links)
@@ -137,8 +201,8 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     imports, files, links = asyncio.run(load_files())
     assert [data_import.data_import_id for data_import in imports] == ["run-1"]
     assert {file.file_role for file in files} == {"multiqc_data", "multiqc_report"}
-    assert {link.file_id for link in links} == {file.file_id for file in files}
-    assert {link.data_import_id for link in links} == {"run-1"}
+    assert {link.file_id for link in links} == {file.id for file in files}
+    assert {link.data_import_id for link in links} == {imports[0].id}
 
 
 def test_ingest_multiqc_defaults_to_project_analytics_path(
@@ -161,7 +225,9 @@ def test_ingest_multiqc_defaults_to_project_analytics_path(
     )
     assert result.analytics_path == expected_path
     assert (tmp_path / expected_path).exists()
-    assert DuckDBAnalyticsStore(expected_path).list_metric_values("run-default-project")
+    assert DuckDBAnalyticsStore(expected_path).list_metric_values(
+        _run_pk(database_url, "run-default-project")
+    )
 
 
 def test_ingest_multiqc_project_slug_uses_generated_project_ref(
@@ -227,7 +293,11 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     assert rap1_run is not None
     assert "WT_REP1" in {sample.sample_id for sample in wt_run.samples}
     assert "RAP1_IAA_30M_REP1" in {sample.sample_id for sample in rap1_run.samples}
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP1")
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("RAP1_IAA_30M_REP1")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_url, "WT_REP1")
+    )
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_url, "RAP1_IAA_30M_REP1")
+    )
     assert (file_root / "WT_REP1" / "multiqc").exists()
     assert (file_root / "RAP1_IAA_30M_REP1" / "multiqc").exists()

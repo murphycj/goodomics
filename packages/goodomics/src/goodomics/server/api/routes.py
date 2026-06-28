@@ -49,6 +49,8 @@ from goodomics.storage.sqlalchemy import (
     SampleSetMemberRecord,
     SampleSetRecord,
     SubjectRecord,
+    get_record_by_field,
+    get_record_where,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -263,26 +265,26 @@ class DatabaseTablePageRead(SQLModel):
 
 
 class AnalyticsMetricRead(SQLModel):
-    run_id: str
-    data_profile_key: str
-    run_sample_key: str | None = None
-    sample_key: str | None = None
-    metric_key: str
+    run_id: int | str
+    data_profile_id: int | str
+    run_sample_id: int | str | None = None
+    sample_id: int | str | None = None
+    metric_id: int | str
     value: float | str
-    source_file_id: str | None = None
+    source_file_id: int | str | None = None
 
 
 class AnalyticsPayloadRead(SQLModel):
-    run_id: str
-    data_profile_key: str
-    run_sample_key: str | None = None
+    run_id: int | str
+    data_profile_id: int | str
+    run_sample_id: int | str | None = None
     payload_name: str
     payload_kind: str
     storage_format: str
     columns: list[str]
     rows: list[dict[str, Any]]
     row_count: int
-    source_file_id: str | None = None
+    source_file_id: int | str | None = None
     source_hash: str | None = None
 
 
@@ -393,9 +395,9 @@ async def create_project(payload: ProjectCreate, request: Request) -> ProjectRea
     await _ensure_schema(request)
     slug = validate_project_slug(payload.slug or payload.name)
     async with _session(request) as session:
-        existing = (
-            await session.exec(select(ProjectRecord).where(ProjectRecord.slug == slug))
-        ).first()
+        existing = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.slug, slug
+        )
         if existing is not None:
             raise HTTPException(status_code=409, detail="Project slug already exists")
         project = ProjectRecord(
@@ -455,9 +457,9 @@ async def list_project_run_analytics_metrics(
     run_id: str,
     request: Request,
 ) -> list[AnalyticsMetricRead]:
-    run = await _get_project_run(request, project_id, run_id)
+    run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_metric_reads(
-        _analytics_store_for_project(request, run.project_id).list_metric_values(run_id)
+        _analytics_store_for_project(request, project_id).list_metric_values(run.id)
     )
 
 
@@ -470,11 +472,9 @@ async def list_project_run_analytics_payloads(
     run_id: str,
     request: Request,
 ) -> list[AnalyticsPayloadRead]:
-    run = await _get_project_run(request, project_id, run_id)
+    run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_payload_reads(
-        _analytics_store_for_project(request, run.project_id).list_profile_payloads(
-            run_id
-        )
+        _analytics_store_for_project(request, project_id).list_profile_payloads(run.id)
     )
 
 
@@ -509,34 +509,33 @@ async def get_project_sample(
     sample_id: str,
     request: Request,
 ) -> Sample:
-    await _require_project(request, project_id)
+    project = await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = (
-            await session.exec(
-                select(SampleRecord).where(
-                    SampleRecord.project_id == project_id,
-                    SampleRecord.sample_id == sample_id,
-                )
-            )
-        ).first()
+        row = await get_record_where(
+            session,
+            SampleRecord,
+            SampleRecord.project_id == project.id,
+            SampleRecord.sample_id == sample_id,
+        )
         if row is None:
             row = (
                 await session.exec(
                     select(SampleRecord)
                     .join(
                         RunSampleRecord,
-                        cast(Any, RunSampleRecord.sample_id) == SampleRecord.sample_id,
+                        cast(Any, RunSampleRecord.sample_id) == SampleRecord.id,
                     )
                     .where(
-                        RunSampleRecord.project_id == project_id,
-                        RunSampleRecord.sample_id == sample_id,
+                        RunSampleRecord.project_id == project.id,
+                        SampleRecord.sample_id == sample_id,
                     )
                 )
             ).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Sample not found")
-    return _sample_from_row(row)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Sample not found")
+        sample = await _sample_from_row_public(session, row)
+    return sample
 
 
 @router.get(
@@ -553,7 +552,10 @@ async def list_project_sample_runs(
     async with _session(request) as session:
         await _require_project_sample(session, project_id, sample_id)
         rows = await _sample_run_rows(session, project_id, sample_id)
-    return [_sample_run_from_rows(run, run_sample) for run, run_sample in rows]
+        return [
+            await _sample_run_from_rows_public(session, run, run_sample)
+            for run, run_sample in rows
+        ]
 
 
 @router.get(
@@ -606,13 +608,12 @@ async def list_project_sample_run_analytics_metrics(
     await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
-        _, run_sample = await _get_sample_run_link(
+        run, run_sample = await _get_sample_run_link(
             session, project_id, sample_id, run_id
         )
     metrics = _analytics_store_for_project(request, project_id).list_metric_values(
-        run_id,
-        sample_key=sample_id,
-        run_sample_key=run_sample.run_sample_id,
+        run.id,
+        run_sample_id=run_sample.id,
     )
     return _analytics_metric_reads(metrics)
 
@@ -624,20 +625,17 @@ async def patch_project(
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     async with _session(request) as session:
-        row = await session.get(ProjectRecord, project_id)
+        row = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.project_id, project_id
+        )
         if row is None:
             raise HTTPException(status_code=404, detail="Project not found")
         if "slug" in values and values["slug"] is not None:
             slug = validate_project_slug(str(values["slug"]))
-            existing = (
-                await session.exec(
-                    select(ProjectRecord).where(
-                        ProjectRecord.slug == slug,
-                        ProjectRecord.project_id != project_id,
-                    )
-                )
-            ).first()
-            if existing is not None:
+            existing = await get_record_by_field(
+                session, ProjectRecord, ProjectRecord.slug, slug
+            )
+            if existing is not None and existing.project_id != project_id:
                 raise HTTPException(
                     status_code=409, detail="Project slug already exists"
                 )
@@ -673,8 +671,10 @@ async def search_samples(
     limit: int = Query(default=12, ge=1, le=50),
 ) -> list[SearchResultRead]:
     await _ensure_schema(request)
+    project_pk: int | None = None
     if project_id is not None:
-        await _require_project(request, project_id)
+        project = await _require_project(request, project_id)
+        project_pk = project.id
     term = q.strip().lower()
     if not term:
         return []
@@ -686,7 +686,7 @@ async def search_samples(
         )
         if project_id is not None:
             sample_statement = sample_statement.where(
-                SampleRecord.project_id == project_id
+                SampleRecord.project_id == project_pk
             )
         sample_rows = (await session.exec(sample_statement.limit(limit))).all()
 
@@ -695,7 +695,7 @@ async def search_samples(
             | (func.lower(RunRecord.name).like(pattern))
         )
         if project_id is not None:
-            run_statement = run_statement.where(RunRecord.project_id == project_id)
+            run_statement = run_statement.where(RunRecord.project_id == project_pk)
         remaining = max(limit - len(sample_rows), 0)
         run_rows = (
             (await session.exec(run_statement.limit(remaining))).all()
@@ -707,25 +707,32 @@ async def search_samples(
             for row in [*run_rows, *sample_rows]
             if row.project_id is not None
         }
-        project_rows: dict[str, ProjectRecord] = {}
+        project_rows: dict[int, ProjectRecord] = {}
         if project_ids:
             project_rows = {
-                project.project_id: project
+                int(project.id): project
                 for project in (
                     await session.exec(
                         select(ProjectRecord).where(
-                            cast(Any, ProjectRecord.project_id).in_(project_ids)
+                            cast(Any, ProjectRecord.id).in_(project_ids)
                         )
                     )
                 ).all()
+                if project.id is not None
             }
     return [
         SearchResultRead(
             kind="sample",
-            project_id=row.project_id,
-            project_name=project_rows[row.project_id].name
-            if row.project_id in project_rows
-            else None,
+            project_id=(
+                project_rows[row.project_id].project_id
+                if row.project_id in project_rows
+                else None
+            ),
+            project_name=(
+                project_rows[row.project_id].name
+                if row.project_id in project_rows
+                else None
+            ),
             sample_id=row.sample_id,
             sample_name=row.sample_name,
         )
@@ -733,10 +740,16 @@ async def search_samples(
     ] + [
         SearchResultRead(
             kind="run",
-            project_id=row.project_id,
-            project_name=project_rows[row.project_id].name
-            if row.project_id in project_rows
-            else None,
+            project_id=(
+                project_rows[row.project_id].project_id
+                if row.project_id in project_rows
+                else None
+            ),
+            project_name=(
+                project_rows[row.project_id].name
+                if row.project_id in project_rows
+                else None
+            ),
             run_id=row.run_id,
         )
         for row in run_rows
@@ -788,7 +801,9 @@ async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session(request) as session:
-            row = await session.get(RunRecord, run_id)
+            row = await get_record_by_field(
+                session, RunRecord, RunRecord.run_id, run_id
+            )
             if row is None:
                 raise HTTPException(status_code=404, detail="Run not found")
             for key, value in values.items():
@@ -814,38 +829,46 @@ async def _list_run_files(
 ) -> list[FileRead]:
     await _ensure_schema(request)
     async with _session(request) as session:
-        run = await session.get(RunRecord, run_id)
+        run = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        if project_id is not None and run.project_id != project_id:
+        project_pk: int | None = None
+        if project_id is not None:
+            project = await get_record_by_field(
+                session, ProjectRecord, ProjectRecord.project_id, project_id
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project_pk = project.id
+        if project_pk is not None and run.project_id != project_pk:
             raise HTTPException(status_code=404, detail="Run not found")
         direct_statement = (
             select(FileRecord, FileLinkRecord)
-            .join(
-                FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.file_id
-            )
-            .where(FileLinkRecord.run_id == run_id)
+            .join(FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.id)
+            .where(FileLinkRecord.run_id == run.id)
             .order_by(FileRecord.file_id)
         )
-        if project_id is not None:
+        if project_pk is not None:
             direct_statement = direct_statement.where(
-                FileLinkRecord.project_id == project_id
+                FileLinkRecord.project_id == project_pk
             )
-        rows = [
-            _file_from_rows(
-                file,
-                link,
-                association_scope="direct_run",
-                association_reason="File directly linked to this run.",
+        rows: list[FileRead] = []
+        for file, link in (await session.exec(direct_statement)).all():
+            rows.append(
+                await _file_from_rows_public(
+                    session,
+                    file,
+                    link,
+                    association_scope="direct_run",
+                    association_reason="File directly linked to this run.",
+                )
             )
-            for file, link in (await session.exec(direct_statement)).all()
-        ]
         if run.data_import_id is not None:
             import_statement = (
                 select(FileRecord, FileLinkRecord)
                 .join(
                     FileLinkRecord,
-                    cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                    cast(Any, FileLinkRecord.file_id) == FileRecord.id,
                 )
                 .where(
                     FileLinkRecord.data_import_id == run.data_import_id,
@@ -853,21 +876,22 @@ async def _list_run_files(
                 )
                 .order_by(FileRecord.file_id)
             )
-            if project_id is not None:
+            if project_pk is not None:
                 import_statement = import_statement.where(
-                    FileLinkRecord.project_id == project_id
+                    FileLinkRecord.project_id == project_pk
                 )
-            rows.extend(
-                _file_from_rows(
-                    file,
-                    link,
-                    association_scope="data_import",
-                    association_reason=(
-                        "Source file from the data import that produced this run."
-                    ),
+            for file, link in (await session.exec(import_statement)).all():
+                rows.append(
+                    await _file_from_rows_public(
+                        session,
+                        file,
+                        link,
+                        association_scope="data_import",
+                        association_reason=(
+                            "Source file from the data import that produced this run."
+                        ),
+                    )
                 )
-                for file, link in (await session.exec(import_statement)).all()
-            )
     return _dedupe_file_reads(rows)
 
 
@@ -878,9 +902,10 @@ async def _list_run_files(
 async def list_run_analytics_metrics(
     run_id: str, request: Request
 ) -> list[AnalyticsMetricRead]:
-    run = await get_run(run_id, request)
-    analytics_store = _analytics_store_for_project(request, run.project_id)
-    return _analytics_metric_reads(analytics_store.list_metric_values(run_id))
+    run = await _get_run_record(request, run_id)
+    project_id = await _project_public_id_for_pk(request, run.project_id)
+    analytics_store = _analytics_store_for_project(request, project_id)
+    return _analytics_metric_reads(analytics_store.list_metric_values(run.id))
 
 
 @router.get(
@@ -890,9 +915,10 @@ async def list_run_analytics_metrics(
 async def list_run_analytics_payloads(
     run_id: str, request: Request
 ) -> list[AnalyticsPayloadRead]:
-    run = await get_run(run_id, request)
-    analytics_store = _analytics_store_for_project(request, run.project_id)
-    return _analytics_payload_reads(analytics_store.list_profile_payloads(run_id))
+    run = await _get_run_record(request, run_id)
+    project_id = await _project_public_id_for_pk(request, run.project_id)
+    analytics_store = _analytics_store_for_project(request, project_id)
+    return _analytics_payload_reads(analytics_store.list_profile_payloads(run.id))
 
 
 @router.get("/files/{file_id}/content")
@@ -908,13 +934,16 @@ async def _file_content_response(
 ) -> FileResponse:
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(FileRecord, file_id)
+        row = await get_record_by_field(
+            session, FileRecord, FileRecord.file_id, file_id
+        )
         if row is not None and project_id is not None:
+            project_pk = await _project_pk(request, project_id, session=session)
             link = (
                 await session.exec(
                     select(FileLinkRecord).where(
-                        FileLinkRecord.file_id == file_id,
-                        FileLinkRecord.project_id == project_id,
+                        FileLinkRecord.file_id == row.id,
+                        FileLinkRecord.project_id == project_pk,
                     )
                 )
             ).first()
@@ -1283,7 +1312,9 @@ async def _ensure_default_project(request: Request) -> ProjectRead:
 async def _require_project(request: Request, project_id: str) -> ProjectRecord:
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(ProjectRecord, project_id)
+        row = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.project_id, project_id
+        )
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return row
@@ -1292,7 +1323,9 @@ async def _require_project(request: Request, project_id: str) -> ProjectRecord:
 async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(ProjectRecord, project_id)
+        row = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.project_id, project_id
+        )
         if row is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return await _project_read(row, session=session)
@@ -1306,6 +1339,25 @@ async def _get_project_run(request: Request, project_id: str, run_id: str) -> Ru
     return run
 
 
+async def _get_run_record(request: Request, run_id: str) -> RunRecord:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return row
+
+
+async def _get_project_run_record(
+    request: Request, project_id: str, run_id: str
+) -> RunRecord:
+    project = await _require_project(request, project_id)
+    row = await _get_run_record(request, run_id)
+    if row.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return row
+
+
 async def _project_read(
     row: ProjectRecord,
     *,
@@ -1316,7 +1368,7 @@ async def _project_read(
             await session.exec(
                 select(func.count())
                 .select_from(RunRecord)
-                .where(RunRecord.project_id == row.project_id)
+                .where(RunRecord.project_id == row.id)
             )
         ).one()
     )
@@ -1325,15 +1377,13 @@ async def _project_read(
             await session.exec(
                 select(func.count())
                 .select_from(SampleRecord)
-                .where(SampleRecord.project_id == row.project_id)
+                .where(SampleRecord.project_id == row.id)
             )
         ).one()
     )
     latest_activity_at = (
         await session.exec(
-            select(func.max(RunRecord.created_at)).where(
-                RunRecord.project_id == row.project_id
-            )
+            select(func.max(RunRecord.created_at)).where(RunRecord.project_id == row.id)
         )
     ).one()
     file_rows = (
@@ -1341,9 +1391,9 @@ async def _project_read(
             select(FileRecord)
             .join(
                 FileLinkRecord,
-                cast(Any, FileLinkRecord.file_id) == FileRecord.file_id,
+                cast(Any, FileLinkRecord.file_id) == FileRecord.id,
             )
-            .where(FileLinkRecord.project_id == row.project_id)
+            .where(FileLinkRecord.project_id == row.id)
             .distinct()
         )
     ).all()
@@ -1368,17 +1418,19 @@ async def _list_samples(
     offset: int,
 ) -> SamplePageRead:
     await _ensure_schema(request)
+    project = await _require_project(request, project_id)
+    project_pk = project.id
     latest_run_subquery = (
         select(
             cast(Any, RunSampleRecord.sample_id).label("sample_id"),
             func.max(RunRecord.created_at).label("latest_run_created_at"),
         )
-        .join(RunRecord, cast(Any, RunRecord.run_id) == RunSampleRecord.run_id)
+        .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
         .where(
-            RunSampleRecord.project_id == project_id,
-            RunRecord.project_id == project_id,
+            RunSampleRecord.project_id == project_pk,
+            RunRecord.project_id == project_pk,
         )
-        .group_by(RunSampleRecord.sample_id)
+        .group_by(cast(Any, RunSampleRecord.sample_id))
         .subquery()
     )
     run_count_subquery = (
@@ -1386,8 +1438,8 @@ async def _list_samples(
             cast(Any, RunSampleRecord.sample_id).label("sample_id"),
             func.count(func.distinct(RunSampleRecord.run_id)).label("run_count"),
         )
-        .where(RunSampleRecord.project_id == project_id)
-        .group_by(RunSampleRecord.sample_id)
+        .where(RunSampleRecord.project_id == project_pk)
+        .group_by(cast(Any, RunSampleRecord.sample_id))
         .subquery()
     )
     async with _session(request) as session:
@@ -1396,7 +1448,7 @@ async def _list_samples(
                 await session.exec(
                     select(func.count())
                     .select_from(SampleRecord)
-                    .where(SampleRecord.project_id == project_id)
+                    .where(SampleRecord.project_id == project_pk)
                 )
             ).one()
         )
@@ -1408,13 +1460,13 @@ async def _list_samples(
             )
             .outerjoin(
                 run_count_subquery,
-                cast(Any, SampleRecord.sample_id) == run_count_subquery.c.sample_id,
+                cast(Any, SampleRecord.id) == run_count_subquery.c.sample_id,
             )
             .outerjoin(
                 latest_run_subquery,
-                cast(Any, SampleRecord.sample_id) == latest_run_subquery.c.sample_id,
+                cast(Any, SampleRecord.id) == latest_run_subquery.c.sample_id,
             )
-            .where(SampleRecord.project_id == project_id)
+            .where(SampleRecord.project_id == project_pk)
             .order_by(
                 cast(Any, latest_run_subquery.c.latest_run_created_at).desc(),
                 SampleRecord.sample_id,
@@ -1427,7 +1479,8 @@ async def _list_samples(
                 session, project_id, sample_row.sample_id
             )
             items.append(
-                _sample_list_item_from_row(
+                await _sample_list_item_from_row_public(
+                    session,
                     sample_row,
                     run_count=int(run_count or 0),
                     latest_run=latest_run[0] if latest_run is not None else None,
@@ -1442,14 +1495,17 @@ async def _require_project_sample(
     project_id: str,
     sample_id: str,
 ) -> SampleRecord:
-    row = (
-        await session.exec(
-            select(SampleRecord).where(
-                SampleRecord.project_id == project_id,
-                SampleRecord.sample_id == sample_id,
-            )
-        )
-    ).first()
+    project = await get_record_by_field(
+        session, ProjectRecord, ProjectRecord.project_id, project_id
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    row = await get_record_where(
+        session,
+        SampleRecord,
+        SampleRecord.project_id == project.id,
+        SampleRecord.sample_id == sample_id,
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Sample not found")
     return row
@@ -1460,17 +1516,25 @@ async def _sample_run_rows(
     project_id: str,
     sample_id: str,
 ) -> list[tuple[RunRecord, RunSampleRecord]]:
+    project = await get_record_by_field(
+        session, ProjectRecord, ProjectRecord.project_id, project_id
+    )
+    sample = await get_record_by_field(
+        session, SampleRecord, SampleRecord.sample_id, sample_id
+    )
+    if project is None or sample is None:
+        return []
     rows = (
         await session.exec(
             select(RunRecord, RunSampleRecord)
             .join(
                 RunSampleRecord,
-                cast(Any, RunSampleRecord.run_id) == RunRecord.run_id,
+                cast(Any, RunSampleRecord.run_id) == RunRecord.id,
             )
             .where(
-                RunRecord.project_id == project_id,
-                RunSampleRecord.project_id == project_id,
-                RunSampleRecord.sample_id == sample_id,
+                RunRecord.project_id == project.id,
+                RunSampleRecord.project_id == project.id,
+                RunSampleRecord.sample_id == sample.id,
             )
             .order_by(
                 cast(Any, RunRecord.created_at).desc(),
@@ -1496,18 +1560,26 @@ async def _get_sample_run_link(
     sample_id: str,
     run_id: str,
 ) -> tuple[RunRecord, RunSampleRecord]:
+    project = await get_record_by_field(
+        session, ProjectRecord, ProjectRecord.project_id, project_id
+    )
+    sample = await get_record_by_field(
+        session, SampleRecord, SampleRecord.sample_id, sample_id
+    )
+    if project is None or sample is None:
+        raise HTTPException(status_code=404, detail="Sample run not found")
     row = (
         await session.exec(
             select(RunRecord, RunSampleRecord)
             .join(
                 RunSampleRecord,
-                cast(Any, RunSampleRecord.run_id) == RunRecord.run_id,
+                cast(Any, RunSampleRecord.run_id) == RunRecord.id,
             )
             .where(
-                RunRecord.project_id == project_id,
+                RunRecord.project_id == project.id,
                 RunRecord.run_id == run_id,
-                RunSampleRecord.project_id == project_id,
-                RunSampleRecord.sample_id == sample_id,
+                RunSampleRecord.project_id == project.id,
+                RunSampleRecord.sample_id == sample.id,
             )
         )
     ).first()
@@ -1524,30 +1596,38 @@ async def _list_runs(
     offset: int,
 ) -> RunPageRead:
     await _ensure_schema(request)
+    project_pk: int | None = None
     if project_id is not None:
-        await _require_project(request, project_id)
+        project = await _require_project(request, project_id)
+        project_pk = project.id
     async with _session(request) as session:
         count_statement = select(func.count()).select_from(RunRecord)
         rows_statement = select(RunRecord).order_by(
             cast(Any, RunRecord.created_at).desc(), RunRecord.run_id
         )
-        if project_id is not None:
-            count_statement = count_statement.where(RunRecord.project_id == project_id)
-            rows_statement = rows_statement.where(RunRecord.project_id == project_id)
+        if project_pk is not None:
+            count_statement = count_statement.where(RunRecord.project_id == project_pk)
+            rows_statement = rows_statement.where(RunRecord.project_id == project_pk)
         total = int((await session.exec(count_statement)).one())
         rows = (await session.exec(rows_statement.offset(offset).limit(limit))).all()
+        items = [await _run_from_row_public(session, row) for row in rows]
     return RunPageRead(
-        items=[_run_from_row(row) for row in rows],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,
     )
 
 
-def _run_from_row(row: RunRecord) -> Run:
+async def _run_from_row_public(session: AsyncSession, row: RunRecord) -> Run:
     return Run(
         run_id=row.run_id,
-        project_id=row.project_id,
+        project_id=await _public_label(
+            session, ProjectRecord, "project_id", row.project_id
+        ),
+        data_import_id=await _public_label(
+            session, DataImportRecord, "data_import_id", row.data_import_id
+        ),
         project=row.project,
         name=row.name,
         run_kind=row.run_kind,
@@ -1563,19 +1643,27 @@ def _run_from_row(row: RunRecord) -> Run:
     )
 
 
-def _sample_from_row(row: SampleRecord) -> Sample:
+async def _sample_from_row_public(
+    session: AsyncSession,
+    row: SampleRecord,
+) -> Sample:
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
     return Sample(
         sample_id=row.sample_id,
-        project_id=row.project_id,
-        subject_id=row.subject_id,
+        project_id=await _public_label(
+            session, ProjectRecord, "project_id", row.project_id
+        ),
+        subject_id=await _public_label(
+            session, SubjectRecord, "subject_id", row.subject_id
+        ),
         sample_name=row.sample_name,
         metadata_json=metadata_dict,
     )
 
 
-def _sample_list_item_from_row(
+async def _sample_list_item_from_row_public(
+    session: AsyncSession,
     row: SampleRecord,
     *,
     run_count: int,
@@ -1586,8 +1674,12 @@ def _sample_list_item_from_row(
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
     return SampleListItemRead(
         sample_id=row.sample_id,
-        project_id=row.project_id,
-        subject_id=row.subject_id,
+        project_id=await _public_label(
+            session, ProjectRecord, "project_id", row.project_id
+        ),
+        subject_id=await _public_label(
+            session, SubjectRecord, "subject_id", row.subject_id
+        ),
         sample_name=row.sample_name,
         metadata_json=metadata_dict,
         run_count=run_count,
@@ -1597,10 +1689,16 @@ def _sample_list_item_from_row(
     )
 
 
-def _sample_run_from_rows(run: RunRecord, run_sample: RunSampleRecord) -> SampleRunRead:
+async def _sample_run_from_rows_public(
+    session: AsyncSession,
+    run: RunRecord,
+    run_sample: RunSampleRecord,
+) -> SampleRunRead:
     return SampleRunRead(
         run_id=run.run_id,
-        project_id=run.project_id,
+        project_id=await _public_label(
+            session, ProjectRecord, "project_id", run.project_id
+        ),
         name=run.name,
         run_kind=run.run_kind,
         assay=run.assay,
@@ -1617,10 +1715,10 @@ def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
     return [
         AnalyticsMetricRead(
             run_id=metric.run_id,
-            data_profile_key=metric.data_profile_key,
-            run_sample_key=metric.run_sample_key,
-            sample_key=metric.sample_key,
-            metric_key=metric.metric_key,
+            data_profile_id=metric.data_profile_id,
+            run_sample_id=metric.run_sample_id,
+            sample_id=metric.sample_id,
+            metric_id=metric.metric_id,
             value=metric.value,
             source_file_id=metric.source_file_id,
         )
@@ -1632,8 +1730,8 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
     return [
         AnalyticsPayloadRead(
             run_id=payload.run_id,
-            data_profile_key=payload.data_profile_key,
-            run_sample_key=payload.run_sample_key,
+            data_profile_id=payload.data_profile_id,
+            run_sample_id=payload.run_sample_id,
             payload_name=payload.payload_name,
             payload_kind=payload.payload_kind,
             storage_format=payload.storage_format,
@@ -1724,24 +1822,25 @@ async def _catalog_table_page(
         raise HTTPException(
             status_code=400, detail=f"Unknown column: {order_column_name}"
         )
+    project_pk = await _project_pk(request, project_id)
     project_run_ids = await _project_run_ids(request, project_id)
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
     if (
-        project_id is not None
+        project_pk is not None
         and table_name == "data_profiles"
         and "project_id" in model.model_fields
     ):
         count_statement = count_statement.where(
-            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+            or_(model_any.project_id == project_pk, model_any.project_id.is_(None))
         )
         row_statement = row_statement.where(
-            or_(model_any.project_id == project_id, model_any.project_id.is_(None))
+            or_(model_any.project_id == project_pk, model_any.project_id.is_(None))
         )
-    elif project_id is not None and "project_id" in model.model_fields:
-        count_statement = count_statement.where(model_any.project_id == project_id)
-        row_statement = row_statement.where(model_any.project_id == project_id)
+    elif project_pk is not None and "project_id" in model.model_fields:
+        count_statement = count_statement.where(model_any.project_id == project_pk)
+        row_statement = row_statement.where(model_any.project_id == project_pk)
     elif project_run_ids is not None and "run_id" in model.model_fields:
         count_statement = count_statement.where(model_any.run_id.in_(project_run_ids))
         row_statement = row_statement.where(model_any.run_id.in_(project_run_ids))
@@ -1772,23 +1871,24 @@ async def _control_table_counts(
     await _ensure_schema(request)
     async with _session(request) as session:
         counts: dict[str, int] = {}
+        project_pk = await _project_pk(request, project_id, session=session)
         project_run_ids = await _project_run_ids(request, project_id, session=session)
         for name, (model, _) in CATALOG_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
             if (
-                project_id is not None
+                project_pk is not None
                 and name == "data_profiles"
                 and "project_id" in model.model_fields
             ):
                 statement = statement.where(
                     or_(
-                        model_any.project_id == project_id,
+                        model_any.project_id == project_pk,
                         model_any.project_id.is_(None),
                     )
                 )
-            elif project_id is not None and "project_id" in model.model_fields:
-                statement = statement.where(model_any.project_id == project_id)
+            elif project_pk is not None and "project_id" in model.model_fields:
+                statement = statement.where(model_any.project_id == project_pk)
             elif project_run_ids is not None and "run_id" in model.model_fields:
                 statement = statement.where(model_any.run_id.in_(project_run_ids))
             counts[name] = int((await session.exec(statement)).one())
@@ -1800,7 +1900,7 @@ async def _project_run_ids(
     project_id: str | None,
     *,
     session: AsyncSession | None = None,
-) -> list[str] | None:
+) -> list[int] | None:
     if project_id is None:
         return None
     own_session = False
@@ -1809,16 +1909,55 @@ async def _project_run_ids(
         session = _session(request)
         own_session = True
     try:
-        return list(
-            (
-                await session.exec(
-                    select(RunRecord.run_id).where(RunRecord.project_id == project_id)
-                )
-            ).all()
-        )
+        project_pk = await _project_pk(request, project_id, session=session)
+        if project_pk is None:
+            return []
+        run_ids = (
+            await session.exec(
+                select(RunRecord.id).where(RunRecord.project_id == project_pk)
+            )
+        ).all()
+        return [int(run_id) for run_id in run_ids if run_id is not None]
     finally:
         if own_session:
             await session.close()
+
+
+async def _project_pk(
+    request: Request,
+    project_id: str | None,
+    *,
+    session: AsyncSession | None = None,
+) -> int | None:
+    if project_id is None:
+        return None
+    own_session = False
+    if session is None:
+        await _ensure_schema(request)
+        session = _session(request)
+        own_session = True
+    try:
+        project = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.project_id, project_id
+        )
+        return project.id if project is not None else None
+    finally:
+        if own_session:
+            await session.close()
+
+
+async def _project_public_id_for_pk(
+    request: Request,
+    project_pk: int | None,
+) -> str | None:
+    if project_pk is None:
+        return None
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        project = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.id, project_pk
+        )
+    return project.project_id if project is not None else None
 
 
 async def _insert_values(
@@ -1912,6 +2051,73 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     return data
 
 
+async def _file_from_rows_public(
+    session: AsyncSession,
+    file: FileRecord,
+    link: FileLinkRecord | None = None,
+    *,
+    association_scope: str = "direct_run",
+    association_reason: str | None = None,
+) -> FileRead:
+    if link is None:
+        return _file_from_rows(
+            file,
+            link,
+            association_scope=association_scope,
+            association_reason=association_reason,
+        )
+    project_id = await _public_label(
+        session, ProjectRecord, "project_id", link.project_id
+    )
+    data_import_id = await _public_label(
+        session, DataImportRecord, "data_import_id", link.data_import_id
+    )
+    run_id = await _public_label(session, RunRecord, "run_id", link.run_id)
+    run_sample_id = await _public_label(
+        session, RunSampleRecord, "run_sample_id", link.run_sample_id
+    )
+    sample_id = await _public_label(session, SampleRecord, "sample_id", link.sample_id)
+    data_profile_id = await _public_label(
+        session, DataProfileRecord, "data_profile_id", link.data_profile_id
+    )
+    metadata_value = file.metadata_json
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
+    source_path = metadata.get("source_path")
+    return FileRead(
+        file_id=file.file_id,
+        project_id=project_id,
+        data_import_id=data_import_id,
+        run_id=run_id,
+        run_sample_id=run_sample_id,
+        sample_id=sample_id,
+        data_profile_id=data_profile_id,
+        association_scope=association_scope,
+        association_reason=association_reason,
+        kind=file.file_role,
+        path=file.path,
+        uri=file.uri,
+        size_bytes=file.size_bytes,
+        sha256=file.sha256,
+        source_path=source_path if isinstance(source_path, str) else None,
+        created_at=file.created_at,
+    )
+
+
+async def _public_label(
+    session: AsyncSession,
+    model: type[SQLModel],
+    label_name: str,
+    identifier: int | None,
+) -> str | None:
+    if identifier is None:
+        return None
+    row = await get_record_by_field(session, model, cast(Any, model).id, identifier)
+    if row is None:
+        return None
+    label = getattr(row, label_name)
+    return str(label) if label is not None else None
+
+
 def _file_from_rows(
     file: FileRecord,
     link: FileLinkRecord | None = None,
@@ -1924,12 +2130,30 @@ def _file_from_rows(
     source_path = metadata.get("source_path")
     return FileRead(
         file_id=file.file_id,
-        project_id=file.project_id,
-        data_import_id=link.data_import_id if link is not None else None,
-        run_id=link.run_id if link is not None else None,
-        run_sample_id=link.run_sample_id if link is not None else None,
-        sample_id=link.sample_id if link is not None else None,
-        data_profile_id=link.data_profile_id if link is not None else None,
+        project_id=str(file.project_id) if file.project_id is not None else None,
+        data_import_id=(
+            str(link.data_import_id)
+            if link is not None and link.data_import_id is not None
+            else None
+        ),
+        run_id=(
+            str(link.run_id) if link is not None and link.run_id is not None else None
+        ),
+        run_sample_id=(
+            str(link.run_sample_id)
+            if link is not None and link.run_sample_id is not None
+            else None
+        ),
+        sample_id=(
+            str(link.sample_id)
+            if link is not None and link.sample_id is not None
+            else None
+        ),
+        data_profile_id=(
+            str(link.data_profile_id)
+            if link is not None and link.data_profile_id is not None
+            else None
+        ),
         association_scope=association_scope,
         association_reason=association_reason,
         kind=file.file_role,

@@ -30,6 +30,10 @@ from goodomics.schemas.models import (
     RunSample,
     Sample,
 )
+from goodomics.storage.analytics_resolution import (
+    resolve_analytics_batch_catalog_ids,
+    resolve_catalog_id,
+)
 from goodomics.storage.database import (
     DEFAULT_DATABASE_URL,
     create_async_database_engine,
@@ -38,6 +42,7 @@ from goodomics.storage.database import (
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
+    catalog_id_maps_from_records,
 )
 
 
@@ -241,7 +246,7 @@ def _save_multiqc_parse_result(
         )
         for file in files
     ]
-    asyncio.run(
+    catalog_result = asyncio.run(
         catalog_store.replace_run_catalog(
             run,
             data_import=data_import,
@@ -254,10 +259,16 @@ def _save_multiqc_parse_result(
             file_links=file_links,
         )
     )
+    catalog_id_maps = catalog_id_maps_from_records(catalog_result)
+    resolved_batch = resolve_analytics_batch_catalog_ids(
+        parsed.to_batch(run_id=run_id),
+        catalog_id_maps,
+    )
+    resolved_run_id = resolve_catalog_id("run_id", run_id, catalog_id_maps)
 
     DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
-        run_id,
-        parsed.to_batch(run_id=run_id),
+        resolved_run_id,
+        resolved_batch,
     )
 
     return MultiQCIngestResult(

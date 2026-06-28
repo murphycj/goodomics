@@ -24,7 +24,7 @@ WITH target_run AS (
     FROM sample_metric_numeric
 ),
 target_run_samples AS (
-    SELECT DISTINCT run_sample_key
+    SELECT DISTINCT run_sample_id
     FROM sample_metric_numeric
     WHERE run_id = (SELECT run_id FROM target_run)
 )
@@ -65,8 +65,8 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT gi.*
     FROM genomic_intervals gi
-    WHERE gi.interval_key IN (
-        SELECT DISTINCT interval_key
+    WHERE gi.interval_id IN (
+        SELECT DISTINCT interval_id
         FROM sample_interval_values
         WHERE run_id = (SELECT run_id FROM target_run)
     )
@@ -85,8 +85,8 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT v.*
     FROM variants v
-    WHERE v.variant_key IN (
-        SELECT DISTINCT variant_key
+    WHERE v.variant_id IN (
+        SELECT DISTINCT variant_id
         FROM sample_variant_calls
         WHERE run_id = (SELECT run_id FROM target_run)
     )
@@ -95,8 +95,8 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT va.*
     FROM variant_annotations va
-    WHERE va.variant_key IN (
-        SELECT DISTINCT variant_key
+    WHERE va.variant_id IN (
+        SELECT DISTINCT variant_id
         FROM sample_variant_calls
         WHERE run_id = (SELECT run_id FROM target_run)
     )
@@ -105,8 +105,8 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT vta.*
     FROM variant_transcript_annotations vta
-    WHERE vta.variant_key IN (
-        SELECT DISTINCT variant_key
+    WHERE vta.variant_id IN (
+        SELECT DISTINCT variant_id
         FROM sample_variant_calls
         WHERE run_id = (SELECT run_id FROM target_run)
     )
@@ -120,8 +120,8 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT sve.*
     FROM structural_variant_events sve
-    WHERE sve.structural_variant_key IN (
-        SELECT DISTINCT structural_variant_key
+    WHERE sve.structural_variant_id IN (
+        SELECT DISTINCT structural_variant_id
         FROM sample_structural_variant_calls
         WHERE run_id = (SELECT run_id FROM target_run)
     )
@@ -130,7 +130,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT te.*
     FROM timeline_events te
-    JOIN target_run_samples trs USING (run_sample_key)
+    JOIN target_run_samples trs USING (run_sample_id)
     """,
     """
     SELECT *
@@ -141,7 +141,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT gas.*
     FROM gene_alteration_state gas
-    JOIN target_run_samples trs USING (run_sample_key)
+    JOIN target_run_samples trs USING (run_sample_id)
     """,
     """
     SELECT *
@@ -157,28 +157,28 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     {TARGET_RUN_CTE}
     SELECT DISTINCT f.*
     FROM features f
-    WHERE f.feature_key IN (
-        SELECT feature_key
+    WHERE f.feature_id IN (
+        SELECT feature_id
         FROM feature_value_numeric
         WHERE run_id = (SELECT run_id FROM target_run)
         UNION
-        SELECT feature_key
+        SELECT feature_id
         FROM feature_call
         WHERE run_id = (SELECT run_id FROM target_run)
         UNION
-        SELECT va.feature_key
+        SELECT va.feature_id
         FROM variant_annotations va
-        JOIN sample_variant_calls svc USING (variant_key)
+        JOIN sample_variant_calls svc USING (variant_id)
         WHERE svc.run_id = (SELECT run_id FROM target_run)
         UNION
-        SELECT sve.site1_feature_key
+        SELECT sve.site1_feature_id
         FROM structural_variant_events sve
-        JOIN sample_structural_variant_calls ssvc USING (structural_variant_key)
+        JOIN sample_structural_variant_calls ssvc USING (structural_variant_id)
         WHERE ssvc.run_id = (SELECT run_id FROM target_run)
         UNION
-        SELECT sve.site2_feature_key
+        SELECT sve.site2_feature_id
         FROM structural_variant_events sve
-        JOIN sample_structural_variant_calls ssvc USING (structural_variant_key)
+        JOIN sample_structural_variant_calls ssvc USING (structural_variant_id)
         WHERE ssvc.run_id = (SELECT run_id FROM target_run)
     )
     """,
@@ -190,13 +190,13 @@ QUERIES: tuple[QueryCase, ...] = (
     #     "Top expressed genes",
     #     """
     #     SELECT
-    #         feature_key,
+    #         feature_id,
     #         avg(value) AS mean_tpm,
     #         quantile_cont(value, 0.95) AS p95_tpm,
     #         count(*) AS observations
     #     FROM feature_value_numeric_by_sample
-    #     WHERE data_profile_key = 'rna_expression'
-    #     GROUP BY feature_key
+    #     WHERE data_profile_id = 'rna_expression'
+    #     GROUP BY feature_id
     #     ORDER BY mean_tpm DESC
     #     LIMIT 25
     #     """,
@@ -205,27 +205,27 @@ QUERIES: tuple[QueryCase, ...] = (
         "Two-sample expression distance",
         """
         WITH selected_samples AS (
-            SELECT DISTINCT run_sample_key
+            SELECT DISTINCT run_sample_id
             FROM feature_value_numeric
-            ORDER BY run_sample_key
+            ORDER BY run_sample_id
             LIMIT 2
         ),
         expression AS (
             SELECT
-                fvn.run_sample_key,
-                fvn.feature_key,
+                fvn.run_sample_id,
+                fvn.feature_id,
                 fvn.value
             FROM feature_value_numeric fvn
-            JOIN selected_samples ss USING (run_sample_key)
+            JOIN selected_samples ss USING (run_sample_id)
         )
         SELECT
-            a.run_sample_key AS sample_a,
-            b.run_sample_key AS sample_b,
+            a.run_sample_id AS sample_a,
+            b.run_sample_id AS sample_b,
             sqrt(sum(power(a.value - b.value, 2))) AS euclidean_distance,
             corr(a.value, b.value) AS pearson_correlation
         FROM expression a
-        JOIN expression b USING (feature_key)
-        WHERE a.run_sample_key < b.run_sample_key
+        JOIN expression b USING (feature_id)
+        WHERE a.run_sample_id < b.run_sample_id
         GROUP BY sample_a, sample_b
         """,
     ),
@@ -233,7 +233,7 @@ QUERIES: tuple[QueryCase, ...] = (
         "QC metric distribution",
         """
         SELECT
-            metric_key,
+            metric_id,
             count(*) AS n,
             avg(value) AS mean_value,
             stddev(value) AS stddev_value,
@@ -241,8 +241,8 @@ QUERIES: tuple[QueryCase, ...] = (
             quantile_cont(value, 0.50) AS median,
             quantile_cont(value, 0.95) AS q95
         FROM sample_metric_numeric_by_metric
-        GROUP BY metric_key
-        ORDER BY metric_key
+        GROUP BY metric_id
+        ORDER BY metric_id
         """,
     ),
     QueryCase(
@@ -253,18 +253,18 @@ QUERIES: tuple[QueryCase, ...] = (
             eas.value AS cancer_type,
             count(*) AS samples,
             avg(smn.value) FILTER (
-                WHERE smn.metric_key = 'qc.metric.01'
+                WHERE smn.metric_id = 'qc.metric.01'
             ) AS mean_metric_01,
             avg(smn.value) FILTER (
-                WHERE smn.metric_key = 'qc.metric.04'
+                WHERE smn.metric_id = 'qc.metric.04'
             ) AS mean_metric_04
         FROM sample_metric_string sms
         JOIN entity_attribute_string eas
-            ON eas.entity_key = sms.run_sample_key
-            AND eas.attribute_key = 'attr:cancer_type'
+            ON eas.entity_id = sms.run_sample_id
+            AND eas.attribute_id = 'attr:cancer_type'
         JOIN sample_metric_numeric smn
-            ON smn.run_sample_key = sms.run_sample_key
-        WHERE sms.metric_key = 'qc.status'
+            ON smn.run_sample_id = sms.run_sample_id
+        WHERE sms.metric_id = 'qc.status'
         GROUP BY qc_status, cancer_type
         ORDER BY qc_status, cancer_type
         """,
@@ -273,13 +273,13 @@ QUERIES: tuple[QueryCase, ...] = (
         "Variant burden by sample",
         """
         SELECT
-            run_sample_key,
+            run_sample_id,
             count(*) FILTER (WHERE filter = 'PASS') AS pass_variants,
             avg(allele_fraction) AS mean_allele_fraction,
             max(depth) AS max_depth
         FROM sample_variant_calls_by_variant
-        GROUP BY run_sample_key
-        ORDER BY pass_variants DESC, run_sample_key
+        GROUP BY run_sample_id
+        ORDER BY pass_variants DESC, run_sample_id
         LIMIT 50
         """,
     ),
@@ -293,8 +293,8 @@ QUERIES: tuple[QueryCase, ...] = (
             count(*) AS calls,
             avg(svc.allele_fraction) AS mean_allele_fraction
         FROM sample_variant_calls svc
-        JOIN variant_annotations va USING (variant_key)
-        JOIN features f ON f.feature_key = va.feature_key
+        JOIN variant_annotations va USING (variant_id)
+        JOIN features f ON f.feature_id = va.feature_id
         WHERE
             svc.filter = 'PASS'
             AND va.impact IN ('HIGH', 'MODERATE')
@@ -313,9 +313,9 @@ QUERIES: tuple[QueryCase, ...] = (
             count(*) AS calls,
             avg(ssvc.tumor_read_count) AS mean_tumor_reads
         FROM sample_structural_variant_calls ssvc
-        JOIN structural_variant_events sve USING (structural_variant_key)
-        LEFT JOIN features f1 ON f1.feature_key = sve.site1_feature_key
-        LEFT JOIN features f2 ON f2.feature_key = sve.site2_feature_key
+        JOIN structural_variant_events sve USING (structural_variant_id)
+        LEFT JOIN features f1 ON f1.feature_id = sve.site1_feature_id
+        LEFT JOIN features f2 ON f2.feature_id = sve.site2_feature_id
         WHERE ssvc.call_status = 'called'
         GROUP BY sve.event_class, site1_gene, site2_gene
         ORDER BY calls DESC
@@ -344,10 +344,10 @@ QUERIES: tuple[QueryCase, ...] = (
             f.symbol,
             gas.alteration_type,
             gas.alteration_subtype,
-            count(DISTINCT gas.run_sample_key) AS altered_samples,
+            count(DISTINCT gas.run_sample_id) AS altered_samples,
             avg(gas.value_numeric) AS mean_value
         FROM gene_alteration_state_by_sample gas
-        JOIN features f USING (feature_key)
+        JOIN features f USING (feature_id)
         GROUP BY f.symbol, gas.alteration_type, gas.alteration_subtype
         ORDER BY altered_samples DESC
         LIMIT 50
@@ -357,34 +357,34 @@ QUERIES: tuple[QueryCase, ...] = (
         "Observed profiles and payloads",
         """
         WITH observed AS (
-            SELECT data_profile_key, run_sample_key FROM sample_metric_numeric
+            SELECT data_profile_id, run_sample_id FROM sample_metric_numeric
             UNION
-            SELECT data_profile_key, run_sample_key FROM sample_metric_string
+            SELECT data_profile_id, run_sample_id FROM sample_metric_string
             UNION
-            SELECT data_profile_key, run_sample_key FROM feature_value_numeric
+            SELECT data_profile_id, run_sample_id FROM feature_value_numeric
             UNION
-            SELECT data_profile_key, run_sample_key FROM feature_call
+            SELECT data_profile_id, run_sample_id FROM feature_call
             UNION
-            SELECT data_profile_key, run_sample_key FROM copy_number_segments
+            SELECT data_profile_id, run_sample_id FROM copy_number_segments
             UNION
-            SELECT data_profile_key, run_sample_key FROM sample_variant_calls
+            SELECT data_profile_id, run_sample_id FROM sample_variant_calls
             UNION
-            SELECT data_profile_key, run_sample_key
+            SELECT data_profile_id, run_sample_id
             FROM sample_structural_variant_calls
             UNION
-            SELECT data_profile_key, run_sample_key FROM profile_payloads
+            SELECT data_profile_id, run_sample_id FROM profile_payloads
         )
         SELECT
-            observed.data_profile_key,
-            count(DISTINCT observed.run_sample_key) AS samples,
+            observed.data_profile_id,
+            count(DISTINCT observed.run_sample_id) AS samples,
             count(DISTINCT pp.payload_id) AS payloads,
             sum(coalesce(pp.row_count, 0)) AS declared_payload_rows
         FROM observed
         LEFT JOIN profile_payloads pp
-            ON pp.run_sample_key IS NOT DISTINCT FROM observed.run_sample_key
-            AND pp.data_profile_key = observed.data_profile_key
-        GROUP BY observed.data_profile_key
-        ORDER BY observed.data_profile_key
+            ON pp.run_sample_id IS NOT DISTINCT FROM observed.run_sample_id
+            AND pp.data_profile_id = observed.data_profile_id
+        GROUP BY observed.data_profile_id
+        ORDER BY observed.data_profile_id
         """,
     ),
     QueryCase("All data for one run", RUN_WIDE_QUERIES),
