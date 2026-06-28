@@ -1102,44 +1102,44 @@ class DuckDBAnalyticsStore:
             SELECT *
             FROM sample_metric_numeric
             ORDER BY {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["sample_metric_numeric"],
-                    "data_profile_id, metric_id, value, run_sample_id",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["sample_metric_numeric"],
+                "data_profile_id, metric_id, value, run_sample_id",
+            )
+        }
             """)
         connection.execute(f"""
             CREATE OR REPLACE VIEW feature_value_numeric_by_sample AS
             SELECT *
             FROM feature_value_numeric
             ORDER BY {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["feature_value_numeric"],
-                    "data_profile_id, run_sample_id, feature_id",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["feature_value_numeric"],
+                "data_profile_id, run_sample_id, feature_id",
+            )
+        }
             """)
         connection.execute(f"""
             CREATE OR REPLACE VIEW feature_call_by_sample AS
             SELECT *
             FROM feature_call
             ORDER BY {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["feature_call"],
-                    "data_profile_id, run_sample_id, feature_id",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["feature_call"],
+                "data_profile_id, run_sample_id, feature_id",
+            )
+        }
             """)
         connection.execute(f"""
             CREATE OR REPLACE VIEW sample_variant_calls_by_variant AS
             SELECT *
             FROM sample_variant_calls
             ORDER BY {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["sample_variant_calls"],
-                    "data_profile_id, variant_id, run_sample_id",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["sample_variant_calls"],
+                "data_profile_id, variant_id, run_sample_id",
+            )
+        }
             """)
         connection.execute(f"""
             CREATE OR REPLACE VIEW copy_number_segments_by_region AS
@@ -1147,22 +1147,22 @@ class DuckDBAnalyticsStore:
             FROM copy_number_segments
             ORDER BY genome_build, contig, start_pos, end_pos,
                 {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["copy_number_segments"],
-                    "data_profile_id, run_sample_id",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["copy_number_segments"],
+                "data_profile_id, run_sample_id",
+            )
+        }
             """)
         connection.execute(f"""
             CREATE OR REPLACE VIEW gene_alteration_state_by_sample AS
             SELECT *
             FROM gene_alteration_state
             ORDER BY {
-                _physical_order_by(
-                    INTEGER_KEYED_TABLES["gene_alteration_state"],
-                    "run_sample_id, feature_id, alteration_type",
-                )
-            }
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["gene_alteration_state"],
+                "run_sample_id, feature_id, alteration_type",
+            )
+        }
             """)
 
     def _refresh_gene_alteration_state(
