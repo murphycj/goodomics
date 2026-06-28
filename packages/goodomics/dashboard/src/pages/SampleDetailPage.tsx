@@ -264,10 +264,10 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
     if (!query.data || !term) return query.data ?? [];
     return query.data.filter((metric) =>
       [
-        metric.sample_key,
-        metric.run_sample_key,
-        metric.data_profile_key,
-        metric.metric_key,
+        metric.sample_id,
+        metric.run_sample_id,
+        metric.data_profile_id,
+        metric.metric_id,
         metric.value,
         metric.source_file_id,
       ]
@@ -301,10 +301,10 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
               </TableHeader>
               <TableBody>
                 {metrics.map((metric, index) => (
-                  <TableRow key={`${metric.metric_key}-${metric.run_sample_key}-${index}`}>
-                    <TableCell>{metric.sample_key ?? metric.run_sample_key ?? "—"}</TableCell>
-                    <TableCell>{metric.data_profile_key}</TableCell>
-                    <TableCell className="font-mono">{metric.metric_key}</TableCell>
+                  <TableRow key={`${metric.metric_id}-${metric.run_sample_id}-${index}`}>
+                    <TableCell>{metric.sample_id ?? metric.run_sample_id ?? "—"}</TableCell>
+                    <TableCell>{metric.data_profile_id}</TableCell>
+                    <TableCell className="font-mono">{metric.metric_id}</TableCell>
                     <TableCell>{formatMetricValue(metric)}</TableCell>
                     <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
                       {metric.source_file_id ?? "—"}
@@ -340,10 +340,10 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
               </TableHeader>
               <TableBody>
                 {payloads.map((payload) => (
-                  <TableRow key={`${payload.payload_name}-${payload.run_sample_key ?? "run"}`}>
+                  <TableRow key={`${payload.payload_name}-${payload.run_sample_id ?? "run"}`}>
                     <TableCell className="font-bold">{payload.payload_name}</TableCell>
-                    <TableCell>{payload.run_sample_key ?? "—"}</TableCell>
-                    <TableCell>{payload.data_profile_key}</TableCell>
+                    <TableCell>{payload.run_sample_id ?? "—"}</TableCell>
+                    <TableCell>{payload.data_profile_id}</TableCell>
                     <TableCell>{payload.row_count}</TableCell>
                     <TableCell>{payload.columns.length}</TableCell>
                     <TableCell className="text-right">

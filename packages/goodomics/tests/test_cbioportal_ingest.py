@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,11 +36,62 @@ from goodomics.storage.sqlalchemy import (
     FileLinkRecord,
     FileRecord,
     RunRecord,
+    SampleRecord,
     SampleSetRecord,
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+
+def _scalar(row: tuple[Any, ...] | None) -> Any:
+    assert row is not None
+    return row[0]
+
+
+def _run_pk(database_url: str, run_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _sample_pk(database_url: str, sample_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(SampleRecord).where(SampleRecord.sample_id == sample_id)
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _data_profile_pk(database_url: str, data_profile_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(DataProfileRecord).where(
+                        DataProfileRecord.data_profile_id == data_profile_id
+                    )
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def _external_cbioportal_fixture(name: str) -> Path:
@@ -60,6 +112,7 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
     assert parsed.data_import.data_import_id == "run-cbio"
     assert parsed.run.run_kind == "imported_result"
     assert {run.run_id for run in parsed.all_runs} == {
+        "run-cbio",
         "run-cbio:S1",
         "run-cbio:S2",
     }
@@ -108,6 +161,7 @@ def test_parse_cbioportal_study_creates_sample_runs(
     parsed = parse_cbioportal_study(study, project_id="project-1")
 
     assert {run.run_id for run in parsed.all_runs} == {
+        "demo_cbio",
         "demo_cbio:S1",
         "demo_cbio:S2",
     }
@@ -170,7 +224,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert run.data_import_id == "run-cbio"
 
     async def load_catalog_counts() -> tuple[
-        int, int, int, int, int, list[str], set[str | None]
+        int, int, int, int, int, list[str], set[int | None]
     ]:
         async with AsyncSession(catalog_store._get_engine()) as session:
             imports = (await session.exec(select(DataImportRecord))).all()
@@ -201,8 +255,8 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         linked_import_ids,
     ) = asyncio.run(load_catalog_counts())
     assert imports_count == 1
-    assert run_ids == ["run-cbio:S1", "run-cbio:S2"]
-    assert linked_import_ids == {"run-cbio"}
+    assert run_ids == ["run-cbio", "run-cbio:S1", "run-cbio:S2"]
+    assert linked_import_ids == {1}
     assert files_count > 0
     assert links_count >= files_count
     assert profiles_count == result.profiles_ingested
@@ -217,51 +271,96 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert counts["sample_variant_calls"] == 1
     assert counts["sample_structural_variant_calls"] == 1
     assert counts["profile_payloads"] == 1
+    with analytics._connect() as connection:
+        physical_columns_by_table = {
+            table_name: {
+                row[1]: row[2]
+                for row in connection.execute(
+                    f"PRAGMA table_info('{table_name}')"
+                ).fetchall()
+            }
+            for table_name in (
+                "feature_value_numeric",
+                "feature_call",
+                "copy_number_segments",
+                "sample_variant_calls",
+                "sample_structural_variant_calls",
+                "profile_payloads",
+            )
+        }
+    for table_columns in physical_columns_by_table.values():
+        assert table_columns["data_profile_id"] == "BIGINT"
+        assert table_columns["run_id"] == "BIGINT"
+        assert table_columns["run_sample_id"] == "BIGINT"
+        assert table_columns["source_file_id"] == "BIGINT"
+    assert physical_columns_by_table["feature_value_numeric"]["sample_id"] == ("BIGINT")
+    assert physical_columns_by_table["feature_value_numeric"]["feature_id"] == (
+        "BIGINT"
+    )
 
     expression_values = analytics.fetch_records(
         "feature_value_numeric",
         FeatureValueNumeric,
-        run_id="run-cbio:S1",
+        run_id=_run_pk(database_url, "run-cbio:S1"),
     )
+    with analytics._connect() as connection:
+        tp53_feature_id = connection.execute(
+            "SELECT feature_id FROM dim_features WHERE feature_label = 'gene:TP53'"
+        ).fetchone()
+        tp53_feature_id = _scalar(tp53_feature_id)
+        egfr_feature_id = connection.execute(
+            "SELECT feature_id FROM dim_features WHERE feature_label = 'gene:EGFR'"
+        ).fetchone()
+        egfr_feature_id = _scalar(egfr_feature_id)
+        s1_sample_id = _sample_pk(database_url, "S1")
     assert any(
-        value.feature_key == "gene:TP53" and value.sample_key == "S1"
+        value.feature_id == tp53_feature_id and value.sample_id == s1_sample_id
         for value in expression_values
     )
     cna_calls = analytics.fetch_records(
-        "feature_call", FeatureCall, run_id="run-cbio:S1"
+        "feature_call", FeatureCall, run_id=_run_pk(database_url, "run-cbio:S1")
     )
     assert any(
-        call.call_code == "AMP" and call.feature_key == "gene:EGFR"
+        call.call_code == "AMP" and call.feature_id == egfr_feature_id
         for call in cna_calls
     )
     segments = analytics.fetch_records(
         "copy_number_segments",
         CopyNumberSegment,
-        run_id="run-cbio:S1",
+        run_id=_run_pk(database_url, "run-cbio:S1"),
     )
     assert segments[0].genome_build == "hg19"
     variant_calls = analytics.fetch_records(
         "sample_variant_calls",
         SampleVariantCall,
-        run_id="run-cbio:S1",
+        run_id=_run_pk(database_url, "run-cbio:S1"),
     )
     assert variant_calls[0].allele_fraction == 8 / 28
     sv_calls = analytics.fetch_records(
         "sample_structural_variant_calls",
         SampleStructuralVariantCall,
-        run_id="run-cbio:S1",
+        run_id=_run_pk(database_url, "run-cbio:S1"),
     )
     assert sv_calls[0].split_read_count == 4
     payloads = analytics.fetch_records(
-        "profile_payloads", ProfilePayload, run_id="run-cbio"
+        "profile_payloads", ProfilePayload, run_id=_run_pk(database_url, "run-cbio")
     )
     assert payloads[0].payload_kind == "gene_panel_matrix"
     numeric_attributes = analytics.fetch_records(
         "entity_attribute_numeric",
         EntityAttributeNumeric,
     )
+    with analytics._connect() as connection:
+        tmb_attribute_id = connection.execute(
+            """
+            SELECT attribute_id
+            FROM dim_attributes
+            WHERE attribute_label = 'sample:tmb'
+            """
+        ).fetchone()
+        tmb_attribute_id = _scalar(tmb_attribute_id)
     assert any(
-        attribute.attribute_key == "sample:tmb" for attribute in numeric_attributes
+        attribute.attribute_id == tmb_attribute_id for attribute in numeric_attributes
     )
 
 
@@ -337,7 +436,7 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
         analytics_path=analytics_path,
     )
 
-    assert result.runs_ingested == 2
+    assert result.runs_ingested == 3
     assert result.data_import_id.startswith("demo_cbio:")
 
     catalog_store = SQLModelGoodomicsStore(database_url)
@@ -352,6 +451,7 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
             ]
 
     assert asyncio.run(load_runs()) == [
+        result.data_import_id,
         f"{result.data_import_id}:S1",
         f"{result.data_import_id}:S2",
     ]
@@ -360,14 +460,18 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
     expression_values = analytics.fetch_records(
         "feature_value_numeric",
         FeatureValueNumeric,
-        run_id=f"{result.data_import_id}:S1",
+        run_id=_run_pk(database_url, f"{result.data_import_id}:S1"),
     )
     assert expression_values
-    assert {value.sample_key for value in expression_values} == {"S1"}
-    assert {value.data_profile_key for value in expression_values} == {
-        CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE,
-        CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
+    expected_profile_ids = {
+        _data_profile_pk(database_url, CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE),
+        _data_profile_pk(database_url, CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS),
     }
+    s1_sample_id = _sample_pk(database_url, "S1")
+    assert {value.sample_id for value in expression_values} == {s1_sample_id}
+    assert {
+        value.data_profile_id for value in expression_values
+    } == expected_profile_ids
 
 
 def test_cbioportal_ccle_fixture_discovers_profiles_without_loading_large_files() -> (
@@ -392,9 +496,10 @@ def test_cbioportal_brca_fixture_creates_sample_runs() -> None:
     parsed = parse_cbioportal_study(study)
 
     assert len(parsed.samples) == 818
-    assert len(parsed.all_runs) == len(parsed.samples)
+    assert len(parsed.all_runs) == len(parsed.samples) + 1
     assert len(parsed.run_samples) == len(parsed.samples)
-    assert all(run.run_id.startswith("brca_tcga_pub2015:") for run in parsed.all_runs)
+    sample_runs = [run for run in parsed.all_runs if run.run_id != "brca_tcga_pub2015"]
+    assert all(run.run_id.startswith("brca_tcga_pub2015:") for run in sample_runs)
     assert "brca_tcga_pub2015" not in {
         run_sample.run_id for run_sample in parsed.run_samples
     }
@@ -411,7 +516,7 @@ def test_cbioportal_chol_fixture_uses_sample_runs_and_stable_profiles() -> None:
     parsed = parse_cbioportal_study(study)
 
     assert len(parsed.samples) == 36
-    assert len(parsed.all_runs) == 36
+    assert len(parsed.all_runs) == 37
     assert len(parsed.run_samples) == 36
     assert {run_sample.run_id for run_sample in parsed.run_samples} == {
         f"chol_tcga_pan_can_atlas_2018:{run_sample.sample_id}"

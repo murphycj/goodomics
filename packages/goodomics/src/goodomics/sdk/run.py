@@ -15,8 +15,11 @@ from goodomics.schemas.models import (
     Run,
     RunSample,
     Sample,
-    SampleMetricNumeric,
-    SampleMetricString,
+    UnresolvedAnalyticalRecord,
+)
+from goodomics.storage.analytics_resolution import (
+    resolve_analytics_batch_catalog_ids,
+    resolve_catalog_id,
 )
 from goodomics.storage.database import ensure_sqlite_parent, resolve_database_url
 
@@ -93,25 +96,24 @@ class GoodomicsRun:
         self,
         *,
         run_id: str | None = None,
-        data_profile_key: str | None = None,
+        data_profile_id: str | None = None,
     ) -> AnalyticsIngestBatch:
         resolved_run_id = run_id or self.name
-        resolved_profile_key = data_profile_key or GOODOMICS_SDK_METRICS
+        resolved_profile_id = data_profile_id or GOODOMICS_SDK_METRICS
         definitions: dict[str, MetricDefinition] = {}
-        numeric_values: list[SampleMetricNumeric] = []
-        string_values: list[SampleMetricString] = []
+        numeric_values: list[UnresolvedAnalyticalRecord] = []
+        string_values: list[UnresolvedAnalyticalRecord] = []
 
         for metric in self.metrics:
             # Each SDK metric name becomes a stable DuckDB metric definition
             # scoped to this run's SDK data profile.
-            metric_key = f"{resolved_profile_key}:{metric.name}"
+            metric_id = f"{resolved_profile_id}:{metric.name}"
             value_type = "numeric" if _is_numeric_metric(metric.value) else "string"
             definitions.setdefault(
-                metric_key,
+                metric_id,
                 MetricDefinition(
-                    metric_key=metric_key,
-                    metric_id=metric.name,
-                    namespace=resolved_profile_key,
+                    metric_id=metric_id,
+                    namespace=resolved_profile_id,
                     metric_name=metric.name,
                     display_name=metric.name,
                     value_type=value_type,
@@ -120,21 +122,21 @@ class GoodomicsRun:
                 ),
             )
             common: dict[str, Any] = {
-                "data_profile_key": resolved_profile_key,
+                "data_profile_id": resolved_profile_id,
                 "run_id": resolved_run_id,
-                "run_sample_key": f"{resolved_run_id}:{metric.sample_id}"
+                "run_sample_id": f"{resolved_run_id}:{metric.sample_id}"
                 if metric.sample_id is not None
                 else None,
-                "sample_key": metric.sample_id,
-                "metric_key": metric_key,
+                "sample_id": metric.sample_id,
+                "metric_id": metric_id,
             }
             if _is_numeric_metric(metric.value):
                 numeric_values.append(
-                    SampleMetricNumeric(value=float(metric.value), **common)
+                    UnresolvedAnalyticalRecord(**common, value=float(metric.value))
                 )
             else:
                 string_values.append(
-                    SampleMetricString(value=str(metric.value), **common)
+                    UnresolvedAnalyticalRecord(**common, value=str(metric.value))
                 )
 
         return AnalyticsIngestBatch(
@@ -147,7 +149,10 @@ class GoodomicsRun:
         if self._flushed:
             return
         from goodomics.storage.duckdb import DuckDBAnalyticsStore
-        from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+        from goodomics.storage.sqlalchemy import (
+            SQLModelGoodomicsStore,
+            catalog_id_maps_from_records,
+        )
 
         # SQL owns the catalog shape: project, run, samples, run-samples, and
         # the data profile that says where queryable observations live.
@@ -179,10 +184,10 @@ class GoodomicsRun:
             )
             for sample_id in sample_ids
         ]
-        data_profile_key = GOODOMICS_SDK_METRICS
+        data_profile_id = GOODOMICS_SDK_METRICS
         data_profiles = (
             [
-                built_in_data_profile(data_profile_key).model_copy(
+                built_in_data_profile(data_profile_id).model_copy(
                     update={"assay": self.assay}
                 )
             ]
@@ -198,7 +203,7 @@ class GoodomicsRun:
             samples=samples,
             metadata_json={"source": "goodomics-sdk"},
         )
-        asyncio.run(
+        catalog_result = asyncio.run(
             store.replace_run_catalog(
                 catalog_run,
                 samples=samples,
@@ -209,13 +214,21 @@ class GoodomicsRun:
         if self.metrics:
             # DuckDB owns the observation values themselves, keeping SDK metrics
             # on the same analytical path as parser and ingest metrics.
-            analytics_path = self._resolved_analytics_path(project.project_id)
-            DuckDBAnalyticsStore(analytics_path).replace_run_data(
-                run_id,
+            catalog_id_maps = catalog_id_maps_from_records(catalog_result)
+            resolved_batch = resolve_analytics_batch_catalog_ids(
                 self.to_analytics_batch(
                     run_id=run_id,
-                    data_profile_key=data_profile_key,
+                    data_profile_id=data_profile_id,
                 ),
+                catalog_id_maps,
+            )
+            resolved_duckdb_run_id = resolve_catalog_id(
+                "run_id", run_id, catalog_id_maps
+            )
+            analytics_path = self._resolved_analytics_path(project.project_id)
+            DuckDBAnalyticsStore(analytics_path).replace_run_data(
+                resolved_duckdb_run_id,
+                resolved_batch,
             )
         self._flushed = True
 

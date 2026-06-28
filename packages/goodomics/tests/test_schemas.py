@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from goodomics import run
 from goodomics.data_profiles import (
@@ -20,8 +21,47 @@ from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import DataImport, QCDecision, Run, Sample
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    RunRecord,
+    SampleRecord,
+    SQLModelGoodomicsStore,
+)
 from pytest import MonkeyPatch
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+
+def _scalar(row: tuple[Any, ...] | None) -> Any:
+    assert row is not None
+    return row[0]
+
+
+def _run_pk(run_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _sample_pk(sample_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(SampleRecord).where(SampleRecord.sample_id == sample_id)
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def test_sdk_run_collects_metrics_and_files() -> None:
@@ -56,17 +96,36 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
     assert [sample.sample_id for sample in saved_run.samples] == ["S1"]
 
     analytics_path = analytics_path_for_project(".goodomics", saved_run.project_id)
-    values = DuckDBAnalyticsStore(analytics_path).list_metric_values("rnaseq-batch-042")
+    analytics = DuckDBAnalyticsStore(analytics_path)
+    values = analytics.list_metric_values(_run_pk("rnaseq-batch-042"))
+    with analytics._connect() as connection:
+        pct_mapped_metric_id = connection.execute(
+            """
+            SELECT metric_id
+            FROM dim_metrics
+            WHERE metric_label = 'goodomics:sdk_metrics:pct_mapped'
+            """
+        ).fetchone()
+        pct_mapped_metric_id = _scalar(pct_mapped_metric_id)
+        status_metric_id = connection.execute(
+            """
+            SELECT metric_id
+            FROM dim_metrics
+            WHERE metric_label = 'goodomics:sdk_metrics:status'
+            """
+        ).fetchone()
+        status_metric_id = _scalar(status_metric_id)
+        s1_sample_id = _sample_pk("S1")
 
     assert any(
-        value.metric_key == "goodomics:sdk_metrics:pct_mapped"
-        and value.sample_key == "S1"
+        value.metric_id == pct_mapped_metric_id
+        and value.sample_id == s1_sample_id
         and value.value == 91.2
         for value in values
     )
     assert any(
-        value.metric_key == "goodomics:sdk_metrics:status"
-        and value.sample_key == "S1"
+        value.metric_id == status_metric_id
+        and value.sample_id == s1_sample_id
         and value.value == "pass"
         for value in values
     )

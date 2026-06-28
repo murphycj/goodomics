@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fixtures import write_multiqc_fixture
@@ -12,6 +14,48 @@ from goodomics.profiles.cbioportal import profile_for_meta
 from goodomics.sources import SourceSpec, get_source, list_sources, register_source
 from goodomics.sources import registry as source_registry
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.sqlalchemy import (
+    DataProfileRecord,
+    RunRecord,
+    SQLModelGoodomicsStore,
+)
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+
+def _scalar(row: tuple[Any, ...] | None) -> Any:
+    assert row is not None
+    return row[0]
+
+
+def _run_pk(database_url: str, run_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _data_profile_pk(database_url: str, data_profile_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(DataProfileRecord).where(
+                        DataProfileRecord.data_profile_id == data_profile_id
+                    )
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def test_built_in_sources_list_without_importing_ingestor_modules() -> None:
@@ -99,6 +143,7 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
 
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     analytics_path = tmp_path / "state" / "analytics.duckdb"
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
 
     result = run_ingest(
         multiqc_dir,
@@ -106,7 +151,7 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
         project="demo",
         assay="rnaseq",
         run_id="registry-run",
-        database_url=f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}",
+        database_url=database_url,
         analytics_path=analytics_path,
         file_root=tmp_path / "state" / "files",
     )
@@ -114,7 +159,9 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
     assert result.ingest_type == "multiqc"
     assert result.source.key == "multiqc"
     assert result.payload[0].run_id == "registry-run"
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("registry-run")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_url, "registry-run")
+    )
 
 
 def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> None:
@@ -157,7 +204,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
     assert result.samples_ingested == 1
     assert result.profiles_ingested == 2
     analytics = DuckDBAnalyticsStore(analytics_path)
-    assert analytics.list_metric_values("custom-run")
+    assert analytics.list_metric_values(_run_pk(database_url, "custom-run"))
     assert analytics.row_counts()["feature_value_numeric"] == 1
 
 
@@ -169,15 +216,17 @@ def test_custom_parser_reuses_builtin_profile_id(tmp_path: Path) -> None:
         out.metric("pct_mapped", 99.0, sample_id="S1", profile=MULTIQC_METRICS)
 
     analytics_path = tmp_path / "analytics.duckdb"
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
     result = parse_metrics.ingest(
         tmp_path / "metrics.tsv",
         run_id="builtin-profile-run",
-        database_url=f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}",
+        database_url=database_url,
         analytics_path=analytics_path,
     )
 
     assert result.profiles_ingested == 1
     values = DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        "builtin-profile-run"
+        _run_pk(database_url, "builtin-profile-run")
     )
-    assert values[0].data_profile_key == MULTIQC_METRICS
+    metrics_profile_id = _data_profile_pk(database_url, MULTIQC_METRICS)
+    assert values[0].data_profile_id == metrics_profile_id

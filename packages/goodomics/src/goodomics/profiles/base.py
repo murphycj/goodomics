@@ -33,7 +33,7 @@ def profile(
 ) -> DataProfile:
     """Create a reusable semantic data profile contract."""
     # Profile records are contracts, not source/run instances; provenance stays
-    # on imports, runs, files, and analytical facts.
+    # on imports, runs, files, and analytical records.
     return DataProfile(
         data_profile_id=data_profile_id,
         name=name,

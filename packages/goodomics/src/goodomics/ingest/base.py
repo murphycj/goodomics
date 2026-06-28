@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -20,7 +20,7 @@ from goodomics.schemas.models import (
 
 
 class AnalyticsBulkLoad(Protocol):
-    """DuckDB-backed analytical load that avoids materializing huge fact lists."""
+    """DuckDB-backed analytical load that avoids materializing huge row lists."""
 
     @property
     def run_id(self) -> str:
@@ -29,6 +29,12 @@ class AnalyticsBulkLoad(Protocol):
 
     def load(self, connection: Any) -> None:
         """Write analytical records using an open DuckDB connection."""
+        ...
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> AnalyticsBulkLoad:
+        """Return a bulk loader that writes SQL-owned catalog references as ints."""
         ...
 
 

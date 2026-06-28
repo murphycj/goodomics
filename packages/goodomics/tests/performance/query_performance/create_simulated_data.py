@@ -19,6 +19,7 @@ from goodomics.storage.sqlalchemy import (
     ProjectRecord,
     RunRecord,
     SQLModelGoodomicsStore,
+    get_record_by_field,
 )
 from sqlmodel import delete
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -98,7 +99,9 @@ async def _write_catalog_database(runs: int, samples: int) -> None:
     now = datetime.now(UTC)
     async with AsyncSession(store._get_engine()) as session:
         await session.exec(delete(RunRecord))
-        project = await session.get(ProjectRecord, DEFAULT_PROJECT_ID)
+        project = await get_record_by_field(
+            session, ProjectRecord, ProjectRecord.project_id, DEFAULT_PROJECT_ID
+        )
         if project is not None:
             project.description = (
                 "Minimal catalog metadata for the DuckDB query pressure test."
@@ -111,7 +114,7 @@ async def _write_catalog_database(runs: int, samples: int) -> None:
             [
                 RunRecord(
                     run_id=f"run_{run_index + 1:04d}",
-                    project_id=DEFAULT_PROJECT_ID,
+                    project_id=project.id if project is not None else None,
                     project=DEFAULT_PROJECT_NAME,
                     name=f"Synthetic cancer performance run {run_index + 1}",
                     run_kind="query_performance_fixture",
@@ -159,9 +162,9 @@ def _create_staging_tables(
             r.run_index,
             r.run_id,
             sample_index,
-            printf('%s__S%05d', r.run_id, sample_index + 1) AS run_sample_key,
-            printf('S%05d', sample_index + 1) AS sample_key,
-            printf('SUBJ%05d', sample_index + 1) AS subject_key,
+            printf('%s__S%05d', r.run_id, sample_index + 1) AS run_sample_id,
+            printf('S%05d', sample_index + 1) AS sample_id,
+            printf('SUBJ%05d', sample_index + 1) AS subject_id,
             CASE WHEN sample_index % 2 = 0 THEN 'tumor' ELSE 'normal' END AS sample_role
         FROM perf_runs r
         CROSS JOIN range(?) AS sample_range(sample_index)
@@ -173,7 +176,7 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_genes AS
         SELECT
             feature_index,
-            printf('gene:%05d', feature_index + 1) AS feature_key,
+            printf('gene:%05d', feature_index + 1) AS feature_id,
             printf('G%05d', feature_index + 1) AS feature_id,
             printf('GENE%05d', feature_index + 1) AS symbol,
             printf('ENSG%011d', feature_index + 1) AS stable_id
@@ -186,11 +189,11 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_transcripts AS
         SELECT
             feature_index,
-            printf('transcript:%05d', feature_index + 1) AS feature_key,
+            printf('transcript:%05d', feature_index + 1) AS feature_id,
             printf('T%05d', feature_index + 1) AS feature_id,
             printf('TX%05d', feature_index + 1) AS symbol,
             printf('ENST%011d', feature_index + 1) AS stable_id,
-            printf('gene:%05d', feature_index + 1) AS gene_feature_key
+            printf('gene:%05d', feature_index + 1) AS gene_feature_id
         FROM range(?) AS feature_range(feature_index)
         """,
         [VARIANT_COUNT],
@@ -200,15 +203,15 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_variants AS
         SELECT
             variant_index,
-            printf('variant:%05d', variant_index + 1) AS variant_key,
+            printf('variant:%05d', variant_index + 1) AS variant_id,
             printf('VAR%05d', variant_index + 1) AS variant_id,
             printf('%d', variant_index % 22 + 1) AS contig,
             1000000 + variant_index * 113 AS pos,
             1000000 + variant_index * 113 AS end_pos,
             CASE variant_index % 4 WHEN 0 THEN 'A' WHEN 1 THEN 'C' WHEN 2 THEN 'G' ELSE 'T' END AS ref,
             CASE variant_index % 4 WHEN 0 THEN 'G' WHEN 1 THEN 'T' WHEN 2 THEN 'A' ELSE 'C' END AS alt,
-            printf('gene:%05d', variant_index % ? + 1) AS feature_key,
-            printf('transcript:%05d', variant_index + 1) AS transcript_feature_key
+            printf('gene:%05d', variant_index % ? + 1) AS feature_id,
+            printf('transcript:%05d', variant_index + 1) AS transcript_feature_id
         FROM range(?) AS variant_range(variant_index)
         """,
         [GENE_COUNT, VARIANT_COUNT],
@@ -218,7 +221,7 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_structural_variants AS
         SELECT
             sv_index,
-            printf('sv:%05d', sv_index + 1) AS structural_variant_key,
+            printf('sv:%05d', sv_index + 1) AS structural_variant_id,
             printf('SV%05d', sv_index + 1) AS event_id,
             CASE sv_index % 5
                 WHEN 0 THEN 'fusion'
@@ -227,8 +230,8 @@ def _create_staging_tables(
                 WHEN 3 THEN 'inversion'
                 ELSE 'translocation'
             END AS event_class,
-            printf('gene:%05d', sv_index % ? + 1) AS site1_feature_key,
-            printf('gene:%05d', (sv_index * 17) % ? + 1) AS site2_feature_key,
+            printf('gene:%05d', sv_index % ? + 1) AS site1_feature_id,
+            printf('gene:%05d', (sv_index * 17) % ? + 1) AS site2_feature_id,
             printf('%d', sv_index % 22 + 1) AS site1_contig,
             2000000 + sv_index * 1009 AS site1_pos,
             printf('%d', (sv_index * 5) % 22 + 1) AS site2_contig,
@@ -242,11 +245,11 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_intervals AS
         SELECT
             interval_index,
-            printf('interval:%05d', interval_index + 1) AS interval_key,
+            printf('interval:%05d', interval_index + 1) AS interval_id,
             printf('%d', interval_index % 22 + 1) AS contig,
             100000 + interval_index * 5000 AS start_pos,
             100000 + interval_index * 5000 + 999 AS end_pos,
-            printf('gene:%05d', interval_index % ? + 1) AS feature_key
+            printf('gene:%05d', interval_index % ? + 1) AS feature_id
         FROM range(?) AS interval_range(interval_index)
         """,
         [GENE_COUNT, INTERVAL_COUNT],
@@ -256,7 +259,7 @@ def _create_staging_tables(
         CREATE TEMP TABLE perf_qc_metrics AS
         SELECT
             metric_index,
-            printf('qc.metric.%02d', metric_index + 1) AS metric_key,
+            printf('qc.metric.%02d', metric_index + 1) AS metric_id,
             CASE metric_index % 6
                 WHEN 0 THEN 'pct'
                 WHEN 1 THEN 'reads'
@@ -364,11 +367,11 @@ def _insert_metric_definitions(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO metric_definitions
         SELECT
-            metric_key,
-            metric_key,
+            metric_id,
+            metric_id,
             'multiqc',
-            metric_key,
-            replace(metric_key, '.', ' '),
+            metric_id,
+            replace(metric_id, '.', ' '),
             'numeric',
             unit,
             CASE metric_index % 3 WHEN 0 THEN 'higher_is_better' WHEN 1 THEN 'lower_is_better' ELSE NULL END,
@@ -432,7 +435,7 @@ def _insert_features(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO features
         SELECT
-            feature_key,
+            feature_id,
             feature_id,
             'gene',
             symbol,
@@ -443,14 +446,14 @@ def _insert_features(connection: duckdb.DuckDBPyConnection) -> None:
         FROM perf_genes
         UNION ALL
         SELECT
-            feature_key,
+            feature_id,
             feature_id,
             'transcript',
             symbol,
             stable_id,
             'ensembl',
             'GRCh38',
-            json_object('parent_gene_key', gene_feature_key, 'biotype', 'protein_coding')
+            json_object('parent_gene_key', gene_feature_id, 'biotype', 'protein_coding')
         FROM perf_transcripts
         """
     )
@@ -460,7 +463,7 @@ def _insert_feature_aliases(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         """
         INSERT INTO feature_aliases
-        SELECT feature_key, symbol || '_ALIAS', 'synthetic_symbol'
+        SELECT feature_id, symbol || '_ALIAS', 'synthetic_symbol'
         FROM perf_genes
         WHERE feature_index < 5000
         """
@@ -482,14 +485,14 @@ def _insert_feature_set_members(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         """
         INSERT INTO feature_set_members
-        SELECT 'set:transcriptome', feature_key, 'member', json_object('rank', feature_index + 1)
+        SELECT 'set:transcriptome', feature_id, 'member', json_object('rank', feature_index + 1)
         FROM perf_genes
         UNION ALL
-        SELECT 'set:cancer_drivers', feature_key, 'driver', json_object('rank', feature_index + 1)
+        SELECT 'set:cancer_drivers', feature_id, 'driver', json_object('rank', feature_index + 1)
         FROM perf_genes
         WHERE feature_index < 512
         UNION ALL
-        SELECT 'set:variant_annotation_genes', feature_key, 'variant_annotation_target', '{}'
+        SELECT 'set:variant_annotation_genes', feature_id, 'variant_annotation_target', '{}'
         FROM perf_genes
         WHERE feature_index < ?
         """,
@@ -502,13 +505,13 @@ def _insert_genomic_intervals(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO genomic_intervals
         SELECT
-            interval_key,
+            interval_id,
             'GRCh38',
             contig,
             start_pos,
             end_pos,
             '+',
-            feature_key,
+            feature_id,
             CASE interval_index % 3 WHEN 0 THEN 'exon' WHEN 1 THEN 'target_region' ELSE 'cnv_bin' END,
             json_object('synthetic_index', interval_index)
         FROM perf_intervals
@@ -521,7 +524,7 @@ def _insert_variants(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO variants
         SELECT
-            variant_key,
+            variant_id,
             variant_id,
             'GRCh38',
             contig,
@@ -542,8 +545,8 @@ def _insert_variant_annotations(connection: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO variant_annotations
         SELECT
             'somatic_variants',
-            variant_key,
-            feature_key,
+            variant_id,
+            feature_id,
             CASE variant_index % 6
                 WHEN 0 THEN 'missense_variant'
                 WHEN 1 THEN 'frameshift_variant'
@@ -569,9 +572,9 @@ def _insert_variant_transcript_annotations(
         INSERT INTO variant_transcript_annotations
         SELECT
             'somatic_variants',
-            variant_key,
-            transcript_feature_key,
-            feature_key,
+            variant_id,
+            transcript_feature_id,
+            feature_id,
             CASE variant_index % 6
                 WHEN 0 THEN 'missense_variant'
                 WHEN 1 THEN 'frameshift_variant'
@@ -602,12 +605,12 @@ def _insert_structural_variant_events(connection: duckdb.DuckDBPyConnection) -> 
         """
         INSERT INTO structural_variant_events
         SELECT
-            structural_variant_key,
+            structural_variant_id,
             event_id,
             event_class,
             'GRCh38',
-            site1_feature_key,
-            site2_feature_key,
+            site1_feature_id,
+            site2_feature_id,
             site1_contig,
             site1_pos,
             site2_contig,
@@ -626,7 +629,7 @@ def _insert_entity_attribute_numeric(connection: duckdb.DuckDBPyConnection) -> N
         INSERT INTO entity_attribute_numeric
         SELECT
             'run_sample',
-            run_sample_key,
+            run_sample_id,
             'attr:tumor_purity',
             'sample_attributes',
             NULL,
@@ -642,7 +645,7 @@ def _insert_entity_attribute_string(connection: duckdb.DuckDBPyConnection) -> No
         INSERT INTO entity_attribute_string
         SELECT
             'run_sample',
-            run_sample_key,
+            run_sample_id,
             'attr:cancer_type',
             'sample_attributes',
             NULL,
@@ -664,7 +667,7 @@ def _insert_entity_attribute_boolean(connection: duckdb.DuckDBPyConnection) -> N
         INSERT INTO entity_attribute_boolean
         SELECT
             'run_sample',
-            run_sample_key,
+            run_sample_id,
             'attr:is_tumor',
             'sample_attributes',
             NULL,
@@ -680,7 +683,7 @@ def _insert_entity_attribute_date(connection: duckdb.DuckDBPyConnection) -> None
         INSERT INTO entity_attribute_date
         SELECT
             'run_sample',
-            run_sample_key,
+            run_sample_id,
             'attr:collection_date',
             'sample_attributes',
             NULL,
@@ -696,12 +699,12 @@ def _insert_entity_attribute_json(connection: duckdb.DuckDBPyConnection) -> None
         INSERT INTO entity_attribute_json
         SELECT
             'run_sample',
-            run_sample_key,
+            run_sample_id,
             'attr:clinical_context',
             'sample_attributes',
             NULL,
             json_object(
-                'subject_key', subject_key,
+                'subject_id', subject_id,
                 'sample_role', sample_role,
                 'stage', CASE sample_index % 4 WHEN 0 THEN 'I' WHEN 1 THEN 'II' WHEN 2 THEN 'III' ELSE 'IV' END
             )
@@ -717,9 +720,9 @@ def _insert_sample_metric_numeric(connection: duckdb.DuckDBPyConnection) -> None
         SELECT
             'multiqc:qc_metrics',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            qm.metric_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            qm.metric_id,
             NULL,
             CASE qm.metric_index % 6
                 WHEN 0 THEN 80 + ((rs.sample_index + qm.metric_index + rs.run_index) % 2000) / 100.0
@@ -742,8 +745,8 @@ def _insert_sample_metric_string(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'multiqc:qc_metrics',
             run_id,
-            run_sample_key,
-            sample_key,
+            run_sample_id,
+            sample_id,
             'qc.status',
             NULL,
             CASE
@@ -763,8 +766,8 @@ def _insert_sample_metric_json(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'multiqc:qc_metrics',
             run_id,
-            run_sample_key,
-            sample_key,
+            run_sample_id,
+            sample_id,
             'qc.flags',
             NULL,
             json_object(
@@ -784,9 +787,9 @@ def _insert_feature_value_numeric(connection: duckdb.DuckDBPyConnection) -> None
         SELECT
             'rna_expression',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            g.feature_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            g.feature_id,
             round(
                 ((rs.sample_index * 37 + rs.run_index * 101 + g.feature_index * 17) % 20000) / 100.0
                 + CASE WHEN g.feature_index < 512 AND rs.sample_role = 'tumor' THEN 25.0 ELSE 0.0 END,
@@ -807,9 +810,9 @@ def _insert_feature_call(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'copy_number',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            g.feature_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            g.feature_id,
             CASE (rs.sample_index + g.feature_index) % 5
                 WHEN 0 THEN 'amplification'
                 WHEN 1 THEN 'deep_deletion'
@@ -827,7 +830,7 @@ def _insert_feature_call(connection: duckdb.DuckDBPyConnection) -> None:
             CASE (rs.sample_index + g.feature_index) % 5 WHEN 4 THEN 0 ELSE 1 END,
             ((rs.sample_index * 11 + g.feature_index * 7) % 1000) / 100.0,
             0.6 + ((rs.sample_index + g.feature_index) % 40) / 100.0,
-            printf('cn-call:%s:%s', rs.run_sample_key, g.feature_key),
+            printf('cn-call:%s:%s', rs.run_sample_id, g.feature_id),
             NULL
         FROM perf_run_samples rs
         JOIN perf_genes g ON g.feature_index < ?
@@ -843,9 +846,9 @@ def _insert_sample_interval_values(connection: duckdb.DuckDBPyConnection) -> Non
         SELECT
             'target_coverage',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            i.interval_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            i.interval_id,
             80 + ((rs.sample_index * 5 + i.interval_index * 3 + rs.run_index) % 250),
             'mean_depth',
             NULL
@@ -863,8 +866,8 @@ def _insert_copy_number_segments(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'copy_number',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
+            rs.run_sample_id,
+            rs.sample_id,
             'GRCh38',
             printf('%d', segment_index % 22 + 1),
             1000000 + segment_index * 1000000,
@@ -893,9 +896,9 @@ def _insert_sample_variant_calls(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'somatic_variants',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            v.variant_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            v.variant_id,
             CASE (rs.sample_index + v.variant_index) % 3
                 WHEN 0 THEN '0/1'
                 WHEN 1 THEN '1/1'
@@ -924,9 +927,9 @@ def _insert_sample_structural_variant_calls(
         SELECT
             'structural_variants',
             rs.run_id,
-            rs.run_sample_key,
-            rs.sample_key,
-            sv.structural_variant_key,
+            rs.run_sample_id,
+            rs.sample_id,
+            sv.structural_variant_id,
             CASE WHEN (rs.sample_index + sv.sv_index) % 19 = 0 THEN 'filtered' ELSE 'called' END,
             CASE WHEN (rs.sample_index + sv.sv_index) % 3 = 0 THEN 'split_reads' ELSE 'paired_end' END,
             CASE WHEN sv.event_class = 'fusion' THEN 'junction_reads' ELSE NULL END,
@@ -947,10 +950,10 @@ def _insert_timeline_events(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO timeline_events
         SELECT
-            printf('event:%s:diagnosis', run_sample_key),
-            subject_key,
-            sample_key,
-            run_sample_key,
+            printf('event:%s:diagnosis', run_sample_id),
+            subject_id,
+            sample_id,
+            run_sample_id,
             'diagnosis',
             CAST(TIMESTAMP '2023-01-01' + (sample_index % 365) * INTERVAL '1 day' AS TEXT),
             NULL,
@@ -960,10 +963,10 @@ def _insert_timeline_events(connection: duckdb.DuckDBPyConnection) -> None:
         FROM perf_run_samples
         UNION ALL
         SELECT
-            printf('event:%s:collection', run_sample_key),
-            subject_key,
-            sample_key,
-            run_sample_key,
+            printf('event:%s:collection', run_sample_id),
+            subject_id,
+            sample_id,
+            run_sample_id,
             'sample_collection',
             CAST(TIMESTAMP '2024-01-01' + (sample_index % 365) * INTERVAL '1 day' AS TEXT),
             NULL,
@@ -980,10 +983,10 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO profile_payloads
         SELECT
-            printf('payload:%s:%s', run_sample_key, payload_name),
-            data_profile_key,
+            printf('payload:%s:%s', run_sample_id, payload_name),
+            data_profile_id,
             run_id,
-            run_sample_key,
+            run_sample_id,
             payload_name,
             payload_kind,
             'inline_metadata_only',
@@ -993,10 +996,10 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
             row_count,
             NULL,
             json_object(
-                'sample_key', sample_key,
+                'sample_id', sample_id,
                 'columns', columns_json,
                 'rows', rows_json,
-                'source_hash', printf('synthetic-%s-%s', run_sample_key, payload_name)
+                'source_hash', printf('synthetic-%s-%s', run_sample_id, payload_name)
             )
         FROM perf_run_samples
         CROSS JOIN (
@@ -1005,30 +1008,30 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
                     'rna_top_expression_preview',
                     'table',
                     'rna_expression',
-                    json_object('columns', ['feature_key', 'tpm']),
+                    json_object('columns', ['feature_id', 'tpm']),
                     25,
-                    ['feature_key', 'tpm'],
+                    ['feature_id', 'tpm'],
                     [
-                        json_object('feature_key', 'gene:00001', 'tpm', 120.0),
-                        json_object('feature_key', 'gene:00002', 'tpm', 98.5)
+                        json_object('feature_id', 'gene:00001', 'tpm', 120.0),
+                        json_object('feature_id', 'gene:00002', 'tpm', 98.5)
                     ]
                 ),
                 (
                     'multiqc_general_stats_preview',
                     'table',
                     'multiqc:qc_metrics',
-                    json_object('columns', ['metric_key', 'value']),
+                    json_object('columns', ['metric_id', 'value']),
                     ?,
-                    ['metric_key', 'value'],
+                    ['metric_id', 'value'],
                     [
-                        json_object('metric_key', 'qc.metric.01', 'value', 95.2),
-                        json_object('metric_key', 'qc.metric.02', 'value', 12000000)
+                        json_object('metric_id', 'qc.metric.01', 'value', 95.2),
+                        json_object('metric_id', 'qc.metric.02', 'value', 12000000)
                     ]
                 )
         ) AS payloads(
             payload_name,
             payload_kind,
-            data_profile_key,
+            data_profile_id,
             schema_json,
             row_count,
             columns_json,
@@ -1046,7 +1049,7 @@ def _insert_cohort_summaries(connection: duckdb.DuckDBPyConnection) -> None:
         SELECT
             'all_samples',
             'multiqc:qc_metrics',
-            metric_key,
+            metric_id,
             NULL,
             count(*),
             avg(value),
@@ -1059,13 +1062,13 @@ def _insert_cohort_summaries(connection: duckdb.DuckDBPyConnection) -> None:
             quantile_cont(value, 0.75),
             quantile_cont(value, 0.95)
         FROM sample_metric_numeric
-        GROUP BY metric_key
+        GROUP BY metric_id
         UNION ALL
         SELECT
             'all_samples',
             'rna_expression',
             NULL,
-            feature_key,
+            feature_id,
             count(*),
             avg(value),
             median(value),
@@ -1077,8 +1080,8 @@ def _insert_cohort_summaries(connection: duckdb.DuckDBPyConnection) -> None:
             quantile_cont(value, 0.75),
             quantile_cont(value, 0.95)
         FROM feature_value_numeric
-        WHERE feature_key IN (SELECT feature_key FROM perf_genes WHERE feature_index < 200)
-        GROUP BY feature_key
+        WHERE feature_id IN (SELECT feature_id FROM perf_genes WHERE feature_index < 200)
+        GROUP BY feature_id
         """
     )
 
@@ -1108,11 +1111,11 @@ def _insert_data_sources(connection: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO data_sources
         SELECT
             run_id,
-            run_sample_key,
-            sample_key,
+            run_sample_id,
+            sample_id,
             tool,
             module,
-            printf('synthetic://%s/%s/%s', run_id, sample_key, module)
+            printf('synthetic://%s/%s/%s', run_id, sample_id, module)
         FROM perf_run_samples
         CROSS JOIN (
             VALUES

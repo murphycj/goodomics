@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import sqlite3
 from collections.abc import Iterator
@@ -19,6 +20,14 @@ from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import GoodomicsQueryTools
 from goodomics.server.settings import Settings
 from goodomics.storage.database import DEFAULT_DATABASE_URL
+from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.sqlalchemy import (
+    RunSampleRecord,
+    SampleRecord,
+    SQLModelGoodomicsStore,
+)
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 @pytest.fixture
@@ -36,6 +45,43 @@ def _state(client: TestClient) -> Any:
 
 def _portal(client: TestClient) -> Any:
     return cast(Any, client.portal)
+
+
+def _scalar(row: tuple[Any, ...] | None) -> Any:
+    assert row is not None
+    return row[0]
+
+
+def _sample_pk(database_url: str, sample_id: str) -> int:
+    async def load() -> int:
+        store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(SampleRecord).where(SampleRecord.sample_id == sample_id)
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
+    async def load() -> int:
+        store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(RunSampleRecord).where(
+                        RunSampleRecord.run_sample_id == run_sample_id
+                    )
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def test_health_endpoint_reports_ok(client: TestClient) -> None:
@@ -587,23 +633,10 @@ def test_ai_chat_stops_at_tool_round_limit(client: TestClient) -> None:
     assert [call["name"] for call in body["tool_calls"]] == ["list_projects"]
 
 
-def test_projects_endpoint_upgrades_legacy_project_table(
+def test_control_tables_use_integer_primary_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    database_path = tmp_path / "legacy.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE projects (
-                project_id VARCHAR(255) NOT NULL,
-                name VARCHAR(255) NOT NULL,
-                description VARCHAR,
-                metadata_json JSON NOT NULL,
-                created_at DATETIME NOT NULL,
-                PRIMARY KEY (project_id)
-            )
-            """
-        )
+    database_path = tmp_path / "state.db"
 
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
 
@@ -614,9 +647,40 @@ def test_projects_endpoint_upgrades_legacy_project_table(
     assert any(
         project["project_id"] == DEFAULT_PROJECT_ID for project in response.json()
     )
+    readable_id_columns = {
+        "projects": "project_id",
+        "subjects": "subject_id",
+        "samples": "sample_id",
+        "data_imports": "data_import_id",
+        "runs": "run_id",
+        "run_samples": "run_sample_id",
+        "data_profiles": "data_profile_id",
+        "files": "file_id",
+        "sample_sets": "sample_set_id",
+    }
     with sqlite3.connect(database_path) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
-    assert "slug" in columns
+        for table_name, readable_column in readable_id_columns.items():
+            columns = {
+                row[1]: {"type": row[2], "notnull": row[3], "pk": row[5]}
+                for row in connection.execute(f"PRAGMA table_info({table_name})")
+            }
+            unique_indexes = [
+                row[1]
+                for row in connection.execute(f"PRAGMA index_list({table_name})")
+                if row[2]
+            ]
+            unique_index_columns = {
+                index_name: [
+                    info[2]
+                    for info in connection.execute(f"PRAGMA index_info({index_name})")
+                ]
+                for index_name in unique_indexes
+            }
+
+            assert columns["id"]["pk"] == 1
+            assert columns["id"]["type"] == "INTEGER"
+            assert columns[readable_column]["pk"] == 0
+            assert [readable_column] in unique_index_columns.values()
 
 
 def test_runs_endpoint_paginates_results(client: TestClient) -> None:
@@ -691,7 +755,7 @@ def test_run_analytics_and_file_content_endpoints(
             params={
                 "project_id": DEFAULT_PROJECT_ID,
                 "limit": 2,
-                "sort_by": "metric_key",
+                "sort_by": "metric_id",
                 "sort_direction": "asc",
             },
         )
@@ -709,10 +773,18 @@ def test_run_analytics_and_file_content_endpoints(
         )
 
     assert metrics.status_code == 200
-    assert any(
-        item["metric_key"] == "general_stats.salmon_percent_mapped"
-        for item in metrics.json()
-    )
+    with DuckDBAnalyticsStore(analytics_path)._connect() as connection:
+        percent_mapped_metric_id = connection.execute(
+            """
+            SELECT metric_id
+            FROM dim_metrics
+            WHERE metric_label = 'general_stats.salmon_percent_mapped'
+            """
+        ).fetchone()
+        percent_mapped_metric_id = _scalar(percent_mapped_metric_id)
+        s1_sample_id = _sample_pk(database_url, "S1")
+        s1_run_sample_id = _run_sample_pk(database_url, "run-1:S1")
+    assert any(item["metric_id"] == percent_mapped_metric_id for item in metrics.json())
     assert payloads.status_code == 200
     assert any(item["payload_name"] == "salmon_plot" for item in payloads.json())
     assert project_metrics.status_code == 200
@@ -722,10 +794,10 @@ def test_run_analytics_and_file_content_endpoints(
     assert sample_metrics.status_code == 200
     assert sample_metrics.json()
     assert all(
-        item["sample_key"] == "S1" or item["run_sample_key"] == "run-1:S1"
+        item["sample_id"] == s1_sample_id or item["run_sample_id"] == s1_run_sample_id
         for item in sample_metrics.json()
     )
-    assert not any(item["sample_key"] == "S1 Read 1" for item in sample_metrics.json())
+    assert not any(item["sample_id"] == "S1 Read 1" for item in sample_metrics.json())
     assert project_files.status_code == 200
     assert project_files.json() == files
     assert "file_id" in report
@@ -753,7 +825,7 @@ def test_run_analytics_and_file_content_endpoints(
     assert metric_preview.status_code == 200
     assert metric_preview.json()["columns"]
     assert len(metric_preview.json()["rows"]) == 2
-    assert metric_preview.json()["sort_by"] == "metric_key"
+    assert metric_preview.json()["sort_by"] == "metric_id"
     assert bad_preview.status_code == 400
     assert content.status_code == 200
     assert "MultiQC" in content.text

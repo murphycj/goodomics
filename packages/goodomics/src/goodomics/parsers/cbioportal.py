@@ -4,8 +4,8 @@ import csv
 import hashlib
 import json
 import re
-from collections.abc import Iterator
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,18 +16,23 @@ from goodomics.schemas.models import (
     AttributeDefinition,
     DataImport,
     DataProfile,
-    EntityAttributeNumeric,
-    EntityAttributeString,
     FeatureSet,
     FileAsset,
     FileLink,
-    ProfilePayload,
     Run,
     RunSample,
     Sample,
     SampleSet,
     SampleSetMember,
     Subject,
+    UnresolvedAnalyticalRecord,
+)
+from goodomics.storage.analytics_resolution import resolve_catalog_id
+from goodomics.storage.duckdb import (
+    delete_public_rows,
+    delete_public_select,
+    insert_public_rows,
+    insert_public_select,
 )
 
 CBIOPORTAL_TOOL = "cbioportal"
@@ -166,7 +171,7 @@ def parse_cbioportal_study(
         },
         samples=sorted(context.samples.values(), key=lambda sample: sample.sample_id),
     )
-    runs = _runs_from_context(context, run_template)
+    runs = [run_template, *_runs_from_context(context, run_template)]
     return NormalizedIngestResult(
         run=runs[0] if runs else run_template,
         runs=runs,
@@ -318,9 +323,11 @@ def _register_file(
         file_role=role,
         format=path.suffix.lstrip(".") or "txt",
         size_bytes=path.stat().st_size if path.exists() else None,
-        sha256=_sha256_file(path)
-        if path.exists() and path.stat().st_size < 20_000_000
-        else None,
+        sha256=(
+            _sha256_file(path)
+            if path.exists() and path.stat().st_size < 20_000_000
+            else None
+        ),
         metadata_json={"source_path": str(path)},
     )
     context.source_files_by_path[resolved] = file
@@ -362,7 +369,7 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
                     profile,
                     source_file_id=source_file.file_id if source_file else None,
                     entity_scope="subject",
-                    entity_key=subject_id,
+                    entity_id=subject_id,
                     row=row,
                     table=clinical,
                     id_columns={"PATIENT_ID", "Patient Identifier"},
@@ -382,7 +389,7 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
                     profile,
                     source_file_id=source_file.file_id if source_file else None,
                     entity_scope="sample",
-                    entity_key=sample_id,
+                    entity_id=sample_id,
                     row=row,
                     table=clinical,
                     id_columns={"SAMPLE_ID", "Sample Identifier", "PATIENT_ID"},
@@ -446,7 +453,6 @@ def _add_attribute_definitions(
         value_type = _attribute_value_type(table.value_types.get(column))
         context.batch.attribute_definitions.append(
             AttributeDefinition(
-                attribute_key=None,
                 attribute_id=_normalize_id(column),
                 entity_scope=entity_scope,
                 display_name=column.replace("_", " ").title(),
@@ -454,7 +460,7 @@ def _add_attribute_definitions(
                 description=table.descriptions.get(column),
                 priority=table.priorities.get(column),
                 metadata_json={
-                    "data_profile_key": profile.data_profile_id,
+                    "data_profile_id": profile.data_profile_id,
                     "source": "cbioportal_clinical",
                 },
             )
@@ -467,7 +473,7 @@ def _add_attribute_values(
     *,
     source_file_id: str | None,
     entity_scope: str,
-    entity_key: str,
+    entity_id: str,
     row: dict[str, str],
     table: CbioPortalTable,
     id_columns: set[str],
@@ -478,26 +484,26 @@ def _add_attribute_values(
         value = _clean(raw_value)
         if value is None:
             continue
-        attribute_key = _attribute_key(entity_scope, column)
+        attribute_id = _attribute_id(entity_scope, column)
         value_type = _attribute_value_type(table.value_types.get(column))
         if value_type == "numeric" and (number := _to_float(value)) is not None:
             context.batch.entity_attribute_numeric.append(
-                EntityAttributeNumeric(
+                UnresolvedAnalyticalRecord(
                     entity_scope=entity_scope,
-                    entity_key=entity_key,
-                    attribute_key=attribute_key,
-                    data_profile_key=profile.data_profile_id,
+                    entity_id=entity_id,
+                    attribute_id=attribute_id,
+                    data_profile_id=profile.data_profile_id,
                     source_file_id=source_file_id,
                     value=number,
                 )
             )
         else:
             context.batch.entity_attribute_string.append(
-                EntityAttributeString(
+                UnresolvedAnalyticalRecord(
                     entity_scope=entity_scope,
-                    entity_key=entity_key,
-                    attribute_key=attribute_key,
-                    data_profile_key=profile.data_profile_id,
+                    entity_id=entity_id,
+                    attribute_id=attribute_id,
+                    data_profile_id=profile.data_profile_id,
                     source_file_id=source_file_id,
                     value=value,
                 )
@@ -515,9 +521,11 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
             sample_set_id=f"{context.data_import_id}:{_normalize_id(stable_id)}",
             project_id=context.project_id,
             name=values.get("case_list_name") or stable_id,
-            kind="cohort"
-            if values.get("case_list_category") != "all_cases_in_study"
-            else "case_group",
+            kind=(
+                "cohort"
+                if values.get("case_list_category") != "all_cases_in_study"
+                else "case_group"
+            ),
             description=values.get("case_list_description"),
             definition_json={"source": "cbioportal_case_list", "stable_id": stable_id},
             metadata_json={
@@ -627,13 +635,12 @@ def _parse_gene_panel_matrix(
         for column, panel in row.items():
             if column == "SAMPLE_ID" or _clean(panel) is None:
                 continue
-            panel_key = f"gene_panel:{_normalize_id(panel)}"
-            if panel_key not in seen_panels:
-                seen_panels.add(panel_key)
+            panel_id = f"gene_panel:{_normalize_id(panel)}"
+            if panel_id not in seen_panels:
+                seen_panels.add(panel_id)
                 context.batch.feature_sets.append(
                     FeatureSet(
-                        feature_set_key=panel_key,
-                        feature_set_id=panel_key,
+                        feature_set_id=panel_id,
                         feature_set_type="gene_panel",
                         name=panel,
                         metadata_json={"source": "cbioportal_gene_panel_matrix"},
@@ -649,6 +656,14 @@ class FeatureMatrixBulkLoad:
     path: Path
     source_file_id: str | None
     value_semantics: str
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> FeatureMatrixBulkLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
         feature_type = self.profile.feature_type or "generic_entity"
@@ -663,8 +678,8 @@ class FeatureMatrixBulkLoad:
             f"""
             INSERT INTO features ({", ".join(_FEATURE_COLUMNS)})
             SELECT DISTINCT
-                feature_key,
-                feature_key AS feature_id,
+                feature_id,
+                symbol AS source_feature_id,
                 ? AS feature_type,
                 symbol,
                 stable_id,
@@ -685,16 +700,19 @@ class FeatureMatrixBulkLoad:
             source,
             base_run_id=self.run_id,
             base_profile_id=self.profile.data_profile_id,
+            catalog_id_maps=self.catalog_id_maps,
         )
-        connection.execute(
+        insert_public_select(
+            connection,
+            "feature_value_numeric",
+            _FEATURE_VALUE_COLUMNS,
             f"""
-            INSERT INTO feature_value_numeric ({", ".join(_FEATURE_VALUE_COLUMNS)})
             SELECT
-                data_profile_key,
+                data_profile_id,
                 mapped_run_id AS run_id,
-                mapped_run_id || ':' || sample_key AS run_sample_key,
-                sample_key,
-                feature_key,
+                mapped_run_sample_id AS run_sample_id,
+                mapped_sample_id AS sample_id,
+                feature_id,
                 value,
                 ? AS value_semantics,
                 ? AS source_file_id
@@ -715,6 +733,14 @@ class CnaMatrixBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> CnaMatrixBulkLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
         source = _cna_source_sql(self.path, include_values=False)
@@ -723,8 +749,8 @@ class CnaMatrixBulkLoad:
             f"""
             INSERT INTO features ({", ".join(_FEATURE_COLUMNS)})
             SELECT DISTINCT
-                feature_key,
-                feature_key AS feature_id,
+                feature_id,
+                symbol AS source_feature_id,
                 'gene' AS feature_type,
                 symbol,
                 NULL AS stable_id,
@@ -741,16 +767,19 @@ class CnaMatrixBulkLoad:
             source,
             base_run_id=self.run_id,
             base_profile_id=self.profile.data_profile_id,
+            catalog_id_maps=self.catalog_id_maps,
         )
-        connection.execute(
+        insert_public_select(
+            connection,
+            "feature_call",
+            _FEATURE_CALL_COLUMNS,
             f"""
-            INSERT INTO feature_call ({", ".join(_FEATURE_CALL_COLUMNS)})
             SELECT
-                data_profile_key,
+                data_profile_id,
                 mapped_run_id AS run_id,
-                mapped_run_id || ':' || sample_key AS run_sample_key,
-                sample_key,
-                feature_key,
+                mapped_run_sample_id AS run_sample_id,
+                mapped_sample_id AS sample_id,
+                feature_id,
                 CASE call_rank
                     WHEN -2 THEN 'HOMDEL'
                     WHEN -1 THEN 'LOSS'
@@ -789,23 +818,43 @@ class SegmentBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> SegmentBulkLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
         mapped_run_id = _mapped_run_id_sql(
             "ID",
             base_run_id=self.run_id,
+            catalog_id_maps=self.catalog_id_maps,
         )
-        data_profile_key = _mapped_data_profile_key_sql(
+        data_profile_id = _mapped_data_profile_id_sql(
             base_profile_id=self.profile.data_profile_id,
+            catalog_id_maps=self.catalog_id_maps,
         )
-        connection.execute(
+        mapped_run_sample_id = _mapped_run_sample_id_sql(
+            "ID",
+            base_run_id=self.run_id,
+            catalog_id_maps=self.catalog_id_maps,
+        )
+        mapped_sample_id = _mapped_sample_id_sql(
+            "ID", catalog_id_maps=self.catalog_id_maps
+        )
+        insert_public_select(
+            connection,
+            "copy_number_segments",
+            _SEGMENT_COLUMNS,
             f"""
-            INSERT INTO copy_number_segments ({", ".join(_SEGMENT_COLUMNS)})
             SELECT
-                {data_profile_key} AS data_profile_key,
+                {data_profile_id} AS data_profile_id,
                 {mapped_run_id} AS run_id,
-                {mapped_run_id} || ':' || ID AS run_sample_key,
-                ID AS sample_key,
+                {mapped_run_sample_id} AS run_sample_id,
+                {mapped_sample_id} AS sample_id,
                 ? AS genome_build,
                 chrom AS contig,
                 try_cast("loc.start" AS BIGINT) AS start_pos,
@@ -841,6 +890,14 @@ class MutationBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> MutationBulkLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
         source = _mutation_source_sql(
@@ -852,33 +909,40 @@ class MutationBulkLoad:
         connection.execute(
             f"""
             DELETE FROM variants
-            WHERE variant_key IN (
-                SELECT DISTINCT variant_key
+            WHERE variant_id IN (
+                SELECT DISTINCT variant_id
                 FROM ({source})
             )
             """,
             params,
         )
-        connection.execute(
+        delete_public_select(
+            connection,
+            "variant_annotations",
+            ("data_profile_id", "variant_id", "feature_id", "consequence"),
             f"""
-            DELETE FROM variant_annotations
-            WHERE (data_profile_key, variant_key, feature_key, consequence) IN (
                 SELECT DISTINCT
-                    ? AS data_profile_key,
-                    variant_key,
-                    feature_key,
+                    ? AS data_profile_id,
+                    variant_id,
+                    feature_id,
                     consequence
                 FROM ({source})
-            )
             """,
-            [self.profile.data_profile_id, *params],
+            [
+                resolve_catalog_id(
+                    "data_profile_id",
+                    self.profile.data_profile_id,
+                    self.catalog_id_maps,
+                ),
+                *params,
+            ],
         )
         connection.execute(
             f"""
             INSERT INTO features ({", ".join(_FEATURE_COLUMNS)})
             SELECT DISTINCT
-                feature_key,
-                feature_key AS feature_id,
+                feature_id,
+                symbol AS source_feature_id,
                 'gene' AS feature_type,
                 symbol,
                 stable_id,
@@ -893,8 +957,8 @@ class MutationBulkLoad:
             f"""
             INSERT INTO variants ({", ".join(_VARIANT_COLUMNS)})
             SELECT DISTINCT
-                variant_key,
-                variant_key AS variant_id,
+                variant_id,
+                variant_id AS source_variant_id,
                 genome_build,
                 contig,
                 pos,
@@ -902,18 +966,20 @@ class MutationBulkLoad:
                 ref,
                 alt,
                 variant_type,
-                variant_key AS normalized_key
+                variant_id AS normalized_id
             FROM ({source})
             """,
             params,
         )
-        connection.execute(
+        insert_public_select(
+            connection,
+            "variant_annotations",
+            _VARIANT_ANNOTATION_COLUMNS,
             f"""
-            INSERT INTO variant_annotations ({", ".join(_VARIANT_ANNOTATION_COLUMNS)})
             SELECT DISTINCT
-                ? AS data_profile_key,
-                variant_key,
-                feature_key,
+                ? AS data_profile_id,
+                variant_id,
+                feature_id,
                 consequence,
                 NULL AS impact,
                 NULL AS clinvar_significance,
@@ -921,17 +987,32 @@ class MutationBulkLoad:
                 info_json
             FROM ({source})
             """,
-            [self.profile.data_profile_id, *params],
+            [
+                resolve_catalog_id(
+                    "data_profile_id",
+                    self.profile.data_profile_id,
+                    self.catalog_id_maps,
+                ),
+                *params,
+            ],
         )
-        connection.execute(
+        mapped = _mapped_sample_source_sql(
+            source,
+            base_run_id=self.run_id,
+            base_profile_id=self.profile.data_profile_id,
+            catalog_id_maps=self.catalog_id_maps,
+        )
+        insert_public_select(
+            connection,
+            "sample_variant_calls",
+            _SAMPLE_VARIANT_CALL_COLUMNS,
             f"""
-            INSERT INTO sample_variant_calls ({", ".join(_SAMPLE_VARIANT_CALL_COLUMNS)})
             SELECT
-                data_profile_key,
+                data_profile_id,
                 mapped_run_id AS run_id,
-                mapped_run_id || ':' || sample_key AS run_sample_key,
-                sample_key,
-                variant_key,
+                mapped_run_sample_id AS run_sample_id,
+                mapped_sample_id AS sample_id,
+                variant_id,
                 genotype,
                 depth,
                 NULL AS genotype_quality,
@@ -945,13 +1026,7 @@ class MutationBulkLoad:
                 filter,
                 format_json,
                 ? AS source_file_id
-            FROM ({
-                _mapped_sample_source_sql(
-                    source,
-                    base_run_id=self.run_id,
-                    base_profile_id=self.profile.data_profile_id,
-                )
-            })
+            FROM ({mapped})
             """,
             [
                 self.source_file_id,
@@ -967,6 +1042,14 @@ class StructuralVariantBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> StructuralVariantBulkLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
         features: list[tuple[Any, ...]] = []
@@ -979,31 +1062,29 @@ class StructuralVariantBulkLoad:
             if sample_id is None:
                 continue
             site1_feature = (
-                _feature_key("gene", row["Site1_Hugo_Symbol"])
+                _feature_id("gene", row["Site1_Hugo_Symbol"])
                 if _clean(row.get("Site1_Hugo_Symbol"))
                 else None
             )
             site2_feature = (
-                _feature_key("gene", row["Site2_Hugo_Symbol"])
+                _feature_id("gene", row["Site2_Hugo_Symbol"])
                 if _clean(row.get("Site2_Hugo_Symbol"))
                 else None
             )
-            for feature_key, symbol in (
+            for feature_id, symbol in (
                 (site1_feature, row.get("Site1_Hugo_Symbol")),
                 (site2_feature, row.get("Site2_Hugo_Symbol")),
             ):
-                if feature_key and feature_key not in seen_features:
-                    seen_features.add(feature_key)
-                    features.append(
-                        _feature_row(feature_key, str(symbol), "gene", None)
-                    )
-            event_key = _structural_variant_key(row)
-            if event_key not in seen_events:
-                seen_events.add(event_key)
+                if feature_id and feature_id not in seen_features:
+                    seen_features.add(feature_id)
+                    features.append(_feature_row(feature_id, str(symbol), "gene", None))
+            event_id = _structural_variant_id(row)
+            if event_id not in seen_events:
+                seen_events.add(event_id)
                 events.append(
                     (
-                        event_key,
-                        event_key,
+                        event_id,
+                        event_id,
                         _event_class(row),
                         _genome_from_build(row.get("NCBI_Build"))
                         or self.genome_build
@@ -1021,14 +1102,26 @@ class StructuralVariantBulkLoad:
                 )
             calls.append(
                 (
-                    self.profile.data_profile_id,
-                    _run_id_for_sample(self.run_id, sample_id),
-                    _run_sample_id(
-                        _run_id_for_sample(self.run_id, sample_id),
-                        sample_id,
+                    resolve_catalog_id(
+                        "data_profile_id",
+                        self.profile.data_profile_id,
+                        self.catalog_id_maps,
                     ),
-                    sample_id,
-                    event_key,
+                    resolve_catalog_id(
+                        "run_id",
+                        _run_id_for_sample(self.run_id, sample_id),
+                        self.catalog_id_maps,
+                    ),
+                    resolve_catalog_id(
+                        "run_sample_id",
+                        _run_sample_id(
+                            _run_id_for_sample(self.run_id, sample_id),
+                            sample_id,
+                        ),
+                        self.catalog_id_maps,
+                    ),
+                    resolve_catalog_id("sample_id", sample_id, self.catalog_id_maps),
+                    event_id,
                     _clean(row.get("SV_Status")) or "called",
                     None,
                     None,
@@ -1051,9 +1144,9 @@ class StructuralVariantBulkLoad:
         events: list[tuple[Any, ...]],
         calls: list[tuple[Any, ...]],
     ) -> None:
-        _replace_dimension_rows(connection, "features", ("feature_key",), features)
+        _replace_dimension_rows(connection, "features", ("feature_id",), features)
         _replace_dimension_rows(
-            connection, "structural_variant_events", ("structural_variant_key",), events
+            connection, "structural_variant_events", ("structural_variant_id",), events
         )
         _insert_rows(connection, "features", _FEATURE_COLUMNS, features)
         _insert_rows(connection, "structural_variant_events", _SV_EVENT_COLUMNS, events)
@@ -1084,13 +1177,11 @@ def _iter_feature_matrix_batches(
         features: list[tuple[Any, ...]] = []
         values: list[tuple[Any, ...]] = []
         for row in reader:
-            feature_key, symbol, stable_id, metadata = _matrix_feature(
-                row, feature_type
-            )
+            feature_id, symbol, stable_id, metadata = _matrix_feature(row, feature_type)
             features.append(
                 (
-                    feature_key,
-                    feature_key,
+                    feature_id,
+                    feature_id,
                     feature_type,
                     symbol,
                     stable_id,
@@ -1109,7 +1200,7 @@ def _iter_feature_matrix_batches(
                         run_id,
                         _run_sample_id(run_id, sample_id),
                         sample_id,
-                        feature_key,
+                        feature_id,
                         value,
                         value_semantics,
                         source_file_id,
@@ -1142,8 +1233,8 @@ def _iter_cna_batches(
             symbol = _clean(row.get("Hugo_Symbol"))
             if symbol is None:
                 continue
-            feature_key = _feature_key("gene", symbol)
-            features.append(_feature_row(feature_key, symbol, "gene", None))
+            feature_id = _feature_id("gene", symbol)
+            features.append(_feature_row(feature_id, symbol, "gene", None))
             for sample_id in sample_columns:
                 rank = _to_int(row.get(sample_id))
                 if rank is None:
@@ -1155,7 +1246,7 @@ def _iter_cna_batches(
                         run_id,
                         _run_sample_id(run_id, sample_id),
                         sample_id,
-                        feature_key,
+                        feature_id,
                         code,
                         label,
                         rank,
@@ -1191,17 +1282,17 @@ def _add_payload(
             payload_run_id = context.run_id_for_sample(sample_id)
             payload_profile_id = context.data_profile_id_for_sample(profile, sample_id)
             run_sample_id = _run_sample_id(payload_run_id, sample_id)
-            payload_metadata["sample_key"] = sample_id
+            payload_metadata["sample_id"] = sample_id
         context.batch.profile_payloads.append(
-            ProfilePayload(
+            UnresolvedAnalyticalRecord(
                 payload_id=(
                     f"{payload_run_id}:{_normalize_id(path.name)}"
                     if sample_id is None
                     else f"{payload_run_id}:{_normalize_id(path.name)}:{sample_id}"
                 ),
-                data_profile_key=payload_profile_id,
+                data_profile_id=payload_profile_id,
                 run_id=payload_run_id,
-                run_sample_key=run_sample_id,
+                run_sample_id=run_sample_id,
                 payload_name=path.stem,
                 payload_kind=payload_kind,
                 storage_format="source_file",
@@ -1249,7 +1340,7 @@ def _ensure_sample(
         )
         context.samples[sample_id] = sample
     # `run_samples` is the join point between the stable biological sample and
-    # the run that produced facts for that sample.
+    # the run that produced analytical rows for that sample.
     sample_run_id = context.run_id_for_sample(sample_id)
     run_sample_id = _run_sample_id(sample_run_id, sample_id)
     if run_sample_id not in context.run_samples:
@@ -1303,16 +1394,16 @@ def _feature_matrix_source_sql(
     unpivot = ""
     if include_values:
         value_columns = (
-            ",\n                sample_key,"
+            ",\n                sample_id,"
             "\n                try_cast(raw_value AS DOUBLE) AS value"
         )
         unpivot = (
-            "\n            UNPIVOT (raw_value FOR sample_key IN "
+            "\n            UNPIVOT (raw_value FOR sample_id IN "
             f"({_sql_identifier_list(sample_columns)}))"
         )
     return f"""
             SELECT
-                {_sql_feature_key(feature_type, identifier)} AS feature_key,
+                {_sql_feature_id(feature_type, identifier)} AS feature_id,
                 {symbol} AS symbol,
                 {stable_id} AS stable_id,
                 {metadata} AS metadata_json
@@ -1373,17 +1464,17 @@ def _cna_source_sql(path: Path, *, include_values: bool) -> str:
     unpivot = ""
     if include_values:
         value_columns = (
-            ",\n                sample_key,\n                raw_value,"
+            ",\n                sample_id,\n                raw_value,"
             "\n                try_cast(raw_value AS INTEGER) AS call_rank"
         )
         unpivot = (
-            "\n            UNPIVOT (raw_value FOR sample_key IN "
+            "\n            UNPIVOT (raw_value FOR sample_id IN "
             f"({_sql_identifier_list(sample_columns)}))"
         )
     symbol = _sql_identifier("Hugo_Symbol")
     return f"""
             SELECT
-                {_sql_feature_key("gene", symbol)} AS feature_key,
+                {_sql_feature_id("gene", symbol)} AS feature_id,
                 {symbol} AS symbol
                 {value_columns}
             FROM read_csv(
@@ -1434,8 +1525,8 @@ def _mutation_source_sql(path: Path, default_genome_build: str | None) -> str:
     info_json = _json_object_sql(fieldnames, _MAF_CORE_COLUMNS)
     return f"""
             SELECT
-                sample_key,
-                {_sql_feature_key("gene", "symbol")} AS feature_key,
+                sample_id,
+                {_sql_feature_id("gene", "symbol")} AS feature_id,
                 symbol,
                 stable_id,
                 genome_build,
@@ -1446,7 +1537,7 @@ def _mutation_source_sql(path: Path, default_genome_build: str | None) -> str:
                 alt,
                 'variant:' || genome_build || ':' || contig || ':' ||
                     pos::VARCHAR || ':' || coalesce(end_pos, pos)::VARCHAR || ':' ||
-                    coalesce(ref, '') || '>' || coalesce(alt, '') AS variant_key,
+                    coalesce(ref, '') || '>' || coalesce(alt, '') AS variant_id,
                 variant_type,
                 consequence,
                 gnomad_af,
@@ -1463,7 +1554,7 @@ def _mutation_source_sql(path: Path, default_genome_build: str | None) -> str:
                 format_json
             FROM (
                 SELECT
-                    {sample} AS sample_key,
+                    {sample} AS sample_id,
                     {symbol} AS symbol,
                     {stable_id} AS stable_id,
                     {genome_build} AS genome_build,
@@ -1491,7 +1582,7 @@ def _mutation_source_sql(path: Path, default_genome_build: str | None) -> str:
                     nullstr = ['NA', '']
                 )
             )
-            WHERE sample_key IS NOT NULL
+            WHERE sample_id IS NOT NULL
             AND contig IS NOT NULL
             AND pos IS NOT NULL
             """
@@ -1530,8 +1621,8 @@ def _replace_features_from_source(
     connection.execute(
         f"""
         DELETE FROM features
-        WHERE feature_key IN (
-            SELECT DISTINCT feature_key
+        WHERE feature_id IN (
+            SELECT DISTINCT feature_id
             FROM ({source_sql})
         )
         """,
@@ -1539,7 +1630,7 @@ def _replace_features_from_source(
     )
 
 
-def _sql_feature_key(feature_type: str, identifier_sql: str) -> str:
+def _sql_feature_id(feature_type: str, identifier_sql: str) -> str:
     normalized = (
         "nullif(trim(regexp_replace("
         f"coalesce({identifier_sql}, 'unknown'), "
@@ -1595,12 +1686,7 @@ def _insert_rows(
 ) -> None:
     if not rows:
         return
-    placeholders = ", ".join("?" for _ in columns)
-    column_sql = ", ".join(columns)
-    connection.executemany(
-        f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
-        [_db_tuple(row) for row in rows],
-    )
+    insert_public_rows(connection, table, columns, [_db_tuple(row) for row in rows])
 
 
 def _insert_model_dicts(
@@ -1628,11 +1714,7 @@ def _replace_dimension_rows(
     if not rows:
         return
     keys = {tuple(row[index] for index in range(len(key_columns))) for row in rows}
-    where = " AND ".join(f"{column} IS NOT DISTINCT FROM ?" for column in key_columns)
-    connection.executemany(
-        f"DELETE FROM {table} WHERE {where}",
-        [tuple(key) for key in keys],
-    )
+    delete_public_rows(connection, table, key_columns, [tuple(key) for key in keys])
 
 
 def _db_tuple(row: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -1662,7 +1744,7 @@ def _matrix_feature(
     if (entity_id := _clean(row.get("ENTITY_STABLE_ID"))) is not None:
         name = _clean(row.get("NAME")) or entity_id
         return (
-            _feature_key(feature_type, entity_id),
+            _feature_id(feature_type, entity_id),
             name,
             entity_id,
             {
@@ -1674,25 +1756,25 @@ def _matrix_feature(
         symbol = composite.split("|", 1)[0]
         stable_id = composite.split("|", 1)[1] if "|" in composite else composite
         return (
-            _feature_key(feature_type, composite),
+            _feature_id(feature_type, composite),
             symbol,
             stable_id,
             {"composite_ref": composite},
         )
     symbol = _clean(row.get("Hugo_Symbol")) or "unknown"
     stable_id = _clean(row.get("Entrez_Gene_Id"))
-    return _feature_key(feature_type, symbol), symbol, stable_id, {}
+    return _feature_id(feature_type, symbol), symbol, stable_id, {}
 
 
 def _feature_row(
-    feature_key: str,
+    feature_id: str,
     symbol: str,
     feature_type: str,
     stable_id: object,
 ) -> tuple[Any, ...]:
     return (
-        feature_key,
-        feature_key,
+        feature_id,
+        feature_id,
         feature_type,
         symbol,
         _clean(stable_id),
@@ -1730,7 +1812,7 @@ def _attribute_value_type(
     return "string"
 
 
-def _attribute_key(entity_scope: str, column: str) -> str:
+def _attribute_id(entity_scope: str, column: str) -> str:
     return f"{entity_scope}:{_normalize_id(column).lower()}"
 
 
@@ -1752,18 +1834,7 @@ def _event_class(row: dict[str, str]) -> str:
     return (_clean(row.get("SV_Status")) or "structural_variant").lower()
 
 
-def _variant_key(
-    build: str,
-    chrom: str,
-    pos: int,
-    end_pos: int | None,
-    ref: str | None,
-    alt: str | None,
-) -> str:
-    return f"variant:{build}:{chrom}:{pos}:{end_pos or pos}:{ref or ''}>{alt or ''}"
-
-
-def _structural_variant_key(row: dict[str, str]) -> str:
+def _structural_variant_id(row: dict[str, str]) -> str:
     parts = [
         "sv",
         _clean(row.get("Sample_Id")) or "",
@@ -1839,16 +1910,78 @@ def _mapped_run_id_sql(
     sample_column: str,
     *,
     base_run_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     # Keep SQL bulk-load run IDs consistent with `run_id_for_sample`.
     normalized_sample = (
         f"trim(BOTH '_' FROM regexp_replace(trim(CAST({sample_column} AS VARCHAR)), "
         "'[^A-Za-z0-9_.:-]+', '_', 'g'))"
     )
+    if catalog_id_maps:
+        return _catalog_case_sql(
+            normalized_sample,
+            {
+                _normalize_id(sample_id): run_id
+                for sample_id in catalog_id_maps.get("sample_id", {})
+                if (
+                    run_id := catalog_id_maps.get("run_id", {}).get(
+                        _run_id_for_sample(base_run_id, str(sample_id))
+                    )
+                )
+                is not None
+            },
+        )
     return f"{_sql_string(base_run_id)} || ':' || {normalized_sample}"
 
 
-def _mapped_data_profile_key_sql(*, base_profile_id: str) -> str:
+def _mapped_run_sample_id_sql(
+    sample_column: str,
+    *,
+    base_run_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+) -> str:
+    sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
+    if catalog_id_maps:
+        return _catalog_case_sql(
+            sample_value,
+            {
+                str(sample_id): run_sample_id
+                for sample_id in catalog_id_maps.get("sample_id", {})
+                if (
+                    run_sample_id := catalog_id_maps.get("run_sample_id", {}).get(
+                        _run_sample_id(
+                            _run_id_for_sample(base_run_id, str(sample_id)),
+                            str(sample_id),
+                        )
+                    )
+                )
+                is not None
+            },
+        )
+    mapped_run_id = _mapped_run_id_sql(sample_column, base_run_id=base_run_id)
+    return f"{mapped_run_id} || ':' || {sample_column}"
+
+
+def _mapped_sample_id_sql(
+    sample_column: str,
+    *,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+) -> str:
+    sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
+    if catalog_id_maps:
+        return _catalog_case_sql(sample_value, catalog_id_maps.get("sample_id", {}))
+    return sample_column
+
+
+def _mapped_data_profile_id_sql(
+    *,
+    base_profile_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+) -> str:
+    if catalog_id_maps:
+        return str(
+            resolve_catalog_id("data_profile_id", base_profile_id, catalog_id_maps)
+        )
     return _sql_string(base_profile_id)
 
 
@@ -1857,28 +1990,57 @@ def _mapped_sample_source_sql(
     *,
     base_run_id: str,
     base_profile_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     mapped_run_id = _mapped_run_id_sql(
-        "sample_key",
+        "sample_id",
         base_run_id=base_run_id,
+        catalog_id_maps=catalog_id_maps,
     )
-    data_profile_key = _mapped_data_profile_key_sql(
+    data_profile_id = _mapped_data_profile_id_sql(
         base_profile_id=base_profile_id,
+        catalog_id_maps=catalog_id_maps,
+    )
+    mapped_run_sample_id = _mapped_run_sample_id_sql(
+        "sample_id",
+        base_run_id=base_run_id,
+        catalog_id_maps=catalog_id_maps,
+    )
+    mapped_sample_id = _mapped_sample_id_sql(
+        "sample_id",
+        catalog_id_maps=catalog_id_maps,
     )
     return f"""
         SELECT
             *,
             {mapped_run_id} AS mapped_run_id,
-            {data_profile_key} AS data_profile_key
+            {mapped_run_sample_id} AS mapped_run_sample_id,
+            {mapped_sample_id} AS mapped_sample_id,
+            {data_profile_id} AS data_profile_id
         FROM ({source_sql})
     """
+
+
+def _catalog_case_sql(
+    value_sql: str,
+    label_to_id: Mapping[Any, int],
+) -> str:
+    if not label_to_id:
+        return "NULL"
+    cases = " ".join(
+        f"WHEN {_sql_string(str(label))} THEN {int(identifier)}"
+        for label, identifier in sorted(
+            label_to_id.items(), key=lambda item: str(item[0])
+        )
+    )
+    return f"CASE {value_sql} {cases} ELSE NULL END"
 
 
 def _run_sample_id(run_id: str, sample_id: str) -> str:
     return f"{run_id}:{sample_id}"
 
 
-def _feature_key(feature_type: str, identifier: str) -> str:
+def _feature_id(feature_type: str, identifier: str) -> str:
     return f"{feature_type}:{_normalize_id(identifier)}"
 
 
@@ -1927,8 +2089,8 @@ def _sha256_file(path: Path) -> str:
 
 
 _FEATURE_COLUMNS = (
-    "feature_key",
     "feature_id",
+    "source_feature_id",
     "feature_type",
     "symbol",
     "stable_id",
@@ -1937,21 +2099,21 @@ _FEATURE_COLUMNS = (
     "metadata_json",
 )
 _FEATURE_VALUE_COLUMNS = (
-    "data_profile_key",
+    "data_profile_id",
     "run_id",
-    "run_sample_key",
-    "sample_key",
-    "feature_key",
+    "run_sample_id",
+    "sample_id",
+    "feature_id",
     "value",
     "value_semantics",
     "source_file_id",
 )
 _FEATURE_CALL_COLUMNS = (
-    "data_profile_key",
+    "data_profile_id",
     "run_id",
-    "run_sample_key",
-    "sample_key",
-    "feature_key",
+    "run_sample_id",
+    "sample_id",
+    "feature_id",
     "call_code",
     "call_label",
     "call_rank",
@@ -1961,10 +2123,10 @@ _FEATURE_CALL_COLUMNS = (
     "source_file_id",
 )
 _SEGMENT_COLUMNS = (
-    "data_profile_key",
+    "data_profile_id",
     "run_id",
-    "run_sample_key",
-    "sample_key",
+    "run_sample_id",
+    "sample_id",
     "genome_build",
     "contig",
     "start_pos",
@@ -1977,8 +2139,8 @@ _SEGMENT_COLUMNS = (
     "source_file_id",
 )
 _VARIANT_COLUMNS = (
-    "variant_key",
     "variant_id",
+    "source_variant_id",
     "genome_build",
     "contig",
     "pos",
@@ -1986,12 +2148,12 @@ _VARIANT_COLUMNS = (
     "ref",
     "alt",
     "variant_type",
-    "normalized_key",
+    "normalized_id",
 )
 _VARIANT_ANNOTATION_COLUMNS = (
-    "data_profile_key",
-    "variant_key",
-    "feature_key",
+    "data_profile_id",
+    "variant_id",
+    "feature_id",
     "consequence",
     "impact",
     "clinvar_significance",
@@ -1999,11 +2161,11 @@ _VARIANT_ANNOTATION_COLUMNS = (
     "info_json",
 )
 _SAMPLE_VARIANT_CALL_COLUMNS = (
-    "data_profile_key",
+    "data_profile_id",
     "run_id",
-    "run_sample_key",
-    "sample_key",
-    "variant_key",
+    "run_sample_id",
+    "sample_id",
+    "variant_id",
     "genotype",
     "depth",
     "genotype_quality",
@@ -2015,12 +2177,12 @@ _SAMPLE_VARIANT_CALL_COLUMNS = (
     "source_file_id",
 )
 _SV_EVENT_COLUMNS = (
-    "structural_variant_key",
+    "structural_variant_id",
     "event_id",
     "event_class",
     "genome_build",
-    "site1_feature_key",
-    "site2_feature_key",
+    "site1_feature_id",
+    "site2_feature_id",
     "site1_contig",
     "site1_pos",
     "site2_contig",
@@ -2030,11 +2192,11 @@ _SV_EVENT_COLUMNS = (
     "annotation_json",
 )
 _SV_CALL_COLUMNS = (
-    "data_profile_key",
+    "data_profile_id",
     "run_id",
-    "run_sample_key",
-    "sample_key",
-    "structural_variant_key",
+    "run_sample_id",
+    "sample_id",
+    "structural_variant_id",
     "call_status",
     "dna_support",
     "rna_support",

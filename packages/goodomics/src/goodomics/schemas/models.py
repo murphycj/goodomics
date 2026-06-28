@@ -196,6 +196,40 @@ class AnalyticalRecord(GoodomicsModel):
     pass
 
 
+class UnresolvedAnalyticalRecord(BaseModel):
+    """Parser-emitted analytical row before DuckDB dimension IDs are resolved."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+
+    @property
+    def sample_id(self) -> str | None:
+        explicit = self.model_extra.get("sample_id") if self.model_extra else None
+        if isinstance(explicit, str):
+            return explicit
+        metadata = self.model_extra.get("metadata_json") if self.model_extra else None
+        if not isinstance(metadata, dict):
+            return None
+        metadata_sample_id = metadata.get("sample_id")
+        return metadata_sample_id if isinstance(metadata_sample_id, str) else None
+
+    @property
+    def columns(self) -> list[str]:
+        metadata = self.model_extra.get("metadata_json") if self.model_extra else None
+        columns = metadata.get("columns") if isinstance(metadata, dict) else None
+        return [str(column) for column in columns] if isinstance(columns, list) else []
+
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        metadata = self.model_extra.get("metadata_json") if self.model_extra else None
+        rows = metadata.get("rows") if isinstance(metadata, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+
 class DuckDBMetadata(AnalyticalRecord):
     """Project-level metadata stored in the analytical database."""
 
@@ -210,7 +244,6 @@ class DuckDBMetadata(AnalyticalRecord):
 class MetricDefinition(AnalyticalRecord):
     """Catalog entry describing metric identity, display, and value semantics."""
 
-    metric_key: str | None = None
     metric_id: str
     namespace: str | None = None
     metric_name: str
@@ -227,7 +260,6 @@ class MetricDefinition(AnalyticalRecord):
 class AttributeDefinition(AnalyticalRecord):
     """Catalog entry describing flexible attributes on analytical entities."""
 
-    attribute_key: int | None = None
     attribute_id: str
     entity_scope: str
     display_name: str
@@ -242,10 +274,10 @@ class EntityAttributeBase(AnalyticalRecord):
     """Shared keys for typed entity-attribute value records."""
 
     entity_scope: str
-    entity_key: str
-    attribute_key: str
-    data_profile_key: str | None = None
-    source_file_id: str | None = None
+    entity_id: str
+    attribute_id: int
+    data_profile_id: int | None = None
+    source_file_id: int | None = None
 
 
 class EntityAttributeNumeric(EntityAttributeBase):
@@ -281,12 +313,12 @@ class EntityAttributeJson(EntityAttributeBase):
 class SampleMetricBase(AnalyticalRecord):
     """Shared keys for typed metrics measured at sample or run-sample grain."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str | None = None
-    sample_key: str | None = None
-    metric_key: str
-    source_file_id: str | None = None
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int | None = None
+    sample_id: int | None = None
+    metric_id: int
+    source_file_id: int | None = None
 
 
 class SampleMetricNumeric(SampleMetricBase):
@@ -310,8 +342,8 @@ class SampleMetricJson(SampleMetricBase):
 class Feature(AnalyticalRecord):
     """Biological or analytical feature such as a gene, transcript, or region."""
 
-    feature_key: str
     feature_id: str
+    source_feature_id: str
     feature_type: str
     symbol: str
     stable_id: str | None = None
@@ -323,7 +355,7 @@ class Feature(AnalyticalRecord):
 class FeatureAlias(AnalyticalRecord):
     """Alternative identifier or symbol for a feature."""
 
-    feature_key: str
+    feature_id: str
     alias: str
     namespace: str | None = None
 
@@ -331,7 +363,6 @@ class FeatureAlias(AnalyticalRecord):
 class FeatureSet(AnalyticalRecord):
     """Named collection of features used for grouping or interpretation."""
 
-    feature_set_key: str
     feature_set_id: str
     feature_set_type: str
     name: str
@@ -342,8 +373,8 @@ class FeatureSet(AnalyticalRecord):
 class FeatureSetMember(AnalyticalRecord):
     """Membership row linking a feature set to a feature."""
 
-    feature_set_key: str
-    feature_key: str
+    feature_set_id: str
+    feature_id: str
     member_role: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
@@ -351,43 +382,43 @@ class FeatureSetMember(AnalyticalRecord):
 class FeatureValueNumeric(AnalyticalRecord):
     """Numeric value for a feature in a processed sample and data profile."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    feature_key: str
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    feature_id: int
     value: float
     value_semantics: str
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class FeatureCall(AnalyticalRecord):
     """Categorical feature-level call for a processed sample."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    feature_key: str
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    feature_id: int
     call_code: str
     call_label: str | None = None
     call_rank: int | None = None
     score: float | None = None
     confidence: float | None = None
     source_event_id: str | None = None
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class GenomicInterval(AnalyticalRecord):
     """Genomic coordinate interval, optionally linked to a feature."""
 
-    interval_key: str
+    interval_id: str
     genome_build: str
     contig: str
     start_pos: int
     end_pos: int
     strand: str | None = None
-    feature_key: str | None = None
+    feature_id: str | None = None
     interval_type: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
@@ -395,23 +426,23 @@ class GenomicInterval(AnalyticalRecord):
 class SampleIntervalValue(AnalyticalRecord):
     """Numeric value assigned to a genomic interval for a processed sample."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    interval_key: str
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    interval_id: int
     value: float
     value_semantics: str
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class CopyNumberSegment(AnalyticalRecord):
     """Copy-number segment call for a processed sample."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
     genome_build: str
     contig: str
     start_pos: int
@@ -421,14 +452,14 @@ class CopyNumberSegment(AnalyticalRecord):
     total_copy_number: float | None = None
     minor_copy_number: float | None = None
     call_label: str | None = None
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class Variant(AnalyticalRecord):
     """Normalized genomic variant identity."""
 
-    variant_key: str
     variant_id: str
+    source_variant_id: str | None = None
     genome_build: str
     contig: str
     pos: int
@@ -436,15 +467,15 @@ class Variant(AnalyticalRecord):
     ref: str | None = None
     alt: str | None = None
     variant_type: str | None = None
-    normalized_key: str
+    normalized_id: str
 
 
 class VariantAnnotation(AnalyticalRecord):
     """Profile-level annotation describing a variant and optional feature."""
 
-    data_profile_key: str | None = None
-    variant_key: str
-    feature_key: str | None = None
+    data_profile_id: int | None = None
+    variant_id: int
+    feature_id: int | None = None
     consequence: str | None = None
     impact: str | None = None
     clinvar_significance: str | None = None
@@ -455,10 +486,10 @@ class VariantAnnotation(AnalyticalRecord):
 class VariantTranscriptAnnotation(AnalyticalRecord):
     """Transcript-specific annotation for a variant."""
 
-    data_profile_key: str | None = None
-    variant_key: str
-    transcript_feature_key: str
-    gene_feature_key: str | None = None
+    data_profile_id: int | None = None
+    variant_id: int
+    transcript_feature_id: int
+    gene_feature_id: int | None = None
     consequence: str
     impact: str | None = None
     protein_change: str | None = None
@@ -472,11 +503,11 @@ class VariantTranscriptAnnotation(AnalyticalRecord):
 class SampleVariantCall(AnalyticalRecord):
     """Per-sample call and sequencing evidence for a variant."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    variant_key: str
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    variant_id: int
     genotype: str | None = None
     depth: int | None = None
     genotype_quality: float | None = None
@@ -485,18 +516,18 @@ class SampleVariantCall(AnalyticalRecord):
     allele_fraction: float | None = None
     filter: str | None = None
     format_json: JsonObject = Field(default_factory=dict)
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class StructuralVariantEvent(AnalyticalRecord):
     """Structural variant event identity and annotation."""
 
-    structural_variant_key: str
+    structural_variant_id: int
     event_id: str
     event_class: str
     genome_build: str | None = None
-    site1_feature_key: str | None = None
-    site2_feature_key: str | None = None
+    site1_feature_id: int | None = None
+    site2_feature_id: int | None = None
     site1_contig: str | None = None
     site1_pos: int | None = None
     site2_contig: str | None = None
@@ -509,11 +540,11 @@ class StructuralVariantEvent(AnalyticalRecord):
 class SampleStructuralVariantCall(AnalyticalRecord):
     """Per-sample call and evidence for a structural variant event."""
 
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str
-    sample_key: str | None = None
-    structural_variant_key: str
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    structural_variant_id: int
     call_status: str = "called"
     dna_support: str | None = None
     rna_support: str | None = None
@@ -522,16 +553,16 @@ class SampleStructuralVariantCall(AnalyticalRecord):
     split_read_count: int | None = None
     paired_end_read_count: int | None = None
     format_json: JsonObject = Field(default_factory=dict)
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class TimelineEvent(AnalyticalRecord):
     """Subject or sample timeline event for longitudinal context."""
 
-    event_key: str
-    subject_key: str
-    sample_key: str | None = None
-    run_sample_key: str | None = None
+    event_id: int
+    subject_id: int
+    sample_id: int | None = None
+    run_sample_id: int | None = None
     event_type: str
     start_time: datetime | float | int | None = None
     end_time: datetime | float | int | None = None
@@ -543,10 +574,10 @@ class TimelineEvent(AnalyticalRecord):
 class ProfilePayload(AnalyticalRecord):
     """Stored payload attached to a data profile, such as a table or blob."""
 
-    payload_id: str
-    data_profile_key: str
-    run_id: str
-    run_sample_key: str | None = None
+    payload_id: int
+    data_profile_id: int
+    run_id: int
+    run_sample_id: int | None = None
     payload_name: str
     payload_kind: str
     storage_format: str
@@ -557,13 +588,18 @@ class ProfilePayload(AnalyticalRecord):
         alias="schema_json",
     )
     row_count: int | None = None
-    source_file_id: str | None = None
+    source_file_id: int | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
+
+    @field_validator("payload_schema_json", mode="before")
+    @classmethod
+    def _blank_schema_to_empty_dict(cls, value: object) -> object:
+        return {} if value is None else value
 
     @property
     def sample_id(self) -> str | None:
-        sample_key = self.metadata_json.get("sample_key")
-        return sample_key if isinstance(sample_key, str) else None
+        sample_id = self.metadata_json.get("sample_id")
+        return sample_id if isinstance(sample_id, str) else None
 
     @property
     def columns(self) -> list[str]:
@@ -583,18 +619,18 @@ class ProfilePayload(AnalyticalRecord):
         return source_hash if isinstance(source_hash, str) else None
 
     @property
-    def source_file(self) -> str | None:
+    def source_file(self) -> int | None:
         return self.source_file_id
 
 
 class GeneAlterationState(AnalyticalRecord):
     """Unified alteration state for a gene-like feature in a processed sample."""
 
-    run_sample_key: str
-    sample_key: str | None = None
-    subject_key: str | None = None
-    feature_key: str
-    data_profile_key: str
+    run_sample_id: int
+    sample_id: int | None = None
+    subject_id: int | None = None
+    feature_id: int
+    data_profile_id: int
     alteration_type: str
     alteration_subtype: str | None = None
     is_altered: bool
@@ -608,10 +644,10 @@ class GeneAlterationState(AnalyticalRecord):
 class CohortSummary(AnalyticalRecord):
     """Precomputed summary statistics for a sample set and profile feature."""
 
-    sample_set_id: str
-    data_profile_key: str
-    metric_key: str | None = None
-    feature_key: str | None = None
+    sample_set_id: int
+    data_profile_id: int
+    metric_id: int | None = None
+    feature_id: int | None = None
     n: int
     mean: float | None = None
     median: float | None = None
@@ -627,18 +663,18 @@ class CohortSummary(AnalyticalRecord):
 class ToolVersion(AnalyticalRecord):
     """Tool version observed while producing or importing a run."""
 
-    run_id: str
+    run_id: int
     tool: str
     version: str
-    source_file_id: str | None = None
+    source_file_id: int | None = None
 
 
 class DataSource(AnalyticalRecord):
     """Source path provenance for imported analytical data."""
 
-    run_id: str
-    run_sample_key: str | None = None
-    sample_key: str | None = None
+    run_id: int
+    run_sample_id: int | None = None
+    sample_id: int | None = None
     tool: str | None = None
     module: str | None = None
     source_path: str
@@ -650,38 +686,32 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     duckdb_metadata: list[DuckDBMetadata] = Field(default_factory=list)
     metric_definitions: list[MetricDefinition] = Field(default_factory=list)
     attribute_definitions: list[AttributeDefinition] = Field(default_factory=list)
-    entity_attribute_numeric: list[EntityAttributeNumeric] = Field(default_factory=list)
-    entity_attribute_string: list[EntityAttributeString] = Field(default_factory=list)
-    entity_attribute_boolean: list[EntityAttributeBoolean] = Field(default_factory=list)
-    entity_attribute_date: list[EntityAttributeDate] = Field(default_factory=list)
-    entity_attribute_json: list[EntityAttributeJson] = Field(default_factory=list)
-    sample_metric_numeric: list[SampleMetricNumeric] = Field(default_factory=list)
-    sample_metric_string: list[SampleMetricString] = Field(default_factory=list)
-    sample_metric_json: list[SampleMetricJson] = Field(default_factory=list)
+    entity_attribute_numeric: list[Any] = Field(default_factory=list)
+    entity_attribute_string: list[Any] = Field(default_factory=list)
+    entity_attribute_boolean: list[Any] = Field(default_factory=list)
+    entity_attribute_date: list[Any] = Field(default_factory=list)
+    entity_attribute_json: list[Any] = Field(default_factory=list)
+    sample_metric_numeric: list[Any] = Field(default_factory=list)
+    sample_metric_string: list[Any] = Field(default_factory=list)
+    sample_metric_json: list[Any] = Field(default_factory=list)
     features: list[Feature] = Field(default_factory=list)
     feature_aliases: list[FeatureAlias] = Field(default_factory=list)
     feature_sets: list[FeatureSet] = Field(default_factory=list)
     feature_set_members: list[FeatureSetMember] = Field(default_factory=list)
-    feature_value_numeric: list[FeatureValueNumeric] = Field(default_factory=list)
-    feature_call: list[FeatureCall] = Field(default_factory=list)
+    feature_value_numeric: list[Any] = Field(default_factory=list)
+    feature_call: list[Any] = Field(default_factory=list)
     genomic_intervals: list[GenomicInterval] = Field(default_factory=list)
-    sample_interval_values: list[SampleIntervalValue] = Field(default_factory=list)
-    copy_number_segments: list[CopyNumberSegment] = Field(default_factory=list)
+    sample_interval_values: list[Any] = Field(default_factory=list)
+    copy_number_segments: list[Any] = Field(default_factory=list)
     variants: list[Variant] = Field(default_factory=list)
-    variant_annotations: list[VariantAnnotation] = Field(default_factory=list)
-    variant_transcript_annotations: list[VariantTranscriptAnnotation] = Field(
-        default_factory=list
-    )
-    sample_variant_calls: list[SampleVariantCall] = Field(default_factory=list)
-    structural_variant_events: list[StructuralVariantEvent] = Field(
-        default_factory=list
-    )
-    sample_structural_variant_calls: list[SampleStructuralVariantCall] = Field(
-        default_factory=list
-    )
-    timeline_events: list[TimelineEvent] = Field(default_factory=list)
-    profile_payloads: list[ProfilePayload] = Field(default_factory=list)
-    gene_alteration_state: list[GeneAlterationState] = Field(default_factory=list)
-    cohort_summaries: list[CohortSummary] = Field(default_factory=list)
-    tool_versions: list[ToolVersion] = Field(default_factory=list)
-    data_sources: list[DataSource] = Field(default_factory=list)
+    variant_annotations: list[Any] = Field(default_factory=list)
+    variant_transcript_annotations: list[Any] = Field(default_factory=list)
+    sample_variant_calls: list[Any] = Field(default_factory=list)
+    structural_variant_events: list[Any] = Field(default_factory=list)
+    sample_structural_variant_calls: list[Any] = Field(default_factory=list)
+    timeline_events: list[Any] = Field(default_factory=list)
+    profile_payloads: list[Any] = Field(default_factory=list)
+    gene_alteration_state: list[Any] = Field(default_factory=list)
+    cohort_summaries: list[Any] = Field(default_factory=list)
+    tool_versions: list[Any] = Field(default_factory=list)
+    data_sources: list[Any] = Field(default_factory=list)

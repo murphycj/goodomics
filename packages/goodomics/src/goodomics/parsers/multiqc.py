@@ -10,12 +10,8 @@ from typing import Any
 from goodomics.data_profiles import MULTIQC_METRICS, MULTIQC_PAYLOADS
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    DataSource,
     MetricDefinition,
-    ProfilePayload,
-    SampleMetricNumeric,
-    SampleMetricString,
-    ToolVersion,
+    UnresolvedAnalyticalRecord,
 )
 
 MULTIQC_METRICS_PROFILE = MULTIQC_METRICS
@@ -31,31 +27,38 @@ class MultiQCOutput:
 
 @dataclass
 class MultiQCParseResult:
-    sample_metric_numeric: list[SampleMetricNumeric] = field(default_factory=list)
-    sample_metric_string: list[SampleMetricString] = field(default_factory=list)
+    sample_metric_numeric: list[Any] = field(default_factory=list)
+    sample_metric_string: list[Any] = field(default_factory=list)
     definitions: list[MetricDefinition] = field(default_factory=list)
-    payloads: list[ProfilePayload] = field(default_factory=list)
-    tool_versions: list[ToolVersion] = field(default_factory=list)
-    data_sources: list[DataSource] = field(default_factory=list)
+    payloads: list[Any] = field(default_factory=list)
+    tool_versions: list[Any] = field(default_factory=list)
+    data_sources: list[Any] = field(default_factory=list)
     outputs: list[MultiQCOutput] = field(default_factory=list)
 
     @property
-    def metrics(self) -> list[SampleMetricNumeric | SampleMetricString]:
+    def metrics(self) -> list[Any]:
         return [*self.sample_metric_numeric, *self.sample_metric_string]
 
     @property
     def sample_ids(self) -> set[str]:
         values: set[str] = set()
         for metric in self.metrics:
-            if metric.sample_key:
-                values.add(metric.sample_key)
+            sample_id = _record_value(metric, "sample_id")
+            if isinstance(sample_id, str):
+                values.add(sample_id)
         for payload in self.payloads:
-            sample_key = payload.metadata_json.get("sample_key")
-            if isinstance(sample_key, str):
-                values.add(sample_key)
+            metadata_json = _record_value(payload, "metadata_json")
+            sample_id = (
+                metadata_json.get("sample_id")
+                if isinstance(metadata_json, dict)
+                else None
+            )
+            if isinstance(sample_id, str):
+                values.add(sample_id)
         for source in self.data_sources:
-            if source.sample_key:
-                values.add(source.sample_key)
+            sample_id = _record_value(source, "sample_id")
+            if isinstance(sample_id, str):
+                values.add(sample_id)
         return values
 
     def to_batch(self, *, run_id: str) -> AnalyticsIngestBatch:
@@ -181,39 +184,38 @@ def _parse_metric_table(
             value = _clean_text(raw_value)
             if value is None:
                 continue
-            metric_key = _metric_key(module_hint, column)
+            metric_id = _metric_id(module_hint, column)
             tool, module, _, display_name = _metric_parts(module_hint, column)
             value_num, value_text = _coerce_metric_value(value)
             if value_num is not None:
                 result.sample_metric_numeric.append(
-                    SampleMetricNumeric(
-                        data_profile_key=MULTIQC_METRICS_PROFILE,
+                    UnresolvedAnalyticalRecord(
+                        data_profile_id=MULTIQC_METRICS_PROFILE,
                         run_id=run_id,
-                        run_sample_key=_run_sample_key(run_id, sample_id),
-                        sample_key=sample_id,
-                        metric_key=metric_key,
+                        run_sample_id=_run_sample_id(run_id, sample_id),
+                        sample_id=sample_id,
+                        metric_id=metric_id,
                         value=value_num,
                         source_file_id=str(path),
                     )
                 )
             else:
                 result.sample_metric_string.append(
-                    SampleMetricString(
-                        data_profile_key=MULTIQC_METRICS_PROFILE,
+                    UnresolvedAnalyticalRecord(
+                        data_profile_id=MULTIQC_METRICS_PROFILE,
                         run_id=run_id,
-                        run_sample_key=_run_sample_key(run_id, sample_id),
-                        sample_key=sample_id,
-                        metric_key=metric_key,
+                        run_sample_id=_run_sample_id(run_id, sample_id),
+                        sample_id=sample_id,
+                        metric_id=metric_id,
                         value=value_text or "",
                         source_file_id=str(path),
                     )
                 )
             result.definitions.append(
                 MetricDefinition(
-                    metric_key=metric_key,
-                    metric_id=metric_key,
+                    metric_id=metric_id,
                     namespace=tool,
-                    metric_name=metric_key,
+                    metric_name=metric_id,
                     display_name=display_name,
                     value_type="numeric" if value_num is not None else "string",
                     unit=None,
@@ -223,9 +225,9 @@ def _parse_metric_table(
             )
     if rows:
         result.payloads.append(
-            ProfilePayload(
+            UnresolvedAnalyticalRecord(
                 payload_id=f"{run_id}:{path.stem}",
-                data_profile_key=MULTIQC_PAYLOAD_PROFILE,
+                data_profile_id=MULTIQC_PAYLOAD_PROFILE,
                 run_id=run_id,
                 payload_name=path.stem,
                 payload_kind="multiqc_summary_table",
@@ -251,12 +253,12 @@ def _parse_sources(
     if not path.exists():
         return
     for row in _read_tsv(path):
-        sample_key = _clean_text(row.get("Sample Name"))
+        sample_id = _clean_text(row.get("Sample Name"))
         result.data_sources.append(
-            DataSource(
+            UnresolvedAnalyticalRecord(
                 run_id=run_id,
-                run_sample_key=_run_sample_key(run_id, sample_key),
-                sample_key=sample_key,
+                run_sample_id=_run_sample_id(run_id, sample_id),
+                sample_id=sample_id,
                 tool=_clean_text(row.get("Module")),
                 module=_clean_text(row.get("Section")),
                 source_path=_clean_text(row.get("Source")) or "",
@@ -278,7 +280,7 @@ def _parse_versions(
             if tool == "Sample" or value is None:
                 continue
             result.tool_versions.append(
-                ToolVersion(
+                UnresolvedAnalyticalRecord(
                     run_id=run_id,
                     tool=_normalize_key(tool),
                     version=value,
@@ -304,13 +306,13 @@ def _parse_payloads(
             if (value := _clean_text(row.get("Sample"))) is not None
         }
         tool, module, _, _ = _metric_parts(path.stem, "")
-        sample_key = next(iter(samples)) if len(samples) == 1 else None
+        sample_id = next(iter(samples)) if len(samples) == 1 else None
         result.payloads.append(
-            ProfilePayload(
-                payload_id=f"{run_id}:{path.stem}:{sample_key or 'all'}",
-                data_profile_key=MULTIQC_PAYLOAD_PROFILE,
+            UnresolvedAnalyticalRecord(
+                payload_id=f"{run_id}:{path.stem}:{sample_id or 'all'}",
+                data_profile_id=MULTIQC_PAYLOAD_PROFILE,
                 run_id=run_id,
-                run_sample_key=_run_sample_key(run_id, sample_key),
+                run_sample_id=_run_sample_id(run_id, sample_id),
                 payload_name=path.stem,
                 payload_kind="multiqc_plot_table",
                 storage_format="json",
@@ -320,7 +322,7 @@ def _parse_payloads(
                     "columns": list(rows[0].keys()),
                     "rows": rows,
                     "source_hash": sha256_file(path),
-                    "sample_key": sample_key,
+                    "sample_id": sample_id,
                     "tool": tool,
                     "module": module,
                 },
@@ -383,7 +385,7 @@ def _is_payload_file(path: Path) -> bool:
     return "plot" in stem or stem.endswith("_table") or "heatmap" in stem
 
 
-def _metric_key(module_hint: str, column: str) -> str:
+def _metric_id(module_hint: str, column: str) -> str:
     return f"{_normalize_key(module_hint)}.{_normalize_key(column)}"
 
 
@@ -414,14 +416,20 @@ def _normalize_key(value: str) -> str:
     return normalized or "unknown"
 
 
-def _run_sample_key(run_id: str, sample_id: str | None) -> str | None:
+def _run_sample_id(run_id: str, sample_id: str | None) -> str | None:
     return f"{run_id}:{sample_id}" if sample_id else None
+
+
+def _record_value(record: Any, key: str) -> Any:
+    if isinstance(record, dict):
+        return record.get(key)
+    return getattr(record, key, None)
 
 
 def _dedupe_definitions(
     definitions: list[MetricDefinition],
 ) -> list[MetricDefinition]:
-    by_key: dict[tuple[str | None, str], MetricDefinition] = {}
+    by_id: dict[tuple[str, str], MetricDefinition] = {}
     for definition in definitions:
-        by_key[(definition.metric_key, definition.value_type)] = definition
-    return list(by_key.values())
+        by_id[(definition.metric_id, definition.value_type)] = definition
+    return list(by_id.values())

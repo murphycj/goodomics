@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -102,22 +102,41 @@ class AnalyticalTableSerializer:
                 """
 
     def create_table(self, connection: duckdb.DuckDBPyConnection) -> None:
+        integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
+        if integer_table is not None:
+            integer_table.create_table(connection)
+            return
         connection.execute(self.create_sql)
 
     def create_sorted_view(self, connection: duckdb.DuckDBPyConnection) -> None:
         # Sorted views give API/query callers deterministic row order without
         # requiring every query to remember the table-specific ORDER BY clause.
         view_name = f"{self.table_name}_sorted"
+        integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
+        columns = (
+            _column_list(integer_table.physical_columns)
+            if integer_table is not None
+            else "*"
+        )
+        order_by = (
+            _physical_order_by(integer_table, self.order_by)
+            if integer_table is not None
+            else self.order_by
+        )
         connection.execute(f"DROP VIEW IF EXISTS {view_name}")
         connection.execute(
-            f"CREATE VIEW {view_name} AS SELECT * FROM {self.table_name} "
-            f"ORDER BY {self.order_by}"
+            f"CREATE VIEW {view_name} AS SELECT {columns} FROM {self.table_name} "
+            f"ORDER BY {order_by}"
         )
 
     def delete_run(
-        self, connection: duckdb.DuckDBPyConnection, run_id: str | None
+        self, connection: duckdb.DuckDBPyConnection, run_id: Any | None
     ) -> None:
         if run_id is None or self.run_column is None:
+            return
+        integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
+        if integer_table is not None:
+            integer_table.delete_run(connection, run_id)
             return
         connection.execute(
             f"DELETE FROM {self.table_name} WHERE {self.run_column} = ?", [run_id]
@@ -126,7 +145,7 @@ class AnalyticalTableSerializer:
     def delete_unique_values(
         self,
         connection: duckdb.DuckDBPyConnection,
-        records: Sequence[BaseModel],
+        records: Sequence[Any],
     ) -> None:
         # Reference tables like features or metric definitions are not scoped to
         # a single run, so replacement is based on their configured natural key.
@@ -139,6 +158,15 @@ class AnalyticalTableSerializer:
         where = " AND ".join(
             f"{column} IS NOT DISTINCT FROM ?" for column in self.unique_columns
         )
+        integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
+        if integer_table is not None:
+            _delete_integer_table_unique_values(
+                connection,
+                integer_table,
+                self.unique_columns,
+                records,
+            )
+            return
         connection.executemany(
             f"DELETE FROM {self.table_name} WHERE {where}",
             [tuple(value) for value in values],
@@ -147,9 +175,23 @@ class AnalyticalTableSerializer:
     def insert_records(
         self,
         connection: duckdb.DuckDBPyConnection,
-        records: Sequence[BaseModel],
+        records: Sequence[Any],
     ) -> None:
         if not records:
+            return
+        if self.table_name in INTEGER_KEYED_TABLES:
+            insert_public_rows(
+                connection,
+                self.table_name,
+                self.columns,
+                [
+                    tuple(
+                        _to_db_value(_field_value(record, column))
+                        for column in self.columns
+                    )
+                    for record in records
+                ],
+            )
             return
         placeholders = ", ".join("?" for _ in self.columns)
         columns = ", ".join(self.columns)
@@ -164,10 +206,12 @@ class AnalyticalTableSerializer:
             ],
         )
 
-    def records_from_batch(self, batch: AnalyticsIngestBatch) -> list[BaseModel]:
+    def records_from_batch(self, batch: AnalyticsIngestBatch) -> list[Any]:
         # The batch field name and model type are paired here, which lets the
         # write loop handle every analytical table with the same code path.
         raw_records = getattr(batch, self.resolved_batch_field)
+        if self.table_name in INTEGER_KEYED_TABLES:
+            return list(raw_records)
         return [self.model_type.model_validate(record) for record in raw_records]
 
 
@@ -184,125 +228,122 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "metric_definitions",
         MetricDefinition,
-        "metric_key, metric_id",
-        unique_columns=("metric_key", "metric_id"),
+        "metric_id",
+        unique_columns=("metric_id",),
     ),
     AnalyticalTableSerializer(
         "attribute_definitions",
         AttributeDefinition,
-        "entity_scope, attribute_key",
-        unique_columns=("entity_scope", "attribute_key", "attribute_id"),
-        column_types={
-            "attribute_key": "TEXT",
-        },
+        "entity_scope, attribute_id",
+        unique_columns=("entity_scope", "attribute_id"),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_numeric",
         EntityAttributeNumeric,
-        "entity_scope, entity_key, attribute_key",
+        "entity_scope, entity_id, attribute_id",
         unique_columns=(
             "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_string",
         EntityAttributeString,
-        "entity_scope, entity_key, attribute_key",
+        "entity_scope, entity_id, attribute_id",
         unique_columns=(
             "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_boolean",
         EntityAttributeBoolean,
-        "entity_scope, entity_key, attribute_key",
+        "entity_scope, entity_id, attribute_id",
         unique_columns=(
             "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_date",
         EntityAttributeDate,
-        "entity_scope, entity_key, attribute_key",
+        "entity_scope, entity_id, attribute_id",
         unique_columns=(
             "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
         "entity_attribute_json",
         EntityAttributeJson,
-        "entity_scope, entity_key, attribute_key",
+        "entity_scope, entity_id, attribute_id",
         unique_columns=(
             "entity_scope",
-            "entity_key",
-            "attribute_key",
-            "data_profile_key",
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
         "sample_metric_numeric",
         SampleMetricNumeric,
-        "data_profile_key, run_id, run_sample_key, metric_key",
+        "data_profile_id, run_id, run_sample_id, metric_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "sample_metric_string",
         SampleMetricString,
-        "data_profile_key, run_id, run_sample_key, metric_key",
+        "data_profile_id, run_id, run_sample_id, metric_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "sample_metric_json",
         SampleMetricJson,
-        "data_profile_key, run_id, run_sample_key, metric_key",
+        "data_profile_id, run_id, run_sample_id, metric_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "features",
         Feature,
-        "feature_type, feature_key",
-        unique_columns=("feature_key",),
+        "feature_type, feature_id",
+        unique_columns=("feature_id",),
     ),
     AnalyticalTableSerializer(
         "feature_aliases",
         FeatureAlias,
-        "feature_key, alias",
-        unique_columns=("feature_key", "alias", "namespace"),
+        "feature_id, alias",
+        unique_columns=("feature_id", "alias", "namespace"),
     ),
     AnalyticalTableSerializer(
         "feature_sets",
         FeatureSet,
-        "feature_set_type, feature_set_key",
-        unique_columns=("feature_set_key",),
+        "feature_set_type, feature_set_id",
+        unique_columns=("feature_set_id",),
     ),
     AnalyticalTableSerializer(
         "feature_set_members",
         FeatureSetMember,
-        "feature_set_key, feature_key",
-        unique_columns=("feature_set_key", "feature_key"),
+        "feature_set_id, feature_id",
+        unique_columns=("feature_set_id", "feature_id"),
     ),
     AnalyticalTableSerializer(
         "feature_value_numeric",
         FeatureValueNumeric,
-        "data_profile_key, feature_key, run_sample_key",
+        "data_profile_id, feature_id, run_sample_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "feature_call",
         FeatureCall,
-        "data_profile_key, feature_key, call_code, run_sample_key",
+        "data_profile_id, feature_id, call_code, run_sample_id",
         run_column="run_id",
         column_types={
             "call_rank": "INTEGER",
@@ -312,88 +353,88 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         "genomic_intervals",
         GenomicInterval,
         "genome_build, contig, start_pos, end_pos",
-        unique_columns=("interval_key",),
+        unique_columns=("interval_id",),
     ),
     AnalyticalTableSerializer(
         "sample_interval_values",
         SampleIntervalValue,
-        "data_profile_key, run_sample_key, interval_key",
+        "data_profile_id, run_sample_id, interval_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "copy_number_segments",
         CopyNumberSegment,
-        "data_profile_key, run_sample_key, contig, start_pos",
+        "data_profile_id, run_sample_id, contig, start_pos",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "variants",
         Variant,
-        "genome_build, contig, pos, end_pos, variant_key",
-        unique_columns=("variant_key",),
+        "genome_build, contig, pos, end_pos, variant_id",
+        unique_columns=("variant_id",),
     ),
     AnalyticalTableSerializer(
         "variant_annotations",
         VariantAnnotation,
-        "variant_key, data_profile_key, feature_key",
+        "variant_id, data_profile_id, feature_id",
         unique_columns=(
-            "data_profile_key",
-            "variant_key",
-            "feature_key",
+            "data_profile_id",
+            "variant_id",
+            "feature_id",
             "consequence",
         ),
     ),
     AnalyticalTableSerializer(
         "variant_transcript_annotations",
         VariantTranscriptAnnotation,
-        "variant_key, transcript_feature_key",
-        unique_columns=("data_profile_key", "variant_key", "transcript_feature_key"),
+        "variant_id, transcript_feature_id",
+        unique_columns=("data_profile_id", "variant_id", "transcript_feature_id"),
     ),
     AnalyticalTableSerializer(
         "sample_variant_calls",
         SampleVariantCall,
-        "data_profile_key, run_sample_key, variant_key",
+        "data_profile_id, run_sample_id, variant_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "structural_variant_events",
         StructuralVariantEvent,
-        "structural_variant_key",
-        unique_columns=("structural_variant_key",),
+        "structural_variant_id",
+        unique_columns=("structural_variant_id",),
     ),
     AnalyticalTableSerializer(
         "sample_structural_variant_calls",
         SampleStructuralVariantCall,
-        "data_profile_key, run_sample_key, structural_variant_key",
+        "data_profile_id, run_sample_id, structural_variant_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "timeline_events",
         TimelineEvent,
-        "subject_key, event_type, start_time",
-        unique_columns=("event_key",),
+        "subject_id, event_type, start_time",
+        unique_columns=("event_id",),
     ),
     AnalyticalTableSerializer(
         "profile_payloads",
         ProfilePayload,
-        "data_profile_key, run_id, run_sample_key, payload_name",
+        "data_profile_id, run_id, run_sample_id, payload_name",
         run_column="run_id",
         unique_columns=("payload_id",),
     ),
     AnalyticalTableSerializer(
         "gene_alteration_state",
         GeneAlterationState,
-        "feature_key, alteration_type, data_profile_key, run_sample_key",
+        "feature_id, alteration_type, data_profile_id, run_sample_id",
     ),
     AnalyticalTableSerializer(
         "cohort_summaries",
         CohortSummary,
-        "sample_set_id, data_profile_key, metric_key, feature_key",
+        "sample_set_id, data_profile_id, metric_id, feature_id",
         unique_columns=(
             "sample_set_id",
-            "data_profile_key",
-            "metric_key",
-            "feature_key",
+            "data_profile_id",
+            "metric_id",
+            "feature_id",
         ),
     ),
     AnalyticalTableSerializer(
@@ -405,7 +446,7 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "data_sources",
         DataSource,
-        "run_id, sample_key, tool, module",
+        "run_id, sample_id, tool, module",
         run_column="run_id",
     ),
 )
@@ -422,16 +463,369 @@ RUN_SCOPED_TABLES = tuple(
 ANALYTICS_TABLES = tuple(serializer.table_name for serializer in SERIALIZERS)
 
 
+@dataclass(frozen=True)
+class DuckDBDimension:
+    table_name: str
+    id_column: str
+    label_column: str
+    storage_column: str | None = None
+
+    @property
+    def physical_column(self) -> str:
+        return self.storage_column or self.id_column
+
+    @property
+    def create_sql(self) -> str:
+        return f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
+                {self.id_column} BIGINT PRIMARY KEY,
+                {self.label_column} TEXT UNIQUE
+            )
+            """
+
+
+CATALOG_ID_COLUMNS = frozenset(
+    {
+        "project_id",
+        "data_profile_id",
+        "run_id",
+        "run_sample_id",
+        "sample_id",
+        "sample_set_id",
+        "subject_id",
+    }
+)
+
+
+DIMENSIONS_BY_COLUMN: dict[str, DuckDBDimension] = {
+    "feature_id": DuckDBDimension("dim_features", "feature_id", "feature_label"),
+    "transcript_feature_id": DuckDBDimension(
+        "dim_features", "feature_id", "feature_label", "transcript_feature_id"
+    ),
+    "gene_feature_id": DuckDBDimension(
+        "dim_features", "feature_id", "feature_label", "gene_feature_id"
+    ),
+    "site1_feature_id": DuckDBDimension(
+        "dim_features", "feature_id", "feature_label", "site1_feature_id"
+    ),
+    "site2_feature_id": DuckDBDimension(
+        "dim_features", "feature_id", "feature_label", "site2_feature_id"
+    ),
+    "source_file_id": DuckDBDimension(
+        "dim_files", "source_file_id", "source_file_label"
+    ),
+    "metric_id": DuckDBDimension("dim_metrics", "metric_id", "metric_label"),
+    "variant_id": DuckDBDimension("dim_variants", "variant_id", "variant_label"),
+    "interval_id": DuckDBDimension("dim_intervals", "interval_id", "interval_label"),
+    "feature_set_id": DuckDBDimension(
+        "dim_feature_sets", "feature_set_id", "feature_set_label"
+    ),
+    "structural_variant_id": DuckDBDimension(
+        "dim_structural_variants",
+        "structural_variant_id",
+        "structural_variant_label",
+    ),
+    "attribute_id": DuckDBDimension(
+        "dim_attributes", "attribute_id", "attribute_label"
+    ),
+    "event_id": DuckDBDimension("dim_events", "event_id", "event_label"),
+    "payload_id": DuckDBDimension("dim_payloads", "payload_id", "payload_label"),
+}
+DIMENSIONS = tuple(dict.fromkeys(DIMENSIONS_BY_COLUMN.values()))
+
+
+@dataclass(frozen=True)
+class IntegerKeyedTableDefinition:
+    table_name: str
+    serializer: AnalyticalTableSerializer
+    dimensions: Mapping[str, DuckDBDimension]
+    catalog_columns: frozenset[str] = frozenset()
+
+    @property
+    def physical_columns(self) -> tuple[str, ...]:
+        return tuple(
+            (
+                self.dimensions[column].physical_column
+                if column in self.dimensions
+                else column
+            )
+            for column in self.serializer.columns
+        )
+
+    def create_table(self, connection: duckdb.DuckDBPyConnection) -> None:
+        _drop_view_if_exists(connection, self.table_name)
+        connection.execute(self.create_sql)
+
+    @property
+    def create_sql(self) -> str:
+        columns = ",\n                    ".join(
+            self._physical_column_sql(column) for column in self.serializer.columns
+        )
+        return f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    {columns}
+                )
+                """
+
+    def _physical_column_sql(self, public_column: str) -> str:
+        dimension = self.dimensions.get(public_column)
+        if dimension is not None or public_column in self.catalog_columns:
+            physical_column = (
+                dimension.physical_column if dimension is not None else public_column
+            )
+            return f"{_quote_identifier(physical_column)} BIGINT"
+        field_name = _field_name_for_column(self.serializer.model_type, public_column)
+        field_info = self.serializer.model_type.model_fields[field_name]
+        db_type = self.serializer.column_types.get(
+            public_column,
+            _duckdb_type_for_field(field_info.annotation, public_column),
+        )
+        return f"{_quote_identifier(public_column)} {db_type}"
+
+    def readable_select_sql(self, columns: Sequence[str] | None = None) -> str:
+        requested_columns = tuple(columns or self.serializer.columns)
+        select_columns: list[str] = []
+        joins: list[str] = []
+        for index, column in enumerate(self.serializer.columns):
+            dimension = self.dimensions.get(column)
+            if dimension is None:
+                if column in requested_columns:
+                    select_columns.append(f"stored.{_quote_identifier(column)}")
+                continue
+            alias = f"dim_{index}"
+            joins.append(
+                f"LEFT JOIN {dimension.table_name} {alias} "
+                f"ON stored.{_quote_identifier(dimension.physical_column)} = "
+                f"{alias}.{_quote_identifier(dimension.id_column)}"
+            )
+            if column in requested_columns:
+                select_columns.append(
+                    f"{alias}.{_quote_identifier(dimension.label_column)} "
+                    f"AS {_quote_identifier(column)}"
+                )
+        return f"""
+            SELECT {", ".join(select_columns)}
+            FROM {self.table_name} stored
+            {" ".join(joins)}
+            """
+
+    def delete_run(self, connection: duckdb.DuckDBPyConnection, run_id: str) -> None:
+        if "run_id" in self.catalog_columns:
+            connection.execute(
+                f"""
+                DELETE FROM {self.table_name}
+                WHERE {_quote_identifier("run_id")} = ?
+                """,
+                [run_id],
+            )
+            return
+        run_dimension = self.dimensions.get("run_id")
+        if run_dimension is None:
+            return
+        connection.execute(
+            f"""
+            DELETE FROM {self.table_name}
+            WHERE {_quote_identifier(run_dimension.physical_column)} IN (
+                SELECT {_quote_identifier(run_dimension.id_column)}
+                FROM {run_dimension.table_name}
+                WHERE {_quote_identifier(run_dimension.label_column)} = ?
+            )
+            """,
+            [run_id],
+        )
+
+
+def _integer_id_dimensions(*columns: str) -> dict[str, DuckDBDimension]:
+    return {
+        column: DIMENSIONS_BY_COLUMN[column]
+        for column in columns
+        if column in DIMENSIONS_BY_COLUMN
+    }
+
+
+def _catalog_id_columns(*columns: str) -> frozenset[str]:
+    return frozenset(column for column in columns if column in CATALOG_ID_COLUMNS)
+
+
+INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
+    table: IntegerKeyedTableDefinition(
+        table_name=table,
+        serializer=SERIALIZERS_BY_TABLE[table],
+        dimensions=_integer_id_dimensions(*columns),
+        catalog_columns=_catalog_id_columns(*columns),
+    )
+    for table, columns in {
+        "entity_attribute_numeric": (
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
+            "source_file_id",
+        ),
+        "entity_attribute_string": (
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
+            "source_file_id",
+        ),
+        "entity_attribute_boolean": (
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
+            "source_file_id",
+        ),
+        "entity_attribute_date": (
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
+            "source_file_id",
+        ),
+        "entity_attribute_json": (
+            "entity_id",
+            "attribute_id",
+            "data_profile_id",
+            "source_file_id",
+        ),
+        "sample_metric_numeric": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "metric_id",
+            "source_file_id",
+        ),
+        "sample_metric_string": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "metric_id",
+            "source_file_id",
+        ),
+        "sample_metric_json": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "metric_id",
+            "source_file_id",
+        ),
+        "feature_aliases": ("feature_id",),
+        "feature_set_members": ("feature_set_id", "feature_id"),
+        "feature_value_numeric": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "feature_id",
+            "source_file_id",
+        ),
+        "feature_call": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "feature_id",
+            "source_file_id",
+        ),
+        "genomic_intervals": ("feature_id",),
+        "sample_interval_values": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "interval_id",
+            "source_file_id",
+        ),
+        "copy_number_segments": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "source_file_id",
+        ),
+        "variant_annotations": (
+            "data_profile_id",
+            "variant_id",
+            "feature_id",
+        ),
+        "variant_transcript_annotations": (
+            "data_profile_id",
+            "variant_id",
+            "transcript_feature_id",
+            "gene_feature_id",
+        ),
+        "sample_variant_calls": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "variant_id",
+            "source_file_id",
+        ),
+        "structural_variant_events": (
+            "structural_variant_id",
+            "site1_feature_id",
+            "site2_feature_id",
+        ),
+        "sample_structural_variant_calls": (
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "structural_variant_id",
+            "source_file_id",
+        ),
+        "timeline_events": (
+            "event_id",
+            "subject_id",
+            "sample_id",
+            "run_sample_id",
+        ),
+        "profile_payloads": (
+            "payload_id",
+            "data_profile_id",
+            "run_id",
+            "run_sample_id",
+            "source_file_id",
+        ),
+        "gene_alteration_state": (
+            "run_sample_id",
+            "sample_id",
+            "subject_id",
+            "feature_id",
+            "data_profile_id",
+            "source_event_id",
+        ),
+        "cohort_summaries": (
+            "sample_set_id",
+            "data_profile_id",
+            "metric_id",
+            "feature_id",
+        ),
+        "tool_versions": ("run_id", "source_file_id"),
+        "data_sources": ("run_id", "run_sample_id", "sample_id"),
+    }.items()
+}
+
+
 class DuckDBAnalyticsStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return duckdb.connect(str(self.path))
+        connection = duckdb.connect(str(self.path))
+        connection.execute("SET preserve_insertion_order=false")
+        return connection
 
     def ensure_schema(self) -> None:
         with self._connect() as connection:
+            for serializer in SERIALIZERS:
+                connection.execute(
+                    f"DROP VIEW IF EXISTS {serializer.table_name}_sorted"
+                )
+            for dimension in DIMENSIONS:
+                connection.execute(dimension.create_sql)
             # The registry is the source of truth for physical DuckDB tables.
             for serializer in SERIALIZERS:
                 serializer.create_table(connection)
@@ -442,8 +836,8 @@ class DuckDBAnalyticsStore:
         self,
         batch: AnalyticsIngestBatch,
         *,
-        replace_run_id: str | None = None,
-        replace_run_ids: Sequence[str] | None = None,
+        replace_run_id: Any | None = None,
+        replace_run_ids: Sequence[Any] | None = None,
         refresh_derived: bool = True,
     ) -> None:
         validated = AnalyticsIngestBatch.model_validate(batch)
@@ -488,8 +882,8 @@ class DuckDBAnalyticsStore:
         batch: AnalyticsIngestBatch,
         bulk_loads: Sequence[Any],
         *,
-        replace_run_id: str | None = None,
-        replace_run_ids: Sequence[str] | None = None,
+        replace_run_id: Any | None = None,
+        replace_run_ids: Sequence[Any] | None = None,
         bulk_load_progress: Callable[[Any, int, int], None] | None = None,
     ) -> None:
         self.write_batch(
@@ -530,7 +924,7 @@ class DuckDBAnalyticsStore:
 
     def replace_run_data(
         self,
-        run_id: str,
+        run_id: Any,
         batch: AnalyticsIngestBatch | None = None,
         *,
         metrics: Sequence[SampleMetricNumeric | SampleMetricString] | None = None,
@@ -546,32 +940,49 @@ class DuckDBAnalyticsStore:
                 sample_metric_numeric=[
                     metric
                     for metric in metric_records
-                    if isinstance(metric, SampleMetricNumeric)
+                    if _is_numeric_metric_record(metric)
                 ],
                 sample_metric_string=[
                     metric
                     for metric in metric_records
-                    if isinstance(metric, SampleMetricString)
+                    if not _is_numeric_metric_record(metric)
                 ],
                 profile_payloads=list(payloads or []),
                 tool_versions=list(tool_versions or []),
                 data_sources=list(data_sources or []),
             )
-        self.write_batch(batch, replace_run_id=run_id, refresh_derived=True)
+        self.write_batch(
+            batch,
+            replace_run_id=run_id,
+            refresh_derived=True,
+        )
 
     def fetch_records(
-        self, table_name: str, model_type: type[RecordT], *, run_id: str | None = None
+        self, table_name: str, model_type: type[RecordT], *, run_id: Any | None = None
     ) -> list[RecordT]:
         serializer = SERIALIZERS_BY_TABLE[table_name]
         if not self.path.exists():
             return []
         self.ensure_schema()
-        query = f"SELECT {', '.join(serializer.columns)} FROM {table_name}"
-        parameters: list[str] = []
+        query = f"SELECT {_column_list(serializer.columns)} FROM {table_name}"
+        parameters: list[Any] = []
         if run_id is not None and serializer.run_column is not None:
-            query += f" WHERE {serializer.run_column} = ?"
+            integer_table = INTEGER_KEYED_TABLES.get(table_name)
+            if (
+                integer_table is not None
+                and serializer.run_column in integer_table.dimensions
+            ):
+                dimension = integer_table.dimensions[serializer.run_column]
+                query += (
+                    f" WHERE {_quote_identifier(serializer.run_column)} IN ("
+                    f"SELECT {_quote_identifier(dimension.id_column)} "
+                    f"FROM {dimension.table_name} "
+                    f"WHERE {_quote_identifier(dimension.label_column)} = ?)"
+                )
+            else:
+                query += f" WHERE {_quote_identifier(serializer.run_column)} = ?"
             parameters.append(run_id)
-        query += f" ORDER BY {serializer.order_by}"
+        query += f" ORDER BY {_quote_order_by(serializer.order_by)}"
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [
@@ -586,10 +997,10 @@ class DuckDBAnalyticsStore:
 
     def list_metric_values(
         self,
-        run_id: str,
+        run_id: Any,
         *,
-        sample_key: str | None = None,
-        run_sample_key: str | None = None,
+        sample_id: Any | None = None,
+        run_sample_id: Any | None = None,
     ) -> list[SampleMetricNumeric | SampleMetricString]:
         numeric = self.fetch_records(
             "sample_metric_numeric", SampleMetricNumeric, run_id=run_id
@@ -598,19 +1009,26 @@ class DuckDBAnalyticsStore:
             "sample_metric_string", SampleMetricString, run_id=run_id
         )
         values = [*numeric, *string]
-        if sample_key is None and run_sample_key is None:
+        if sample_id is None and run_sample_id is None:
             return values
+        resolved_sample_id = sample_id
+        resolved_run_sample_id = run_sample_id
         return [
             value
             for value in values
-            if (sample_key is not None and value.sample_key == sample_key)
-            or (run_sample_key is not None and value.run_sample_key == run_sample_key)
+            if (
+                resolved_sample_id is not None and value.sample_id == resolved_sample_id
+            )
+            or (
+                resolved_run_sample_id is not None
+                and value.run_sample_id == resolved_run_sample_id
+            )
         ]
 
-    def list_profile_payloads(self, run_id: str) -> list[ProfilePayload]:
+    def list_profile_payloads(self, run_id: Any) -> list[ProfilePayload]:
         return self.fetch_records("profile_payloads", ProfilePayload, run_id=run_id)
 
-    def list_table_payloads(self, run_id: str) -> list[ProfilePayload]:
+    def list_table_payloads(self, run_id: Any) -> list[ProfilePayload]:
         return self.list_profile_payloads(run_id)
 
     def row_counts(self) -> dict[str, int]:
@@ -634,18 +1052,27 @@ class DuckDBAnalyticsStore:
         sort_direction: Literal["asc", "desc"] = "asc",
     ) -> tuple[list[str], list[dict[str, Any]], int]:
         serializer = SERIALIZERS_BY_TABLE[table_name]
-        columns = list(serializer.columns)
+        integer_table = INTEGER_KEYED_TABLES.get(table_name)
+        columns = list(
+            integer_table.physical_columns
+            if integer_table is not None
+            else serializer.columns
+        )
         if not self.path.exists():
             return columns, [], 0
         self.ensure_schema()
-        order_by = serializer.order_by
+        order_by = (
+            _physical_order_by(integer_table, serializer.order_by)
+            if integer_table is not None
+            else serializer.order_by
+        )
         if sort_by is not None:
-            if sort_by not in serializer.columns:
+            if sort_by not in columns:
                 raise ValueError(f"Unknown analytical table column: {sort_by}")
             direction = "DESC" if sort_direction == "desc" else "ASC"
-            order_by = f"{sort_by} {direction}"
+            order_by = f"{_quote_identifier(sort_by)} {direction}"
         query = (
-            f"SELECT {', '.join(serializer.columns)} FROM {table_name} "
+            f"SELECT {_column_list(columns)} FROM {table_name} "
             f"ORDER BY {order_by} LIMIT ? OFFSET ?"
         )
         with self._connect() as connection:
@@ -670,80 +1097,106 @@ class DuckDBAnalyticsStore:
         return self.path.stat().st_size if self.path.exists() else 0
 
     def _create_derived_views(self, connection: duckdb.DuckDBPyConnection) -> None:
-        connection.execute(
-            """
+        connection.execute(f"""
             CREATE OR REPLACE VIEW sample_metric_numeric_by_metric AS
             SELECT *
             FROM sample_metric_numeric
-            ORDER BY data_profile_key, metric_key, value, run_sample_key
-            """
-        )
-        connection.execute(
-            """
+            ORDER BY {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["sample_metric_numeric"],
+                "data_profile_id, metric_id, value, run_sample_id",
+            )
+        }
+            """)
+        connection.execute(f"""
             CREATE OR REPLACE VIEW feature_value_numeric_by_sample AS
             SELECT *
             FROM feature_value_numeric
-            ORDER BY data_profile_key, run_sample_key, feature_key
-            """
-        )
-        connection.execute(
-            """
+            ORDER BY {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["feature_value_numeric"],
+                "data_profile_id, run_sample_id, feature_id",
+            )
+        }
+            """)
+        connection.execute(f"""
             CREATE OR REPLACE VIEW feature_call_by_sample AS
             SELECT *
             FROM feature_call
-            ORDER BY data_profile_key, run_sample_key, feature_key
-            """
-        )
-        connection.execute(
-            """
+            ORDER BY {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["feature_call"],
+                "data_profile_id, run_sample_id, feature_id",
+            )
+        }
+            """)
+        connection.execute(f"""
             CREATE OR REPLACE VIEW sample_variant_calls_by_variant AS
             SELECT *
             FROM sample_variant_calls
-            ORDER BY data_profile_key, variant_key, run_sample_key
-            """
-        )
-        connection.execute(
-            """
+            ORDER BY {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["sample_variant_calls"],
+                "data_profile_id, variant_id, run_sample_id",
+            )
+        }
+            """)
+        connection.execute(f"""
             CREATE OR REPLACE VIEW copy_number_segments_by_region AS
             SELECT *
             FROM copy_number_segments
             ORDER BY genome_build, contig, start_pos, end_pos,
-                data_profile_key, run_sample_key
-            """
-        )
-        connection.execute(
-            """
+                {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["copy_number_segments"],
+                "data_profile_id, run_sample_id",
+            )
+        }
+            """)
+        connection.execute(f"""
             CREATE OR REPLACE VIEW gene_alteration_state_by_sample AS
             SELECT *
             FROM gene_alteration_state
-            ORDER BY run_sample_key, feature_key, alteration_type
-            """
-        )
+            ORDER BY {
+            _physical_order_by(
+                INTEGER_KEYED_TABLES["gene_alteration_state"],
+                "run_sample_id, feature_id, alteration_type",
+            )
+        }
+            """)
 
     def _refresh_gene_alteration_state(
-        self, connection: duckdb.DuckDBPyConnection, *, run_id: str | None
+        self, connection: duckdb.DuckDBPyConnection, *, run_id: Any | None
     ) -> None:
+        integer_table = INTEGER_KEYED_TABLES["gene_alteration_state"]
+        sample_variant_calls = "SELECT * FROM sample_variant_calls"
+        feature_call = "SELECT * FROM feature_call"
+        sample_structural_variant_calls = (
+            "SELECT * FROM sample_structural_variant_calls"
+        )
+        variant_annotations = "SELECT * FROM variant_annotations"
+        structural_variant_events = "SELECT * FROM structural_variant_events"
         if run_id is None:
-            connection.execute("DELETE FROM gene_alteration_state")
+            connection.execute(f"DELETE FROM {integer_table.table_name}")
             svc_run_filter = "WHERE TRUE"
             feature_call_run_filter = "WHERE TRUE"
             sv_run_filter = "WHERE TRUE"
             parameters: list[str] = []
         else:
             connection.execute(
-                """
-                DELETE FROM gene_alteration_state
-                WHERE run_sample_key IN (
-                    SELECT DISTINCT run_sample_key
-                    FROM sample_variant_calls
+                f"""
+                DELETE FROM {integer_table.table_name}
+                WHERE run_sample_id IN (
+                    SELECT DISTINCT run_sample_id
+                    FROM ({sample_variant_calls})
                     WHERE run_id = ?
                     UNION
-                    SELECT DISTINCT run_sample_key
-                    FROM feature_call
+                    SELECT DISTINCT run_sample_id
+                    FROM ({feature_call})
                     WHERE run_id = ?
                     UNION
-                    SELECT DISTINCT run_sample_key
-                    FROM sample_structural_variant_calls
+                    SELECT DISTINCT run_sample_id
+                    FROM ({sample_structural_variant_calls})
                     WHERE run_id = ?
                 )
                 """,
@@ -754,15 +1207,17 @@ class DuckDBAnalyticsStore:
             sv_run_filter = "WHERE ssvc.run_id = ?"
             parameters = [run_id]
 
-        connection.execute(
+        insert_storage_select(
+            connection,
+            "gene_alteration_state",
+            SERIALIZERS_BY_TABLE["gene_alteration_state"].columns,
             f"""
-            INSERT INTO gene_alteration_state
             SELECT
-                svc.run_sample_key,
-                svc.sample_key,
-                NULL AS subject_key,
-                va.feature_key,
-                svc.data_profile_key,
+                svc.run_sample_id,
+                svc.sample_id,
+                NULL AS subject_id,
+                va.feature_id,
+                svc.data_profile_id,
                 'mutation' AS alteration_type,
                 va.consequence AS alteration_subtype,
                 TRUE AS is_altered,
@@ -770,23 +1225,25 @@ class DuckDBAnalyticsStore:
                 svc.genotype AS value_string,
                 NULL AS driver_status,
                 'sample_variant_calls' AS source_table,
-                svc.variant_key AS source_event_id
-            FROM sample_variant_calls svc
-            LEFT JOIN variant_annotations va ON svc.variant_key = va.variant_key
+                CAST(svc.variant_id AS TEXT) AS source_event_id
+            FROM ({sample_variant_calls}) svc
+            LEFT JOIN ({variant_annotations}) va ON svc.variant_id = va.variant_id
             {svc_run_filter}
-            AND va.feature_key IS NOT NULL
+            AND va.feature_id IS NOT NULL
             """,
             parameters,
         )
-        connection.execute(
+        insert_storage_select(
+            connection,
+            "gene_alteration_state",
+            SERIALIZERS_BY_TABLE["gene_alteration_state"].columns,
             f"""
-            INSERT INTO gene_alteration_state
             SELECT
-                run_sample_key,
-                sample_key,
-                NULL AS subject_key,
-                feature_key,
-                data_profile_key,
+                run_sample_id,
+                sample_id,
+                NULL AS subject_id,
+                feature_id,
+                data_profile_id,
                 'feature_call' AS alteration_type,
                 call_code AS alteration_subtype,
                 TRUE AS is_altered,
@@ -795,7 +1252,7 @@ class DuckDBAnalyticsStore:
                 NULL AS driver_status,
                 'feature_call' AS source_table,
                 source_event_id
-            FROM feature_call
+            FROM ({feature_call})
             {feature_call_run_filter}
             AND (
                 call_rank IS DISTINCT FROM 0
@@ -806,15 +1263,17 @@ class DuckDBAnalyticsStore:
             """,
             parameters,
         )
-        connection.execute(
+        insert_storage_select(
+            connection,
+            "gene_alteration_state",
+            SERIALIZERS_BY_TABLE["gene_alteration_state"].columns,
             f"""
-            INSERT INTO gene_alteration_state
             SELECT
-                ssvc.run_sample_key,
-                ssvc.sample_key,
-                NULL AS subject_key,
-                sve.site1_feature_key AS feature_key,
-                ssvc.data_profile_key,
+                ssvc.run_sample_id,
+                ssvc.sample_id,
+                NULL AS subject_id,
+                sve.site1_feature_id AS feature_id,
+                ssvc.data_profile_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,
@@ -822,24 +1281,26 @@ class DuckDBAnalyticsStore:
                 ssvc.call_status AS value_string,
                 NULL AS driver_status,
                 'sample_structural_variant_calls' AS source_table,
-                ssvc.structural_variant_key AS source_event_id
-            FROM sample_structural_variant_calls ssvc
-            JOIN structural_variant_events sve
-                ON ssvc.structural_variant_key = sve.structural_variant_key
+                CAST(ssvc.structural_variant_id AS TEXT) AS source_event_id
+            FROM ({sample_structural_variant_calls}) ssvc
+            JOIN ({structural_variant_events}) sve
+                ON ssvc.structural_variant_id = sve.structural_variant_id
             {sv_run_filter}
-            AND sve.site1_feature_key IS NOT NULL
+            AND sve.site1_feature_id IS NOT NULL
             """,
             parameters,
         )
-        connection.execute(
+        insert_storage_select(
+            connection,
+            "gene_alteration_state",
+            SERIALIZERS_BY_TABLE["gene_alteration_state"].columns,
             f"""
-            INSERT INTO gene_alteration_state
             SELECT
-                ssvc.run_sample_key,
-                ssvc.sample_key,
-                NULL AS subject_key,
-                sve.site2_feature_key AS feature_key,
-                ssvc.data_profile_key,
+                ssvc.run_sample_id,
+                ssvc.sample_id,
+                NULL AS subject_id,
+                sve.site2_feature_id AS feature_id,
+                ssvc.data_profile_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,
@@ -847,19 +1308,487 @@ class DuckDBAnalyticsStore:
                 ssvc.call_status AS value_string,
                 NULL AS driver_status,
                 'sample_structural_variant_calls' AS source_table,
-                ssvc.structural_variant_key AS source_event_id
-            FROM sample_structural_variant_calls ssvc
-            JOIN structural_variant_events sve
-                ON ssvc.structural_variant_key = sve.structural_variant_key
+                CAST(ssvc.structural_variant_id AS TEXT) AS source_event_id
+            FROM ({sample_structural_variant_calls}) ssvc
+            JOIN ({structural_variant_events}) sve
+                ON ssvc.structural_variant_id = sve.structural_variant_id
             {sv_run_filter}
-            AND sve.site2_feature_key IS NOT NULL
+            AND sve.site2_feature_id IS NOT NULL
             AND (
-                sve.site1_feature_key IS NULL
-                OR sve.site2_feature_key != sve.site1_feature_key
+                sve.site1_feature_id IS NULL
+                OR sve.site2_feature_id != sve.site1_feature_id
             )
             """,
             parameters,
         )
+
+
+def insert_public_rows(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> None:
+    if not rows:
+        return
+    integer_table = INTEGER_KEYED_TABLES.get(table_name)
+    if integer_table is None:
+        placeholders = ", ".join("?" for _ in columns)
+        insert_sql = (
+            f"INSERT INTO {table_name} ({_column_list(columns)}) "
+            f"VALUES ({placeholders})"
+        )
+        connection.executemany(
+            insert_sql,
+            [tuple(_to_db_value(value) for value in row) for row in rows],
+        )
+        return
+    dimension_maps = _ensure_integer_id_dimensions(
+        connection, integer_table, columns, rows
+    )
+    physical_rows = [
+        _physical_storage_row(
+            integer_table,
+            columns,
+            row,
+            dimension_maps,
+        )
+        for row in rows
+    ]
+    placeholders = ", ".join("?" for _ in integer_table.physical_columns)
+    connection.executemany(
+        f"""
+        INSERT INTO {integer_table.table_name}
+            ({_column_list(integer_table.physical_columns)})
+        VALUES ({placeholders})
+        """,
+        physical_rows,
+    )
+
+
+def insert_storage_select(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    select_sql: str,
+    parameters: Sequence[Any] | None = None,
+) -> None:
+    column_sql = _column_list(columns)
+    connection.execute(
+        f"INSERT INTO {table_name} ({column_sql}) SELECT {column_sql} "
+        f"FROM ({select_sql})",
+        list(parameters or []),
+    )
+
+
+def insert_public_select(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    select_sql: str,
+    parameters: Sequence[Any] | None = None,
+) -> None:
+    integer_table = INTEGER_KEYED_TABLES.get(table_name)
+    column_sql = _column_list(columns)
+    if integer_table is None:
+        connection.execute(
+            f"INSERT INTO {table_name} ({column_sql}) SELECT {column_sql} "
+            f"FROM ({select_sql})",
+            list(parameters or []),
+        )
+        return
+    stage = "_goodomics_public_select_stage"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(
+        f"CREATE TEMP TABLE {stage} AS SELECT {column_sql} FROM ({select_sql})",
+        list(parameters or []),
+    )
+    for column, dimension in integer_table.dimensions.items():
+        if column in columns:
+            _upsert_dimension_from_stage(connection, dimension, stage, column)
+    select_columns = [
+        _storage_select_column(integer_table, column, index)
+        for index, column in enumerate(columns)
+    ]
+    joins = [
+        _id_resolution_join(integer_table, column, index)
+        for index, column in enumerate(columns)
+        if column in integer_table.dimensions
+    ]
+    connection.execute(f"""
+        INSERT INTO {integer_table.table_name}
+            ({_column_list(integer_table.physical_columns)})
+        SELECT {", ".join(select_columns)}
+        FROM {stage} stage
+        {" ".join(joins)}
+        """)
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def delete_public_select(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    select_sql: str,
+    parameters: Sequence[Any] | None = None,
+) -> None:
+    integer_table = INTEGER_KEYED_TABLES.get(table_name)
+    if integer_table is None:
+        where = " AND ".join(
+            _delete_public_select_predicate(column) for column in columns
+        )
+        connection.execute(
+            f"""
+            DELETE FROM {table_name}
+            WHERE EXISTS (
+                SELECT 1
+                FROM ({select_sql}) source
+                WHERE {where}
+            )
+            """,
+            list(parameters or []),
+        )
+        return
+    stage = "_goodomics_delete_select_stage"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(
+        f"CREATE TEMP TABLE {stage} AS SELECT {_column_list(columns)} "
+        f"FROM ({select_sql})",
+        list(parameters or []),
+    )
+    _delete_integer_table_stage(connection, integer_table, columns, stage)
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def delete_public_rows(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> None:
+    if not rows:
+        return
+    integer_table = INTEGER_KEYED_TABLES.get(table_name)
+    if integer_table is None:
+        where = " AND ".join(
+            f"{_quote_identifier(column)} IS NOT DISTINCT FROM ?" for column in columns
+        )
+        connection.executemany(
+            f"DELETE FROM {table_name} WHERE {where}",
+            [tuple(row) for row in rows],
+        )
+        return
+    stage = "_goodomics_delete_rows_stage"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(f"CREATE TEMP TABLE {stage} ({_text_stage_columns(columns)})")
+    placeholders = ", ".join("?" for _ in columns)
+    connection.executemany(
+        f"INSERT INTO {stage} VALUES ({placeholders})",
+        [
+            tuple(None if value is None else str(_to_db_value(value)) for value in row)
+            for row in rows
+        ],
+    )
+    _delete_integer_table_stage(connection, integer_table, columns, stage)
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def _delete_integer_table_unique_values(
+    connection: duckdb.DuckDBPyConnection,
+    integer_table: IntegerKeyedTableDefinition,
+    unique_columns: Sequence[str],
+    records: Sequence[Any],
+) -> None:
+    values = {
+        tuple(
+            _stage_delete_value(
+                integer_table,
+                column,
+                _to_db_value(_field_value(record, column)),
+            )
+            for column in unique_columns
+        )
+        for record in records
+    }
+    if not values:
+        return
+    stage = "_goodomics_delete_stage"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(
+        f"CREATE TEMP TABLE {stage} ({_text_stage_columns(unique_columns)})"
+    )
+    placeholders = ", ".join("?" for _ in unique_columns)
+    connection.executemany(
+        f"INSERT INTO {stage} VALUES ({placeholders})",
+        [
+            tuple(None if value is None else str(value) for value in row)
+            for row in values
+        ],
+    )
+    _delete_integer_table_stage(connection, integer_table, unique_columns, stage)
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def _delete_integer_table_stage(
+    connection: duckdb.DuckDBPyConnection,
+    integer_table: IntegerKeyedTableDefinition,
+    columns: Sequence[str],
+    stage: str,
+) -> None:
+    joins = [
+        _delete_id_resolution_join(integer_table, column, index)
+        for index, column in enumerate(columns)
+        if column in integer_table.dimensions
+    ]
+    predicates = [
+        _delete_unique_predicate(integer_table, column, index)
+        for index, column in enumerate(columns)
+    ]
+    connection.execute(f"""
+        DELETE FROM {integer_table.table_name} AS stored
+        WHERE EXISTS (
+            SELECT 1
+            FROM {stage} stage
+            {" ".join(joins)}
+            WHERE {" AND ".join(predicates)}
+        )
+        """)
+
+
+def _ensure_integer_id_dimensions(
+    connection: duckdb.DuckDBPyConnection,
+    integer_table: IntegerKeyedTableDefinition,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> dict[str, dict[Any, int | None]]:
+    dimensions: dict[str, DuckDBDimension] = {
+        column: integer_table.dimensions[column]
+        for column in columns
+        if column in integer_table.dimensions
+    }
+    values_by_column: dict[str, set[Any]] = {column: set() for column in dimensions}
+    for row in rows:
+        for column, value in zip(columns, row, strict=True):
+            if (
+                column in values_by_column
+                and value is not None
+                and not isinstance(value, int)
+            ):
+                values_by_column[column].add(_to_db_value(value))
+    for column, values in values_by_column.items():
+        _upsert_dimension_values(connection, dimensions[column], values)
+    return {
+        column: _dimension_map(connection, dimension, values_by_column[column])
+        for column, dimension in dimensions.items()
+    }
+
+
+def _upsert_dimension_values(
+    connection: duckdb.DuckDBPyConnection,
+    dimension: DuckDBDimension,
+    values: set[Any],
+) -> None:
+    if not values:
+        return
+    stage = "_goodomics_dimension_values"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(f"CREATE TEMP TABLE {stage}(value TEXT)")
+    connection.executemany(
+        f"INSERT INTO {stage} VALUES (?)",
+        [(str(value),) for value in sorted(values, key=str)],
+    )
+    _upsert_dimension_from_stage(connection, dimension, stage, "value")
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def _dimension_map(
+    connection: duckdb.DuckDBPyConnection,
+    dimension: DuckDBDimension,
+    values: set[Any],
+) -> dict[Any, int | None]:
+    if not values:
+        return {}
+    stage = "_goodomics_lookup_values"
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    connection.execute(f"CREATE TEMP TABLE {stage}(value TEXT)")
+    connection.executemany(
+        f"INSERT INTO {stage} VALUES (?)",
+        [(str(value),) for value in sorted(values, key=str)],
+    )
+    rows = connection.execute(f"""
+        SELECT {_quote_identifier(dimension.label_column)},
+               {_quote_identifier(dimension.id_column)}
+        FROM {dimension.table_name}
+        WHERE {_quote_identifier(dimension.label_column)} IN (
+            SELECT value FROM {stage}
+        )
+        """).fetchall()
+    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+    return {label: int(identifier) for label, identifier in rows}
+
+
+def _dimension_id_for_label(
+    connection: duckdb.DuckDBPyConnection,
+    dimension: DuckDBDimension,
+    label: str,
+) -> int | None:
+    row = connection.execute(
+        f"""
+        SELECT {_quote_identifier(dimension.id_column)}
+        FROM {dimension.table_name}
+        WHERE {_quote_identifier(dimension.label_column)} = ?
+        """,
+        [label],
+    ).fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def _is_numeric_metric_record(record: Any) -> bool:
+    if isinstance(record, SampleMetricNumeric):
+        return True
+    if isinstance(record, SampleMetricString):
+        return False
+    return isinstance(_field_value(record, "value"), int | float) and not isinstance(
+        _field_value(record, "value"), bool
+    )
+
+
+def _physical_storage_row(
+    integer_table: IntegerKeyedTableDefinition,
+    columns: Sequence[str],
+    row: Sequence[Any],
+    dimension_maps: Mapping[str, Mapping[Any, int | None]],
+) -> tuple[Any, ...]:
+    values = dict(zip(columns, row, strict=True))
+    physical: list[Any] = []
+    for column in integer_table.serializer.columns:
+        if column in integer_table.dimensions:
+            raw = _to_db_value(values.get(column))
+            if raw is None or isinstance(raw, int):
+                physical.append(raw)
+            else:
+                physical.append(dimension_maps[column].get(str(raw)))
+        elif column in integer_table.catalog_columns:
+            physical.append(_catalog_storage_value(column, values.get(column)))
+        else:
+            physical.append(_to_db_value(values.get(column)))
+    return tuple(physical)
+
+
+def _catalog_storage_value(column: str, value: Any) -> int | None:
+    value = _to_db_value(value)
+    if value is None or isinstance(value, int):
+        return value
+    raise ValueError(
+        f"Expected integer SQL catalog id for {column}, got {value!r}. "
+        "Resolve catalog IDs before writing analytics rows to DuckDB."
+    )
+
+
+def _stage_delete_value(
+    integer_table: IntegerKeyedTableDefinition,
+    column: str,
+    value: Any,
+) -> Any:
+    if column not in integer_table.catalog_columns:
+        return value
+    return _catalog_storage_value(column, value)
+
+
+def _storage_select_column(
+    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+) -> str:
+    dimension = integer_table.dimensions.get(column)
+    if dimension is not None:
+        return f"dim_{index}.{_quote_identifier(dimension.id_column)}"
+    if column in integer_table.catalog_columns:
+        stage_column = f"stage.{_quote_identifier(column)}"
+        return f"CAST({stage_column} AS BIGINT)"
+    return f"stage.{_quote_identifier(column)}"
+
+
+def _id_resolution_join(
+    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+) -> str:
+    dimension = integer_table.dimensions.get(column)
+    if dimension is not None:
+        return (
+            f"LEFT JOIN {dimension.table_name} dim_{index} "
+            f"ON stage.{_quote_identifier(column)} = "
+            f"dim_{index}.{_quote_identifier(dimension.label_column)}"
+        )
+    raise ValueError(f"No DuckDB dimension configured for {column!r}")
+
+
+def _delete_id_resolution_join(
+    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+) -> str:
+    dimension = integer_table.dimensions.get(column)
+    if dimension is not None:
+        return (
+            f"LEFT JOIN {dimension.table_name} dim_{index} "
+            f"ON stage.{_quote_identifier(column)} = "
+            f"dim_{index}.{_quote_identifier(dimension.label_column)}"
+        )
+    raise ValueError(f"No DuckDB dimension configured for {column!r}")
+
+
+def _delete_unique_predicate(
+    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+) -> str:
+    dimension = integer_table.dimensions.get(column)
+    if dimension is not None:
+        stored_column = f"stored.{_quote_identifier(dimension.physical_column)}"
+        dimension_column = f"dim_{index}.{_quote_identifier(dimension.id_column)}"
+        return f"{stored_column} IS NOT DISTINCT FROM {dimension_column}"
+    if column in integer_table.catalog_columns:
+        stored_column = f"stored.{_quote_identifier(column)}"
+        stage_column = f"stage.{_quote_identifier(column)}"
+        resolved_column = f"CAST({stage_column} AS BIGINT)"
+        return f"{stored_column} IS NOT DISTINCT FROM {resolved_column}"
+    return (
+        f"CAST(stored.{_quote_identifier(column)} AS TEXT) IS NOT DISTINCT FROM "
+        f"stage.{_quote_identifier(column)}"
+    )
+
+
+def _delete_public_select_predicate(column: str) -> str:
+    quoted_column = _quote_identifier(column)
+    return f"{quoted_column} IS NOT DISTINCT FROM source.{quoted_column}"
+
+
+def _upsert_dimension_from_stage(
+    connection: duckdb.DuckDBPyConnection,
+    dimension: DuckDBDimension,
+    stage_table: str,
+    stage_column: str,
+) -> None:
+    connection.execute(f"""
+        INSERT INTO {dimension.table_name} (
+            {_quote_identifier(dimension.id_column)},
+            {_quote_identifier(dimension.label_column)}
+        )
+        WITH incoming AS (
+            SELECT DISTINCT CAST({_quote_identifier(stage_column)} AS TEXT) AS value
+            FROM {stage_table}
+            WHERE {_quote_identifier(stage_column)} IS NOT NULL
+        ),
+        new_values AS (
+            SELECT incoming.value
+            FROM incoming
+            LEFT JOIN {dimension.table_name} dim
+                ON incoming.value = dim.{_quote_identifier(dimension.label_column)}
+            WHERE dim.{_quote_identifier(dimension.label_column)} IS NULL
+        ),
+        base AS (
+            SELECT coalesce(max({_quote_identifier(dimension.id_column)}), 0) AS max_id
+            FROM {dimension.table_name}
+        )
+        SELECT
+            base.max_id + row_number() OVER (ORDER BY new_values.value),
+            new_values.value
+        FROM new_values, base
+        """)
 
 
 def validate_records(
@@ -872,6 +1801,64 @@ def validate_records(
 
 def _field_column_name(field_name: str, field_info: Any) -> str:
     return str(field_info.alias or field_name)
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _drop_view_if_exists(connection: duckdb.DuckDBPyConnection, view_name: str) -> None:
+    row = connection.execute(
+        """
+        SELECT table_type
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+        AND table_name = ?
+        """,
+        [view_name],
+    ).fetchone()
+    if row is not None and str(row[0]).upper() == "VIEW":
+        connection.execute(f"DROP VIEW {_quote_identifier(view_name)}")
+
+
+def _column_list(columns: Sequence[str]) -> str:
+    return ", ".join(_quote_identifier(column) for column in columns)
+
+
+def _quote_order_by(order_by: str) -> str:
+    clauses: list[str] = []
+    for raw_clause in order_by.split(","):
+        clause = raw_clause.strip()
+        if not clause:
+            continue
+        parts = clause.split()
+        column = parts[0]
+        suffix = " ".join(parts[1:])
+        quoted_column = _quote_identifier(column)
+        clauses.append(f"{quoted_column} {suffix}" if suffix else quoted_column)
+    return ", ".join(clauses)
+
+
+def _text_stage_columns(columns: Sequence[str]) -> str:
+    return ", ".join(f"{_quote_identifier(column)} TEXT" for column in columns)
+
+
+def _physical_order_by(
+    integer_table: IntegerKeyedTableDefinition, order_by: str
+) -> str:
+    clauses: list[str] = []
+    for raw_clause in order_by.split(","):
+        clause = raw_clause.strip()
+        if not clause:
+            continue
+        parts = clause.split()
+        column = parts[0]
+        dimension = integer_table.dimensions.get(column)
+        physical_column = dimension.physical_column if dimension is not None else column
+        suffix = " ".join(parts[1:])
+        quoted_column = _quote_identifier(physical_column)
+        clauses.append(f"{quoted_column} {suffix}" if suffix else quoted_column)
+    return ", ".join(clauses)
 
 
 def _field_name_for_column(model_type: type[BaseModel], column: str) -> str:
@@ -913,7 +1900,19 @@ def _strip_optional(annotation: Any) -> Any:
     return args[0] if len(args) == 1 else annotation
 
 
-def _field_value(record: BaseModel, column: str) -> Any:
+def _field_value(record: Any, column: str) -> Any:
+    if isinstance(record, Mapping):
+        return record.get(column)
+    if isinstance(record, BaseModel):
+        extra = record.model_extra or {}
+        if column in extra:
+            return extra[column]
+        field_name = _field_name_for_column(type(record), column)
+        if field_name in type(record).model_fields:
+            return getattr(record, field_name)
+        if field_name in extra:
+            return extra[field_name]
+        return None
     field_name = _field_name_for_column(type(record), column)
     return getattr(record, field_name)
 

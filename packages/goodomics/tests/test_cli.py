@@ -7,10 +7,25 @@ from fixtures import write_cbioportal_fixture, write_multiqc_fixture
 from goodomics.cli import app
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import RunRecord, SQLModelGoodomicsStore
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+
+def _run_pk(database_path: Path, run_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
 
 
 def test_report_command_writes_html(tmp_path: Path) -> None:
@@ -78,7 +93,9 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
     assert database_path.exists()
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("run-1")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_path, "run-1")
+    )
 
 
 def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:
@@ -105,7 +122,7 @@ def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Ingested 2 cBioPortal sample runs" in result.stdout
+    assert "Ingested 3 cBioPortal sample runs" in result.stdout
     assert "cbio-run" in result.stdout
     assert database_path.exists()
     assert analytics_path.exists()
@@ -144,7 +161,9 @@ def test_ingest_command_accepts_short_flags(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "short-run" in result.stdout
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("short-run")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_path, "short-run")
+    )
 
 
 def test_help_alias_uses_short_h() -> None:
@@ -183,7 +202,9 @@ def test_default_path_argument_ingests_multiqc_output(tmp_path: Path) -> None:
     assert "run-default" in result.stdout
     assert database_path.exists()
     assert analytics_path.exists()
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("run-default")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_path, "run-default")
+    )
 
 
 def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -> None:
@@ -219,7 +240,11 @@ def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -
     assert "Ingested 2 runs" in result.stdout
     assert "WT_REP1" in result.stdout
     assert "WT_REP2" in result.stdout
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP1")
-    assert DuckDBAnalyticsStore(analytics_path).list_metric_values("WT_REP2")
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_path, "WT_REP1")
+    )
+    assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
+        _run_pk(database_path, "WT_REP2")
+    )
     assert (file_root / "WT_REP1" / "multiqc").exists()
     assert (file_root / "WT_REP2" / "multiqc").exists()
