@@ -882,6 +882,7 @@ class DuckDBAnalyticsStore:
         batch: AnalyticsIngestBatch,
         bulk_loads: Sequence[Any],
         *,
+        staged_loads: Sequence[Any] | None = None,
         replace_run_id: Any | None = None,
         replace_run_ids: Sequence[Any] | None = None,
         bulk_load_progress: Callable[[Any, int, int], None] | None = None,
@@ -892,7 +893,8 @@ class DuckDBAnalyticsStore:
             replace_run_ids=replace_run_ids,
             refresh_derived=False,
         )
-        if not bulk_loads:
+        staged_loads = tuple(staged_loads or ())
+        if not bulk_loads and not staged_loads:
             with self._connect() as connection:
                 refresh_run_id = (
                     replace_run_id
@@ -904,8 +906,15 @@ class DuckDBAnalyticsStore:
 
         self.ensure_schema()
         with self._connect() as connection:
-            connection.begin()
+            loads = [*staged_loads, *bulk_loads]
+            use_transaction = not any(
+                bool(getattr(load, "requires_autocommit", False)) for load in loads
+            )
+            if use_transaction:
+                connection.begin()
             try:
+                for staged_load in staged_loads:
+                    staged_load.load(connection)
                 total_bulk_loads = len(bulk_loads)
                 for index, bulk_load in enumerate(bulk_loads):
                     if bulk_load_progress is not None:
@@ -917,9 +926,11 @@ class DuckDBAnalyticsStore:
                     else None
                 )
                 self._refresh_gene_alteration_state(connection, run_id=refresh_run_id)
-                connection.commit()
+                if use_transaction:
+                    connection.commit()
             except Exception:
-                connection.rollback()
+                if use_transaction:
+                    connection.rollback()
                 raise
 
     def replace_run_data(
@@ -1387,6 +1398,8 @@ def insert_public_select(
     columns: Sequence[str],
     select_sql: str,
     parameters: Sequence[Any] | None = None,
+    *,
+    upsert_dimensions: bool = True,
 ) -> None:
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
     column_sql = _column_list(columns)
@@ -1397,32 +1410,81 @@ def insert_public_select(
             list(parameters or []),
         )
         return
-    stage = "_goodomics_public_select_stage"
-    connection.execute(f"DROP TABLE IF EXISTS {stage}")
-    connection.execute(
-        f"CREATE TEMP TABLE {stage} AS SELECT {column_sql} FROM ({select_sql})",
-        list(parameters or []),
-    )
-    for column, dimension in integer_table.dimensions.items():
-        if column in columns:
-            _upsert_dimension_from_stage(connection, dimension, stage, column)
+    if upsert_dimensions:
+        upsert_public_dimensions_select(
+            connection,
+            table_name,
+            columns,
+            select_sql,
+            parameters,
+        )
     select_columns = [
-        _storage_select_column(integer_table, column, index)
+        _storage_select_column(integer_table, column, index, source_alias="source")
         for index, column in enumerate(columns)
     ]
     joins = [
-        _id_resolution_join(integer_table, column, index)
+        _id_resolution_join(
+            integer_table,
+            column,
+            index,
+            source_alias="source",
+        )
         for index, column in enumerate(columns)
         if column in integer_table.dimensions
     ]
-    connection.execute(f"""
+    connection.execute(
+        f"""
         INSERT INTO {integer_table.table_name}
             ({_column_list(integer_table.physical_columns)})
         SELECT {", ".join(select_columns)}
-        FROM {stage} stage
+        FROM ({select_sql}) source
         {" ".join(joins)}
-        """)
-    connection.execute(f"DROP TABLE IF EXISTS {stage}")
+        """,
+        list(parameters or []),
+    )
+
+
+def upsert_public_dimensions_select(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    select_sql: str,
+    parameters: Sequence[Any] | None = None,
+    *,
+    dimension_columns: Sequence[str] | None = None,
+) -> None:
+    integer_table = INTEGER_KEYED_TABLES.get(table_name)
+    if integer_table is None:
+        return
+    requested = set(dimension_columns or columns)
+    for column, dimension in integer_table.dimensions.items():
+        if column in columns and column in requested:
+            _upsert_dimension_from_select(
+                connection,
+                dimension,
+                select_sql,
+                column,
+                list(parameters or []),
+            )
+
+
+def insert_public_parquet(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    path: Path | str,
+    *,
+    upsert_dimensions: bool = True,
+) -> None:
+    column_sql = _column_list(columns)
+    insert_public_select(
+        connection,
+        table_name,
+        columns,
+        f"SELECT {column_sql} FROM read_parquet(?)",
+        [str(path)],
+        upsert_dimensions=upsert_dimensions,
+    )
 
 
 def delete_public_select(
@@ -1458,6 +1520,22 @@ def delete_public_select(
     )
     _delete_integer_table_stage(connection, integer_table, columns, stage)
     connection.execute(f"DROP TABLE IF EXISTS {stage}")
+
+
+def delete_public_parquet(
+    connection: duckdb.DuckDBPyConnection,
+    table_name: str,
+    columns: Sequence[str],
+    path: Path | str,
+) -> None:
+    column_sql = _column_list(columns)
+    delete_public_select(
+        connection,
+        table_name,
+        columns,
+        f"SELECT {column_sql} FROM read_parquet(?)",
+        [str(path)],
+    )
 
 
 def delete_public_rows(
@@ -1696,25 +1774,33 @@ def _stage_delete_value(
 
 
 def _storage_select_column(
-    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+    integer_table: IntegerKeyedTableDefinition,
+    column: str,
+    index: int,
+    *,
+    source_alias: str = "stage",
 ) -> str:
     dimension = integer_table.dimensions.get(column)
     if dimension is not None:
         return f"dim_{index}.{_quote_identifier(dimension.id_column)}"
     if column in integer_table.catalog_columns:
-        stage_column = f"stage.{_quote_identifier(column)}"
+        stage_column = f"{source_alias}.{_quote_identifier(column)}"
         return f"CAST({stage_column} AS BIGINT)"
-    return f"stage.{_quote_identifier(column)}"
+    return f"{source_alias}.{_quote_identifier(column)}"
 
 
 def _id_resolution_join(
-    integer_table: IntegerKeyedTableDefinition, column: str, index: int
+    integer_table: IntegerKeyedTableDefinition,
+    column: str,
+    index: int,
+    *,
+    source_alias: str = "stage",
 ) -> str:
     dimension = integer_table.dimensions.get(column)
     if dimension is not None:
         return (
             f"LEFT JOIN {dimension.table_name} dim_{index} "
-            f"ON stage.{_quote_identifier(column)} = "
+            f"ON {source_alias}.{_quote_identifier(column)} = "
             f"dim_{index}.{_quote_identifier(dimension.label_column)}"
         )
     raise ValueError(f"No DuckDB dimension configured for {column!r}")
@@ -1727,7 +1813,7 @@ def _delete_id_resolution_join(
     if dimension is not None:
         return (
             f"LEFT JOIN {dimension.table_name} dim_{index} "
-            f"ON stage.{_quote_identifier(column)} = "
+            f"ON CAST(stage.{_quote_identifier(column)} AS TEXT) = "
             f"dim_{index}.{_quote_identifier(dimension.label_column)}"
         )
     raise ValueError(f"No DuckDB dimension configured for {column!r}")
@@ -1748,7 +1834,7 @@ def _delete_unique_predicate(
         return f"{stored_column} IS NOT DISTINCT FROM {resolved_column}"
     return (
         f"CAST(stored.{_quote_identifier(column)} AS TEXT) IS NOT DISTINCT FROM "
-        f"stage.{_quote_identifier(column)}"
+        f"CAST(stage.{_quote_identifier(column)} AS TEXT)"
     )
 
 
@@ -1789,6 +1875,45 @@ def _upsert_dimension_from_stage(
             new_values.value
         FROM new_values, base
         """)
+
+
+def _upsert_dimension_from_select(
+    connection: duckdb.DuckDBPyConnection,
+    dimension: DuckDBDimension,
+    select_sql: str,
+    column: str,
+    parameters: Sequence[Any],
+) -> None:
+    quoted_column = _quote_identifier(column)
+    connection.execute(
+        f"""
+        INSERT INTO {dimension.table_name} (
+            {_quote_identifier(dimension.id_column)},
+            {_quote_identifier(dimension.label_column)}
+        )
+        WITH incoming AS (
+            SELECT DISTINCT CAST(source.{quoted_column} AS TEXT) AS value
+            FROM ({select_sql}) source
+            WHERE source.{quoted_column} IS NOT NULL
+        ),
+        new_values AS (
+            SELECT incoming.value
+            FROM incoming
+            LEFT JOIN {dimension.table_name} dim
+                ON incoming.value = dim.{_quote_identifier(dimension.label_column)}
+            WHERE dim.{_quote_identifier(dimension.label_column)} IS NULL
+        ),
+        base AS (
+            SELECT coalesce(max({_quote_identifier(dimension.id_column)}), 0) AS max_id
+            FROM {dimension.table_name}
+        )
+        SELECT
+            base.max_id + row_number() OVER (ORDER BY new_values.value),
+            new_values.value
+        FROM new_values, base
+        """,
+        list(parameters),
+    )
 
 
 def validate_records(

@@ -4,13 +4,18 @@ import csv
 import hashlib
 import json
 import re
-from collections.abc import Iterator, Mapping
+import tempfile
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from goodomics.data_profiles import cbioportal_data_profile_for_meta
-from goodomics.ingest.base import AnalyticsBulkLoad, NormalizedIngestResult
+from goodomics.ingest.base import (
+    AnalyticsBulkLoad,
+    AnalyticsStagedLoad,
+    NormalizedIngestResult,
+)
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     AttributeDefinition,
@@ -29,14 +34,18 @@ from goodomics.schemas.models import (
 )
 from goodomics.storage.analytics_resolution import resolve_catalog_id
 from goodomics.storage.duckdb import (
+    delete_public_parquet,
     delete_public_rows,
     delete_public_select,
-    insert_public_rows,
+    insert_public_parquet,
     insert_public_select,
+    upsert_public_dimensions_select,
 )
 
 CBIOPORTAL_TOOL = "cbioportal"
 MISSING_VALUES = {"", "NA", "N/A", "NaN", "nan", "null", "None"}
+DUCKDB_MATRIX_UNPIVOT_CELL_LIMIT = 100_000_000
+DUCKDB_MATRIX_UNPIVOT_SAMPLE_LIMIT = 1_000
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,7 @@ class CbioPortalParseContext:
     sample_set_members: list[SampleSetMember] = field(default_factory=list)
     batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
     bulk_loads: list[AnalyticsBulkLoad] = field(default_factory=list)
+    staged_loads: list[AnalyticsStagedLoad] = field(default_factory=list)
 
     def run_id_for_sample(self, sample_id: str) -> str:
         return f"{self.data_import_id}:{_normalize_id(sample_id)}"
@@ -196,6 +206,7 @@ def parse_cbioportal_study(
         sample_set_members=context.sample_set_members,
         analytics_batch=context.batch,
         bulk_loads=context.bulk_loads,
+        staged_loads=context.staged_loads,
         summary={
             "profiles_found": len(profiles_by_file),
             "files_registered": len(context.source_files_by_path),
@@ -356,7 +367,18 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
             "subject" if meta.get("datatype") == "PATIENT_ATTRIBUTES" else "sample"
         )
         _add_attribute_definitions(context, profile, clinical, entity_scope)
-        for row in clinical.rows:
+        source_file_id = source_file.file_id if source_file else None
+        context.staged_loads.append(
+            ClinicalAttributeStagedLoad(
+                profile=profile,
+                path=path,
+                source_file_id=source_file_id,
+                entity_scope=entity_scope,
+                header=tuple(clinical.header),
+                value_types=dict(clinical.value_types),
+            )
+        )
+        for row in _read_tsv_iter(path, skip_comments=True):
             if entity_scope == "subject":
                 subject_id = _clean(
                     row.get("PATIENT_ID") or row.get("Patient Identifier")
@@ -364,16 +386,6 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
                 if subject_id is None:
                     continue
                 _ensure_subject(context, subject_id, row)
-                _add_attribute_values(
-                    context,
-                    profile,
-                    source_file_id=source_file.file_id if source_file else None,
-                    entity_scope="subject",
-                    entity_id=subject_id,
-                    row=row,
-                    table=clinical,
-                    id_columns={"PATIENT_ID", "Patient Identifier"},
-                )
             else:
                 sample_id = _clean(row.get("SAMPLE_ID") or row.get("Sample Identifier"))
                 if sample_id is None:
@@ -384,16 +396,6 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
                 if subject_id is not None:
                     _ensure_subject(context, subject_id, {})
                 _ensure_sample(context, sample_id, subject_id=subject_id, row=row)
-                _add_attribute_values(
-                    context,
-                    profile,
-                    source_file_id=source_file.file_id if source_file else None,
-                    entity_scope="sample",
-                    entity_id=sample_id,
-                    row=row,
-                    table=clinical,
-                    id_columns={"SAMPLE_ID", "Sample Identifier", "PATIENT_ID"},
-                )
 
 
 @dataclass(frozen=True)
@@ -409,17 +411,14 @@ def _read_cbioportal_table(path: Path) -> CbioPortalTable | None:
     if not path.exists():
         return None
     comments: list[list[str]] = []
-    rows: list[dict[str, str]] = []
     with path.open(newline="", encoding="utf-8") as handle:
         header: list[str] | None = None
         for raw_line in handle:
-            line = raw_line.rstrip("\n")
+            line = raw_line.rstrip("\r\n")
             if line.startswith("#"):
                 comments.append(line.removeprefix("#").split("\t"))
                 continue
             header = line.split("\t")
-            reader = csv.DictReader(handle, delimiter="\t", fieldnames=header)
-            rows = [dict(row) for row in reader]
             break
     if header is None:
         return None
@@ -437,7 +436,7 @@ def _read_cbioportal_table(path: Path) -> CbioPortalTable | None:
         descriptions=descriptions,
         value_types=value_types,
         priorities=priorities,
-        rows=rows,
+        rows=[],
     )
 
 
@@ -467,47 +466,171 @@ def _add_attribute_definitions(
         )
 
 
-def _add_attribute_values(
-    context: CbioPortalParseContext,
-    profile: DataProfile,
-    *,
-    source_file_id: str | None,
-    entity_scope: str,
-    entity_id: str,
-    row: dict[str, str],
-    table: CbioPortalTable,
-    id_columns: set[str],
-) -> None:
-    for column, raw_value in row.items():
-        if column in id_columns:
-            continue
-        value = _clean(raw_value)
-        if value is None:
-            continue
-        attribute_id = _attribute_id(entity_scope, column)
-        value_type = _attribute_value_type(table.value_types.get(column))
-        if value_type == "numeric" and (number := _to_float(value)) is not None:
-            context.batch.entity_attribute_numeric.append(
-                UnresolvedAnalyticalRecord(
-                    entity_scope=entity_scope,
-                    entity_id=entity_id,
-                    attribute_id=attribute_id,
-                    data_profile_id=profile.data_profile_id,
-                    source_file_id=source_file_id,
-                    value=number,
-                )
+@dataclass(frozen=True)
+class ClinicalAttributeStagedLoad:
+    profile: DataProfile
+    path: Path
+    source_file_id: str | None
+    entity_scope: str
+    header: tuple[str, ...]
+    value_types: dict[str, str]
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> ClinicalAttributeStagedLoad:
+        return replace(self, catalog_id_maps=catalog_id_maps)
+
+    def load(self, connection: Any) -> None:
+        attribute_columns = [
+            column for column in self.header if column not in self._id_columns
+        ]
+        if not attribute_columns:
+            return
+        with tempfile.TemporaryDirectory(prefix="goodomics-cbio-clinical-") as root:
+            root_path = Path(root)
+            self._stage_and_load(
+                connection,
+                table_name="entity_attribute_numeric",
+                columns=(
+                    "entity_scope",
+                    "entity_id",
+                    "attribute_id",
+                    "data_profile_id",
+                    "source_file_id",
+                    "value",
+                ),
+                path=root_path / "entity_attribute_numeric.parquet",
+                select_sql=self._attribute_select_sql(
+                    attribute_columns,
+                    numeric=True,
+                ),
             )
+            self._stage_and_load(
+                connection,
+                table_name="entity_attribute_string",
+                columns=(
+                    "entity_scope",
+                    "entity_id",
+                    "attribute_id",
+                    "data_profile_id",
+                    "source_file_id",
+                    "value",
+                ),
+                path=root_path / "entity_attribute_string.parquet",
+                select_sql=self._attribute_select_sql(
+                    attribute_columns,
+                    numeric=False,
+                ),
+            )
+
+    @property
+    def _id_columns(self) -> set[str]:
+        if self.entity_scope == "subject":
+            return {"PATIENT_ID", "Patient Identifier"}
+        return {"SAMPLE_ID", "Sample Identifier", "PATIENT_ID"}
+
+    def _stage_and_load(
+        self,
+        connection: Any,
+        *,
+        table_name: str,
+        columns: tuple[str, ...],
+        path: Path,
+        select_sql: str,
+    ) -> None:
+        connection.execute(
+            f"COPY ({select_sql}) TO {_sql_literal(str(path))} (FORMAT PARQUET)",
+            [str(self.path)],
+        )
+        if not path.exists():
+            return
+        delete_public_parquet(
+            connection,
+            table_name,
+            ("entity_scope", "entity_id", "attribute_id", "data_profile_id"),
+            path,
+        )
+        insert_public_parquet(connection, table_name, columns, path)
+
+    def _attribute_select_sql(
+        self,
+        attribute_columns: list[str],
+        *,
+        numeric: bool,
+    ) -> str:
+        raw_value = "trim(CAST(raw_value AS VARCHAR))"
+        value_type = self._value_type_sql()
+        numeric_predicate = "try_cast(raw_value AS DOUBLE) IS NOT NULL"
+        if numeric:
+            value_expression = "try_cast(raw_value AS DOUBLE) AS value"
+            type_predicate = f"{value_type} = 'numeric' AND {numeric_predicate}"
         else:
-            context.batch.entity_attribute_string.append(
-                UnresolvedAnalyticalRecord(
-                    entity_scope=entity_scope,
-                    entity_id=entity_id,
-                    attribute_id=attribute_id,
-                    data_profile_id=profile.data_profile_id,
-                    source_file_id=source_file_id,
-                    value=value,
-                )
+            value_expression = f"{raw_value} AS value"
+            type_predicate = f"{value_type} <> 'numeric' OR NOT ({numeric_predicate})"
+        return f"""
+            SELECT
+                {_sql_literal(self.entity_scope)} AS entity_scope,
+                entity_id,
+                {self._attribute_id_sql()} AS attribute_id,
+                {
+            resolve_catalog_id(
+                "data_profile_id",
+                self.profile.data_profile_id,
+                self.catalog_id_maps,
             )
+        } AS data_profile_id,
+                {_sql_nullable_literal(self.source_file_id)} AS source_file_id,
+                {value_expression}
+            FROM (
+                SELECT
+                    {self._entity_id_sql()} AS entity_id,
+                    attribute_name,
+                    raw_value
+                FROM read_csv(
+                    ?,
+                    delim = '\t',
+                    header = true,
+                    all_varchar = true,
+                    skip = {_leading_comment_lines(self.path)},
+                    nullstr = ['NA', 'N/A', 'NaN', 'nan', 'null', 'None', '']
+                )
+                UNPIVOT (raw_value FOR attribute_name IN (
+                    {_sql_identifier_list(attribute_columns)}
+                ))
+            )
+            WHERE entity_id IS NOT NULL
+            AND raw_value IS NOT NULL
+            AND ({type_predicate})
+            """
+
+    def _entity_id_sql(self) -> str:
+        if self.entity_scope == "subject":
+            return _coalesced_columns_sql(
+                self.header,
+                ("PATIENT_ID", "Patient Identifier"),
+            )
+        return _coalesced_columns_sql(self.header, ("SAMPLE_ID", "Sample Identifier"))
+
+    def _attribute_id_sql(self) -> str:
+        cases = " ".join(
+            f"WHEN {_sql_literal(column)} THEN "
+            f"{_sql_literal(_attribute_id(self.entity_scope, column))}"
+            for column in self.header
+            if column not in self._id_columns
+        )
+        return f"CASE attribute_name {cases} ELSE attribute_name END"
+
+    def _value_type_sql(self) -> str:
+        cases = " ".join(
+            f"WHEN {_sql_literal(column)} THEN "
+            f"{_sql_literal(_attribute_value_type(self.value_types.get(column)))}"
+            for column in self.header
+            if column not in self._id_columns
+        )
+        return f"CASE attribute_name {cases} ELSE 'string' END"
 
 
 def _parse_case_lists(context: CbioPortalParseContext) -> None:
@@ -625,9 +748,8 @@ def _parse_gene_panel_matrix(
     path: Path,
     source_file_id: str | None,
 ) -> None:
-    rows = _read_tsv_rows(path)
     seen_panels: set[str] = set()
-    for row in rows:
+    for row in _read_tsv_iter(path):
         sample_id = _clean(row.get("SAMPLE_ID"))
         if sample_id is None:
             continue
@@ -665,6 +787,10 @@ class FeatureMatrixBulkLoad:
     ) -> FeatureMatrixBulkLoad:
         return replace(self, catalog_id_maps=catalog_id_maps)
 
+    @property
+    def requires_autocommit(self) -> bool:
+        return not _use_duckdb_matrix_unpivot(self.path)
+
     def load(self, connection: Any) -> None:
         feature_type = self.profile.feature_type or "generic_entity"
         value_semantics = self.value_semantics
@@ -690,40 +816,75 @@ class FeatureMatrixBulkLoad:
             """,
             [feature_type, str(self.path)],
         )
+        upsert_public_dimensions_select(
+            connection,
+            "feature_value_numeric",
+            ("feature_id",),
+            f"SELECT DISTINCT feature_id FROM ({source})",
+            [str(self.path)],
+        )
+        _upsert_source_file_dimension(
+            connection,
+            "feature_value_numeric",
+            self.source_file_id,
+        )
 
-        source = _feature_matrix_source_sql(
-            self.path,
-            feature_type=feature_type,
-            include_values=True,
-        )
-        mapped = _mapped_sample_source_sql(
-            source,
-            base_run_id=self.run_id,
-            base_profile_id=self.profile.data_profile_id,
-            catalog_id_maps=self.catalog_id_maps,
-        )
-        insert_public_select(
+        if _use_duckdb_matrix_unpivot(self.path):
+            source = _feature_matrix_source_sql(
+                self.path,
+                feature_type=feature_type,
+                include_values=True,
+            )
+            _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+            mapped = _mapped_sample_source_sql(
+                source,
+                base_run_id=self.run_id,
+                base_profile_id=self.profile.data_profile_id,
+                catalog_id_maps=self.catalog_id_maps,
+            )
+            insert_public_select(
+                connection,
+                "feature_value_numeric",
+                _FEATURE_VALUE_COLUMNS,
+                f"""
+                SELECT
+                    data_profile_id,
+                    mapped_run_id AS run_id,
+                    mapped_run_sample_id AS run_sample_id,
+                    mapped_sample_id AS sample_id,
+                    feature_id,
+                    value,
+                    ? AS value_semantics,
+                    ? AS source_file_id
+                FROM ({mapped})
+                WHERE value IS NOT NULL
+                """,
+                [
+                    value_semantics,
+                    self.source_file_id,
+                    str(self.path),
+                ],
+                upsert_dimensions=False,
+            )
+            return
+
+        _insert_iter_rows(
             connection,
             "feature_value_numeric",
             _FEATURE_VALUE_COLUMNS,
-            f"""
-            SELECT
-                data_profile_id,
-                mapped_run_id AS run_id,
-                mapped_run_sample_id AS run_sample_id,
-                mapped_sample_id AS sample_id,
-                feature_id,
-                value,
-                ? AS value_semantics,
-                ? AS source_file_id
-            FROM ({mapped})
-            WHERE value IS NOT NULL
-            """,
-            [
-                value_semantics,
-                self.source_file_id,
-                str(self.path),
-            ],
+            (
+                values
+                for _, values in _iter_feature_matrix_batches(
+                    self.path,
+                    self.run_id,
+                    self.profile.data_profile_id,
+                    feature_type=feature_type,
+                    value_semantics=value_semantics,
+                    source_file_id=self.source_file_id,
+                    catalog_id_maps=self.catalog_id_maps,
+                )
+            ),
+            upsert_dimensions=False,
         )
 
 
@@ -741,6 +902,10 @@ class CnaMatrixBulkLoad:
         self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> CnaMatrixBulkLoad:
         return replace(self, catalog_id_maps=catalog_id_maps)
+
+    @property
+    def requires_autocommit(self) -> bool:
+        return not _use_duckdb_matrix_unpivot(self.path)
 
     def load(self, connection: Any) -> None:
         source = _cna_source_sql(self.path, include_values=False)
@@ -761,53 +926,82 @@ class CnaMatrixBulkLoad:
             """,
             [str(self.path)],
         )
-
-        source = _cna_source_sql(self.path, include_values=True)
-        mapped = _mapped_sample_source_sql(
-            source,
-            base_run_id=self.run_id,
-            base_profile_id=self.profile.data_profile_id,
-            catalog_id_maps=self.catalog_id_maps,
+        upsert_public_dimensions_select(
+            connection,
+            "feature_call",
+            ("feature_id",),
+            f"SELECT DISTINCT feature_id FROM ({source})",
+            [str(self.path)],
         )
-        insert_public_select(
+        _upsert_source_file_dimension(connection, "feature_call", self.source_file_id)
+
+        if _use_duckdb_matrix_unpivot(self.path):
+            source = _cna_source_sql(self.path, include_values=True)
+            _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+            mapped = _mapped_sample_source_sql(
+                source,
+                base_run_id=self.run_id,
+                base_profile_id=self.profile.data_profile_id,
+                catalog_id_maps=self.catalog_id_maps,
+            )
+            insert_public_select(
+                connection,
+                "feature_call",
+                _FEATURE_CALL_COLUMNS,
+                f"""
+                SELECT
+                    data_profile_id,
+                    mapped_run_id AS run_id,
+                    mapped_run_sample_id AS run_sample_id,
+                    mapped_sample_id AS sample_id,
+                    feature_id,
+                    CASE call_rank
+                        WHEN -2 THEN 'HOMDEL'
+                        WHEN -1 THEN 'LOSS'
+                        WHEN 0 THEN 'DIPLOID'
+                        WHEN 1 THEN 'GAIN'
+                        WHEN 2 THEN 'AMP'
+                        ELSE raw_value
+                    END AS call_code,
+                    CASE call_rank
+                        WHEN -2 THEN 'Deep deletion'
+                        WHEN -1 THEN 'Shallow deletion'
+                        WHEN 0 THEN 'Diploid'
+                        WHEN 1 THEN 'Gain'
+                        WHEN 2 THEN 'Amplification'
+                        ELSE raw_value
+                    END AS call_label,
+                    call_rank,
+                    NULL AS score,
+                    NULL AS confidence,
+                    NULL AS source_event_id,
+                    ? AS source_file_id
+                FROM ({mapped})
+                WHERE call_rank IS NOT NULL
+                """,
+                [
+                    self.source_file_id,
+                    str(self.path),
+                ],
+                upsert_dimensions=False,
+            )
+            return
+
+        _insert_iter_rows(
             connection,
             "feature_call",
             _FEATURE_CALL_COLUMNS,
-            f"""
-            SELECT
-                data_profile_id,
-                mapped_run_id AS run_id,
-                mapped_run_sample_id AS run_sample_id,
-                mapped_sample_id AS sample_id,
-                feature_id,
-                CASE call_rank
-                    WHEN -2 THEN 'HOMDEL'
-                    WHEN -1 THEN 'LOSS'
-                    WHEN 0 THEN 'DIPLOID'
-                    WHEN 1 THEN 'GAIN'
-                    WHEN 2 THEN 'AMP'
-                    ELSE raw_value
-                END AS call_code,
-                CASE call_rank
-                    WHEN -2 THEN 'Deep deletion'
-                    WHEN -1 THEN 'Shallow deletion'
-                    WHEN 0 THEN 'Diploid'
-                    WHEN 1 THEN 'Gain'
-                    WHEN 2 THEN 'Amplification'
-                    ELSE raw_value
-                END AS call_label,
-                call_rank,
-                NULL AS score,
-                NULL AS confidence,
-                NULL AS source_event_id,
-                ? AS source_file_id
-            FROM ({mapped})
-            WHERE call_rank IS NOT NULL
-            """,
-            [
-                self.source_file_id,
-                str(self.path),
-            ],
+            (
+                calls
+                for _, calls in _iter_cna_batches(
+                    self.path,
+                    self.run_id,
+                    self.profile.data_profile_id,
+                    source_file_id=self.source_file_id,
+                    catalog_id_maps=self.catalog_id_maps,
+                )
+            ),
+            upsert_dimensions=False,
         )
 
 
@@ -828,22 +1022,31 @@ class SegmentBulkLoad:
         return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
-        mapped_run_id = _mapped_run_id_sql(
-            "ID",
-            base_run_id=self.run_id,
-            catalog_id_maps=self.catalog_id_maps,
-        )
         data_profile_id = _mapped_data_profile_id_sql(
             base_profile_id=self.profile.data_profile_id,
             catalog_id_maps=self.catalog_id_maps,
         )
-        mapped_run_sample_id = _mapped_run_sample_id_sql(
-            "ID",
+        _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+        mapped = _mapped_sample_source_sql(
+            """
+            SELECT
+                ID AS sample_id,
+                chrom,
+                "loc.start",
+                "loc.end",
+                "num.mark",
+                "seg.mean"
+            FROM read_csv(
+                ?,
+                delim = '\t',
+                header = true,
+                all_varchar = true,
+                nullstr = ['NA', '']
+            )
+            """,
             base_run_id=self.run_id,
+            base_profile_id=self.profile.data_profile_id,
             catalog_id_maps=self.catalog_id_maps,
-        )
-        mapped_sample_id = _mapped_sample_id_sql(
-            "ID", catalog_id_maps=self.catalog_id_maps
         )
         insert_public_select(
             connection,
@@ -852,9 +1055,9 @@ class SegmentBulkLoad:
             f"""
             SELECT
                 {data_profile_id} AS data_profile_id,
-                {mapped_run_id} AS run_id,
-                {mapped_run_sample_id} AS run_sample_id,
-                {mapped_sample_id} AS sample_id,
+                mapped_run_id AS run_id,
+                mapped_run_sample_id AS run_sample_id,
+                mapped_sample_id AS sample_id,
                 ? AS genome_build,
                 chrom AS contig,
                 try_cast("loc.start" AS BIGINT) AS start_pos,
@@ -865,14 +1068,8 @@ class SegmentBulkLoad:
                 NULL AS minor_copy_number,
                 NULL AS call_label,
                 ? AS source_file_id
-            FROM read_csv(
-                ?,
-                delim = '\t',
-                header = true,
-                all_varchar = true,
-                nullstr = ['NA', '']
-            )
-            WHERE ID IS NOT NULL
+            FROM ({mapped})
+            WHERE sample_id IS NOT NULL
             AND try_cast("seg.mean" AS DOUBLE) IS NOT NULL
             """,
             [
@@ -996,6 +1193,7 @@ class MutationBulkLoad:
                 *params,
             ],
         )
+        _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
         mapped = _mapped_sample_source_sql(
             source,
             base_run_id=self.run_id,
@@ -1166,7 +1364,13 @@ def _iter_feature_matrix_batches(
     feature_type: str,
     value_semantics: str,
     source_file_id: str | None,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
+    resolved_profile_id = _catalog_value_or_label(
+        "data_profile_id",
+        profile_id,
+        catalog_id_maps,
+    )
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         if reader.fieldnames is None:
@@ -1194,12 +1398,17 @@ def _iter_feature_matrix_batches(
                 value = _to_float(row.get(sample_id))
                 if value is None:
                     continue
+                sample_ids = _sample_catalog_values(
+                    run_id,
+                    sample_id,
+                    catalog_id_maps,
+                )
                 values.append(
                     (
-                        profile_id,
-                        run_id,
-                        _run_sample_id(run_id, sample_id),
-                        sample_id,
+                        resolved_profile_id,
+                        sample_ids[0],
+                        sample_ids[1],
+                        sample_ids[2],
                         feature_id,
                         value,
                         value_semantics,
@@ -1219,13 +1428,20 @@ def _iter_cna_batches(
     profile_id: str,
     *,
     source_file_id: str | None,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
+    resolved_profile_id = _catalog_value_or_label(
+        "data_profile_id",
+        profile_id,
+        catalog_id_maps,
+    )
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         if reader.fieldnames is None:
             return
+        id_columns = _matrix_id_columns(list(reader.fieldnames))
         sample_columns = [
-            column for column in reader.fieldnames if column != "Hugo_Symbol"
+            column for column in reader.fieldnames if column not in id_columns
         ]
         features: list[tuple[Any, ...]] = []
         calls: list[tuple[Any, ...]] = []
@@ -1239,13 +1455,18 @@ def _iter_cna_batches(
                 rank = _to_int(row.get(sample_id))
                 if rank is None:
                     continue
+                sample_ids = _sample_catalog_values(
+                    run_id,
+                    sample_id,
+                    catalog_id_maps,
+                )
                 code, label = _cna_call(rank)
                 calls.append(
                     (
-                        profile_id,
-                        run_id,
-                        _run_sample_id(run_id, sample_id),
-                        sample_id,
+                        resolved_profile_id,
+                        sample_ids[0],
+                        sample_ids[1],
+                        sample_ids[2],
                         feature_id,
                         code,
                         label,
@@ -1457,7 +1678,8 @@ def _matrix_feature_sql(fieldnames: list[str]) -> tuple[str, str, str, str]:
 
 def _cna_source_sql(path: Path, *, include_values: bool) -> str:
     fieldnames = _read_header(path)
-    sample_columns = [column for column in fieldnames if column != "Hugo_Symbol"]
+    id_columns = _matrix_id_columns(fieldnames)
+    sample_columns = [column for column in fieldnames if column not in id_columns]
     if "Hugo_Symbol" not in fieldnames or not sample_columns:
         raise ValueError(f"Invalid cBioPortal CNA matrix: {path}")
     value_columns = ""
@@ -1630,6 +1852,22 @@ def _replace_features_from_source(
     )
 
 
+def _upsert_source_file_dimension(
+    connection: Any,
+    table_name: str,
+    source_file_id: str | None,
+) -> None:
+    if source_file_id is None:
+        return
+    upsert_public_dimensions_select(
+        connection,
+        table_name,
+        ("source_file_id",),
+        "SELECT ? AS source_file_id",
+        [source_file_id],
+    )
+
+
 def _sql_feature_id(feature_type: str, identifier_sql: str) -> str:
     normalized = (
         "nullif(trim(regexp_replace("
@@ -1641,14 +1879,31 @@ def _sql_feature_id(feature_type: str, identifier_sql: str) -> str:
 
 def _read_header(path: Path) -> list[str]:
     with path.open(encoding="utf-8") as handle:
-        return handle.readline().rstrip("\n").split("\t")
+        return handle.readline().rstrip("\r\n").split("\t")
+
+
+def _use_duckdb_matrix_unpivot(path: Path) -> bool:
+    fieldnames = _read_header(path)
+    id_columns = _matrix_id_columns(fieldnames)
+    sample_columns = [column for column in fieldnames if column not in id_columns]
+    if not sample_columns:
+        return True
+    if len(sample_columns) > DUCKDB_MATRIX_UNPIVOT_SAMPLE_LIMIT:
+        return False
+    data_rows = 0
+    with path.open(encoding="utf-8") as handle:
+        next(handle, None)
+        for line in handle:
+            if line.strip():
+                data_rows += 1
+    return data_rows * len(sample_columns) <= DUCKDB_MATRIX_UNPIVOT_CELL_LIMIT
 
 
 def _read_header_after_comments(path: Path) -> list[str]:
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             if not line.startswith("#"):
-                return line.rstrip("\n").split("\t")
+                return line.rstrip("\r\n").split("\t")
     return []
 
 
@@ -1678,6 +1933,23 @@ def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _sql_nullable_literal(value: str | None) -> str:
+    return "NULL" if value is None else _sql_literal(value)
+
+
+def _coalesced_columns_sql(
+    columns: tuple[str, ...], candidates: tuple[str, ...]
+) -> str:
+    expressions = [
+        f"nullif(trim(CAST({_sql_identifier(candidate)} AS VARCHAR)), '')"
+        for candidate in candidates
+        if candidate in columns
+    ]
+    if not expressions:
+        return "NULL"
+    return f"coalesce({', '.join(expressions)})"
+
+
 def _insert_rows(
     connection: Any,
     table: str,
@@ -1686,7 +1958,56 @@ def _insert_rows(
 ) -> None:
     if not rows:
         return
-    insert_public_rows(connection, table, columns, [_db_tuple(row) for row in rows])
+    _insert_iter_rows(connection, table, columns, [rows])
+
+
+def _insert_iter_rows(
+    connection: Any,
+    table: str,
+    columns: tuple[str, ...],
+    row_batches: Iterable[list[tuple[Any, ...]]],
+    *,
+    upsert_dimensions: bool = True,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="goodomics-cbio-rows-") as root:
+        root_path = Path(root)
+        csv_path = root_path / "rows.tsv"
+        parquet_path = root_path / "rows.parquet"
+        rows_written = 0
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle, delimiter="\t")
+            writer.writerow(columns)
+            for rows in row_batches:
+                rows_written += len(rows)
+                writer.writerows(_csv_row(_db_tuple(row)) for row in rows)
+        if rows_written == 0:
+            return
+        connection.execute(
+            f"""
+            COPY (
+                SELECT *
+                FROM read_csv(
+                    ?,
+                    delim = '\t',
+                    header = true,
+                    all_varchar = true,
+                    nullstr = ['']
+                )
+            ) TO {_sql_literal(str(parquet_path))} (FORMAT PARQUET)
+            """,
+            [str(csv_path)],
+        )
+        insert_public_parquet(
+            connection,
+            table,
+            columns,
+            parquet_path,
+            upsert_dimensions=upsert_dimensions,
+        )
+
+
+def _csv_row(row: tuple[Any, ...]) -> tuple[str, ...]:
+    return tuple("" if value is None else str(value) for value in row)
 
 
 def _insert_model_dicts(
@@ -1898,6 +2219,32 @@ def _file_links_from_context(context: CbioPortalParseContext) -> list[FileLink]:
     return context.file_links
 
 
+def _catalog_value_or_label(
+    column: str,
+    value: Any,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+) -> Any:
+    if not catalog_id_maps:
+        return value
+    return resolve_catalog_id(column, value, catalog_id_maps)
+
+
+def _sample_catalog_values(
+    base_run_id: str,
+    sample_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+) -> tuple[Any, Any, Any]:
+    sample_run_id = _run_id_for_sample(base_run_id, sample_id)
+    run_sample_id = _run_sample_id(sample_run_id, sample_id)
+    if not catalog_id_maps:
+        return sample_run_id, run_sample_id, sample_id
+    return (
+        resolve_catalog_id("run_id", sample_run_id, catalog_id_maps),
+        resolve_catalog_id("run_sample_id", run_sample_id, catalog_id_maps),
+        resolve_catalog_id("sample_id", sample_id, catalog_id_maps),
+    )
+
+
 def _run_id_for_sample(base_run_id: str, sample_id: str) -> str:
     return f"{base_run_id}:{_normalize_id(sample_id)}"
 
@@ -1992,6 +2339,22 @@ def _mapped_sample_source_sql(
     base_profile_id: str,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
+    if catalog_id_maps:
+        data_profile_id = _mapped_data_profile_id_sql(
+            base_profile_id=base_profile_id,
+            catalog_id_maps=catalog_id_maps,
+        )
+        return f"""
+            SELECT
+                source.*,
+                sample_map.run_id AS mapped_run_id,
+                sample_map.run_sample_id AS mapped_run_sample_id,
+                sample_map.sample_id AS mapped_sample_id,
+                {data_profile_id} AS data_profile_id
+            FROM ({source_sql}) source
+            LEFT JOIN {_CATALOG_SAMPLE_MAP_TABLE} sample_map
+            ON trim(CAST(source.sample_id AS VARCHAR)) = sample_map.sample_label
+        """
     mapped_run_id = _mapped_run_id_sql(
         "sample_id",
         base_run_id=base_run_id,
@@ -2019,6 +2382,74 @@ def _mapped_sample_source_sql(
             {data_profile_id} AS data_profile_id
         FROM ({source_sql})
     """
+
+
+_CATALOG_SAMPLE_MAP_TABLE = "_goodomics_cbioportal_sample_map"
+
+
+def _ensure_sample_catalog_map(
+    connection: Any,
+    base_run_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+) -> None:
+    if not catalog_id_maps:
+        return
+    marker_table = f"{_CATALOG_SAMPLE_MAP_TABLE}_marker"
+    connection.execute(f"""
+        CREATE TEMP TABLE IF NOT EXISTS {marker_table} (
+            base_run_id TEXT PRIMARY KEY
+        )
+        """)
+    exists = connection.execute(
+        f"SELECT 1 FROM {marker_table} WHERE base_run_id = ?",
+        [base_run_id],
+    ).fetchone()
+    if exists is not None:
+        return
+    connection.execute(f"""
+        CREATE TEMP TABLE IF NOT EXISTS {_CATALOG_SAMPLE_MAP_TABLE} (
+            sample_label TEXT,
+            normalized_sample_label TEXT,
+            run_id BIGINT,
+            run_sample_id BIGINT,
+            sample_id BIGINT
+        )
+        """)
+    rows = []
+    run_map = catalog_id_maps.get("run_id", {})
+    run_sample_map = catalog_id_maps.get("run_sample_id", {})
+    for sample_label, sample_id in catalog_id_maps.get("sample_id", {}).items():
+        public_sample = str(sample_label)
+        run_label = _run_id_for_sample(base_run_id, public_sample)
+        run_identifier = run_map.get(run_label)
+        run_sample_identifier = run_sample_map.get(
+            _run_sample_id(run_label, public_sample)
+        )
+        if run_identifier is None or run_sample_identifier is None:
+            continue
+        rows.append(
+            (
+                public_sample,
+                _normalize_id(public_sample),
+                int(run_identifier),
+                int(run_sample_identifier),
+                int(sample_id),
+            )
+        )
+    if rows:
+        connection.executemany(
+            f"""
+            INSERT INTO {_CATALOG_SAMPLE_MAP_TABLE}
+                (sample_label, normalized_sample_label, run_id,
+                 run_sample_id, sample_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    connection.execute(
+        f"INSERT INTO {marker_table} (base_run_id) VALUES (?)",
+        [base_run_id],
+    )
 
 
 def _catalog_case_sql(

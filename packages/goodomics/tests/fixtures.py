@@ -85,7 +85,7 @@ def write_cbioportal_fixture(root: Path) -> Path:
         encoding="utf-8",
     )
     (root / "data_clinical_patient.txt").write_text(
-        "\n".join(
+        "\r\n".join(
             [
                 "#Patient Identifier\tSex\tAge",
                 "#Identifier\tSex\tAge at diagnosis",
@@ -96,7 +96,7 @@ def write_cbioportal_fixture(root: Path) -> Path:
                 "S2\tMale\t52",
             ]
         )
-        + "\n",
+        + "\r\n",
         encoding="utf-8",
     )
     (root / "meta_clinical_sample.txt").write_text(
@@ -149,7 +149,7 @@ def write_cbioportal_fixture(root: Path) -> Path:
         "data_cna.txt",
     )
     (root / "data_cna.txt").write_text(
-        "Hugo_Symbol\tS1\tS2\nTP53\t-1\t0\nEGFR\t2\t1\n",
+        "Hugo_Symbol\tEntrez_Gene_Id\tS1\tS2\nTP53\t7157\t-1\t0\nEGFR\t1956\t2\t1\n",
         encoding="utf-8",
     )
     (root / "meta_cna_hg19_seg.txt").write_text(
