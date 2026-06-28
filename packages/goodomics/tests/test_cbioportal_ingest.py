@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -525,3 +526,69 @@ def test_cbioportal_chol_fixture_uses_sample_runs_and_stable_profiles() -> None:
     assert "cbioportal:copy_number:log2" in {
         profile.data_profile_id for profile in parsed.data_profiles
     }
+
+
+@pytest.mark.skipif(
+    os.getenv("GOODOMICS_RUN_CHOL_CBIOPORTAL") != "1",
+    reason="set GOODOMICS_RUN_CHOL_CBIOPORTAL=1 to run the CHOL cBioPortal ingest",
+)
+def test_ingest_cbioportal_chol_fixture_handles_crlf_clinical_headers(
+    tmp_path: Path,
+) -> None:
+    study = _external_cbioportal_fixture("chol_tcga_pan_can_atlas_2018")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+
+    ingest_cbioportal_study(
+        study,
+        data_import_id="chol-test",
+        project="chol-test",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+
+    counts = DuckDBAnalyticsStore(analytics_path).row_counts()
+    assert counts["entity_attribute_numeric"] > 0
+    assert counts["entity_attribute_string"] > 0
+    assert counts["feature_value_numeric"] > 0
+
+
+@pytest.mark.skipif(
+    os.getenv("GOODOMICS_RUN_LARGE_CBIOPORTAL") != "1",
+    reason="set GOODOMICS_RUN_LARGE_CBIOPORTAL=1 to run the 50k cBioPortal ingest",
+)
+def test_ingest_cbioportal_msk_impact_50k_uses_staged_loads_idempotently(
+    tmp_path: Path,
+) -> None:
+    study = _external_cbioportal_fixture("msk_impact_50k_2026")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+
+    ingest_cbioportal_study(
+        study,
+        data_import_id="msk-50k",
+        project="msk-50k",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+    analytics = DuckDBAnalyticsStore(analytics_path)
+    first_counts = analytics.row_counts()
+
+    ingest_cbioportal_study(
+        study,
+        data_import_id="msk-50k",
+        project="msk-50k",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+    second_counts = analytics.row_counts()
+
+    assert second_counts == first_counts
+    assert second_counts["entity_attribute_numeric"] > 0
+    assert second_counts["entity_attribute_string"] > 0
+    assert second_counts["features"] > 0
+    assert second_counts["feature_call"] > 0
+    assert second_counts["copy_number_segments"] > 0
+    assert second_counts["sample_variant_calls"] > 0
+    assert second_counts["sample_structural_variant_calls"] > 0
+    assert second_counts["gene_alteration_state"] > 0

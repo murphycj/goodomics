@@ -12,7 +12,11 @@ from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.analytics_resolution import (
     resolve_analytics_batch_catalog_ids,
 )
-from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.duckdb import (
+    DuckDBAnalyticsStore,
+    delete_public_parquet,
+    insert_public_parquet,
+)
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
     FileLinkRecord,
@@ -27,6 +31,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 def _scalar(row: tuple[Any, ...] | None) -> Any:
     assert row is not None
     return row[0]
+
+
+def _sql_literal(value: Path | str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int]]:
@@ -153,6 +161,107 @@ def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
         for metric in metrics
         if metric.metric_id == string_metric_id
     )
+
+
+def test_duckdb_store_inserts_non_integer_table_from_parquet(
+    tmp_path: Path,
+) -> None:
+    store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
+    store.ensure_schema()
+    parquet_path = tmp_path / "metric_definitions.parquet"
+
+    with store._connect() as connection:
+        connection.execute(f"""
+            COPY (
+                SELECT
+                    'metric.parquet' AS metric_id,
+                    'test' AS namespace,
+                    'metric.parquet' AS metric_name,
+                    'Metric Parquet' AS display_name,
+                    'numeric' AS value_type,
+                    NULL AS unit,
+                    NULL AS direction,
+                    NULL AS description,
+                    'pytest' AS producer_tool,
+                    NULL AS producer_module,
+                    NULL AS schema_version
+            ) TO {_sql_literal(parquet_path)} (FORMAT PARQUET)
+            """)
+        insert_public_parquet(
+            connection,
+            "metric_definitions",
+            (
+                "metric_id",
+                "namespace",
+                "metric_name",
+                "display_name",
+                "value_type",
+                "unit",
+                "direction",
+                "description",
+                "producer_tool",
+                "producer_module",
+                "schema_version",
+            ),
+            parquet_path,
+        )
+        row = connection.execute(
+            "SELECT display_name FROM metric_definitions WHERE metric_id = ?",
+            ["metric.parquet"],
+        ).fetchone()
+
+    assert _scalar(row) == "Metric Parquet"
+
+
+def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
+    tmp_path: Path,
+) -> None:
+    store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
+    store.ensure_schema()
+    first_path = tmp_path / "attrs-first.parquet"
+    second_path = tmp_path / "attrs-second.parquet"
+    columns = (
+        "entity_scope",
+        "entity_id",
+        "attribute_id",
+        "data_profile_id",
+        "source_file_id",
+        "value",
+    )
+
+    with store._connect() as connection:
+        for path, value in ((first_path, "old"), (second_path, "new")):
+            connection.execute(f"""
+                COPY (
+                    SELECT
+                        'sample' AS entity_scope,
+                        'sample-1' AS entity_id,
+                        'sample:status' AS attribute_id,
+                        7::BIGINT AS data_profile_id,
+                        NULL AS source_file_id,
+                        {value!r} AS value
+                ) TO {_sql_literal(path)} (FORMAT PARQUET)
+                """)
+        insert_public_parquet(
+            connection, "entity_attribute_string", columns, first_path
+        )
+        delete_public_parquet(
+            connection,
+            "entity_attribute_string",
+            ("entity_scope", "entity_id", "attribute_id", "data_profile_id"),
+            second_path,
+        )
+        insert_public_parquet(
+            connection,
+            "entity_attribute_string",
+            columns,
+            second_path,
+        )
+        rows = connection.execute(
+            "SELECT value FROM entity_attribute_string ORDER BY value"
+        ).fetchall()
+
+    assert rows == [("new",)]
 
 
 def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> None:

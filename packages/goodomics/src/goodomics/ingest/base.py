@@ -38,6 +38,20 @@ class AnalyticsBulkLoad(Protocol):
         ...
 
 
+class AnalyticsStagedLoad(Protocol):
+    """File-backed analytical load prepared outside the small in-memory batch."""
+
+    def load(self, connection: Any) -> None:
+        """Write staged analytical records using an open DuckDB connection."""
+        ...
+
+    def resolve_catalog_ids(
+        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    ) -> AnalyticsStagedLoad:
+        """Return a staged loader that writes SQL-owned catalog references as ints."""
+        ...
+
+
 @dataclass
 class NormalizedIngestResult:
     run: Run
@@ -53,6 +67,7 @@ class NormalizedIngestResult:
     sample_set_members: list[SampleSetMember] = field(default_factory=list)
     analytics_batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
     bulk_loads: list[AnalyticsBulkLoad] = field(default_factory=list)
+    staged_loads: list[AnalyticsStagedLoad] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
 
     @property

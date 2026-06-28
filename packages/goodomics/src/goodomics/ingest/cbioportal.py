@@ -118,6 +118,10 @@ def ingest_cbioportal_study(
             bulk_load.resolve_catalog_ids(catalog_id_maps)
             for bulk_load in parsed.bulk_loads
         ]
+        resolved_staged_loads = [
+            staged_load.resolve_catalog_ids(catalog_id_maps)
+            for staged_load in parsed.staged_loads
+        ]
         resolved_replace_run_ids = [
             resolve_catalog_id("run_id", run_id, catalog_id_maps)
             for run_id in [
@@ -139,6 +143,7 @@ def ingest_cbioportal_study(
         DuckDBAnalyticsStore(resolved_analytics_path).write_batch_with_bulk_loads(
             resolved_batch,
             resolved_bulk_loads,
+            staged_loads=resolved_staged_loads,
             replace_run_ids=resolved_replace_run_ids,
             bulk_load_progress=bulk_load_progress if progress is not None else None,
         )
