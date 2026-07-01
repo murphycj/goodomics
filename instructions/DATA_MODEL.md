@@ -311,8 +311,13 @@ samples, data profiles, sample sets, and files where relevant.
 
 | Table                  | Purpose                               |
 | ---------------------- | ------------------------------------- |
-| `reports`              | Rendered reports and report metadata  |
-| `report_templates`     | Versioned report template definitions |
+| `insights`             | Saved chart, metric, and table definitions |
+| `insight_revisions`    | Version history for saved insights    |
+| `reports`              | Saved report layouts composed of insights |
+| `report_revisions`     | Version history for saved reports     |
+| `rendered_reports`     | Generated HTML report snapshots       |
+| `insight_result_cache` | Cached computed insight payloads      |
+| `report_result_cache`  | Cached computed report payloads       |
 | `qc_policies`          | Threshold and decision policies       |
 | `qc_decisions`         | Stored review/evaluation decisions    |
 | `interpretation_notes` | Human- or agent-drafted notes         |
@@ -613,8 +618,8 @@ Recommended derived layouts:
 | By sample | `data_profile_id, run_sample_id, feature_id`        | Sample detail pages and sample profile exports             |
 | By value  | `data_profile_id, feature_id, value, run_sample_id` | Threshold filters and top/bottom values                    |
 
-`expression_values` can exist as a view or compatibility alias over
-`feature_value_numeric` where `value_semantics` is expression-specific.
+Expression-specific measurements should use `feature_value_numeric` with an
+appropriate `value_semantics` value.
 
 ### `feature_call`
 

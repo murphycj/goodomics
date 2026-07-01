@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
+/** Dropdown for switching projects or opening the create-project modal. */
 export function ProjectSwitcherMenu({
   currentProject,
   projects,

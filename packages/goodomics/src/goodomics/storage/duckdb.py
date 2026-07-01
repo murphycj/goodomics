@@ -1104,6 +1104,34 @@ class DuckDBAnalyticsStore:
             total,
         )
 
+    def query_rows(
+        self,
+        query: str,
+        *,
+        parameters: Sequence[Any] = (),
+        limit: int = 1000,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        if not self.path.exists():
+            return [], []
+        self.ensure_schema()
+        bounded_query = f"SELECT * FROM ({query}) AS goodomics_query LIMIT ?"
+        with self._connect() as connection:
+            cursor = connection.execute(
+                bounded_query, [*parameters, min(max(limit, 1), 5000)]
+            )
+            columns = [description[0] for description in cursor.description or []]
+            rows = cursor.fetchall()
+        return (
+            columns,
+            [
+                {
+                    column: _from_db_value(column, value)
+                    for column, value in zip(columns, row, strict=True)
+                }
+                for row in rows
+            ],
+        )
+
     def database_size_bytes(self) -> int:
         return self.path.stat().st_size if self.path.exists() else 0
 

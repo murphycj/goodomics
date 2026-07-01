@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listNamedRows } from "../api";
 import { GenericRows, Page } from "../components/ui";
 
+/** Simple cohort registry page while richer cohort editing is still pending. */
 export function CohortsPage() {
   const cohorts = useQuery({
     queryKey: ["cohorts"],

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { QueryState } from "../../lib/types";
 
+/** Normalizes query loading, error, empty, and loaded states around page content. */
 export function AsyncBlock<T>({
   children,
   empty,

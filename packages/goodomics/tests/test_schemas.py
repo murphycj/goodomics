@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from goodomics import run
-from goodomics.data_profiles import (
-    BUILT_IN_DATA_PROFILES,
+from goodomics.profiles.base import PROFILE_NAMESPACE_PREFIXES
+from goodomics.profiles.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
@@ -14,9 +14,11 @@ from goodomics.data_profiles import (
     CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
     CBIOPORTAL_MUTATIONS_MAF,
     CBIOPORTAL_STRUCTURAL_VARIANTS,
-    PROFILE_NAMESPACE_PREFIXES,
-    cbioportal_data_profile_for_meta,
 )
+from goodomics.profiles.cbioportal import (
+    profile_for_meta as cbioportal_data_profile_for_meta,
+)
+from goodomics.profiles.registry import built_in_profiles
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import DataImport, QCDecision, Run, Sample
 from goodomics.storage.database import DEFAULT_DATABASE_URL
@@ -164,10 +166,11 @@ def test_qc_decision_status_values() -> None:
 
 
 def test_builtin_data_profile_registry_has_stable_namespaces() -> None:
-    assert len(BUILT_IN_DATA_PROFILES) == len(set(BUILT_IN_DATA_PROFILES))
+    built_in_data_profiles = built_in_profiles()
+    assert len(built_in_data_profiles) == len(set(built_in_data_profiles))
     assert all(
         profile_id.startswith(PROFILE_NAMESPACE_PREFIXES)
-        for profile_id in BUILT_IN_DATA_PROFILES
+        for profile_id in built_in_data_profiles
     )
 
 

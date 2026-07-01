@@ -15,6 +15,7 @@ const ENTITY_LABELS: Record<string, string> = {
   run: "Runs",
 };
 
+/** Global command-style search overlay for samples, runs, and Ask AI entry. */
 export function SearchOverlay({
   defaultProjectId,
   defaultProjectName,
@@ -161,6 +162,7 @@ export function SearchOverlay({
   );
 }
 
+/** Search dialog body with filters, keyboard navigation, and result rendering. */
 function SearchPanel({
   activeIndex,
   defaultProjectId,
@@ -351,6 +353,7 @@ function SearchPanel({
   );
 }
 
+/** Clickable search result row for a sample or run. */
 function SearchResultRow({
   active,
   onClick,

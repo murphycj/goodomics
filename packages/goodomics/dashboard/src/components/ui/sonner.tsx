@@ -3,6 +3,7 @@ import { Toaster as Sonner } from "sonner";
 
 type ToasterProps = ComponentProps<typeof Sonner>;
 
+/** Application toast host with Goodomics success and error styling. */
 export function Toaster({ ...props }: ToasterProps) {
   return (
     <Sonner

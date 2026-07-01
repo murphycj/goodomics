@@ -3,6 +3,7 @@ import { AskAiSidePanel } from "../ai/AskAiSidePanel";
 import { SearchOverlay } from "./SearchOverlay";
 import { useSearchStore } from "./searchStore";
 
+/** Provides global search and Ask AI overlays around the routed dashboard. */
 export function SearchProvider({
   children,
   defaultProjectId,

@@ -36,6 +36,93 @@ def render_report(
     )
 
 
+def render_report_result(result: dict[str, Any]) -> str:
+    title = str(result.get("title") or "Goodomics Report")
+    insights = result.get("insights")
+    insight_items = insights if isinstance(insights, list) else []
+    payload_json = json.dumps(result, default=str)
+    return (
+        "<!doctype html>"
+        "<html><head>"
+        '<meta charset="utf-8">'
+        f"<title>{escape(title)}</title>"
+        "<style>"
+        "body{margin:0;font-family:Inter,system-ui,sans-serif;background:#f7f8fa;"
+        "color:#1d2430;}"
+        "main{padding:28px;}.report-grid{display:grid;"
+        "grid-template-columns:repeat(12,1fr);gap:16px;}"
+        ".insight{grid-column:span 6;min-height:260px;border:1px solid #dce3eb;"
+        "background:white;border-radius:8px;padding:16px;}"
+        ".insight-wide{grid-column:span 12;}h1{margin:0 0 8px;}"
+        "h2{margin:0 0 8px;font-size:18px;}"
+        "table{width:100%;border-collapse:collapse;font-size:13px;}"
+        "th,td{border-bottom:1px solid #e4eaf1;padding:8px;text-align:left;}"
+        ".metric-value{font-size:34px;font-weight:700;color:#16784a;}"
+        ".chart-fallback{overflow:auto;max-height:360px;}"
+        "</style>"
+        "</head><body>"
+        "<main>"
+        f"<h1>{escape(title)}</h1>"
+        f"<p>Computed {escape(str(result.get('computed_at') or ''))}</p>"
+        '<div class="report-grid">'
+        + "".join(_render_insight_block(item) for item in insight_items)
+        + "</div>"
+        "</main>"
+        "<script>window.goodomicsReport="
+        + payload_json.replace("</", "<\\/")
+        + ";</script>"
+        "<script>/* ECharts option payloads are embedded above. */</script>"
+        "</body></html>"
+    )
+
+
+def _render_insight_block(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    title = escape(str(result.get("title") or "Untitled insight"))
+    visualization = str(result.get("visualization") or "table")
+    class_name = "insight insight-wide" if visualization == "table" else "insight"
+    body = (
+        _render_metric(result)
+        if visualization in {"metric", "stat", "number"}
+        else _render_rows_table(result)
+    )
+    return f'<section class="{class_name}"><h2>{title}</h2>{body}</section>'
+
+
+def _render_metric(result: dict[str, Any]) -> str:
+    metric = result.get("metric")
+    metric_data = metric if isinstance(metric, dict) else {}
+    value = escape(str(metric_data.get("value") or "NA"))
+    label = escape(str(metric_data.get("label") or "Value"))
+    return f'<div class="metric-value">{value}</div><p>{label}</p>'
+
+
+def _render_rows_table(result: dict[str, Any]) -> str:
+    columns = result.get("columns")
+    rows = result.get("rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return "<p>No data.</p>"
+    header = "".join(f"<th>{escape(str(column))}</th>" for column in columns)
+    body = ""
+    for row in rows[:100]:
+        if not isinstance(row, dict):
+            continue
+        body += (
+            "<tr>"
+            + "".join(
+                f"<td>{escape(str(row.get(str(column), '')))}</td>"
+                for column in columns
+            )
+            + "</tr>"
+        )
+    return (
+        '<div class="chart-fallback">'
+        f"<table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>"
+        "</div>"
+    )
+
+
 def write_report(
     results: Path,
     out: Path,

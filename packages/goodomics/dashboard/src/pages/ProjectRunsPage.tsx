@@ -25,6 +25,7 @@ import { formatDate } from "../lib/utils";
 
 const RUNS_PAGE_SIZE = 50;
 
+/** Project-scoped runs page that frames the paginated run browser. */
 export function ProjectRunsPage({ projectId }: { projectId: string }) {
   const project = useQuery({
     queryKey: ["project", projectId],
@@ -40,6 +41,7 @@ export function ProjectRunsPage({ projectId }: { projectId: string }) {
   );
 }
 
+/** Fetches and paginates runs for a single project. */
 function RunsPanel({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(0);
   const offset = page * RUNS_PAGE_SIZE;
@@ -76,6 +78,7 @@ function RunsPanel({ projectId }: { projectId: string }) {
   );
 }
 
+/** Icon-based pagination controls for the project run table. */
 function PaginationControls({
   isLoading,
   offset,
@@ -155,6 +158,7 @@ function PaginationControls({
   );
 }
 
+/** Clickable table of project runs with links into run detail pages. */
 function RunsTable({
   projectId,
   runs,

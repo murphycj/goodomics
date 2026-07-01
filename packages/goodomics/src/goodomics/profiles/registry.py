@@ -6,7 +6,7 @@ from goodomics.schemas.models import DataProfile
 
 def built_in_profiles() -> dict[str, DataProfile]:
     # Aggregate source-owned providers into the central discovery surface used
-    # by compatibility imports, MCP/query tooling, and custom parser reuse.
+    # by MCP/query tooling, custom parser reuse, and public profile helpers.
     profiles: dict[str, DataProfile] = {}
     for provider in (cbioportal, multiqc, sdk):
         for data_profile in provider.profiles():

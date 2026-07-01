@@ -5,6 +5,7 @@ import type { GoodomicsProject } from "../../api";
 import { useSearch } from "../search/SearchProvider";
 import { ProjectSwitcherMenu } from "./ProjectSwitcherMenu";
 
+/** Fixed top bar with project switching, Ask AI, and global search controls. */
 export function AppHeader({
   askInset,
   project,

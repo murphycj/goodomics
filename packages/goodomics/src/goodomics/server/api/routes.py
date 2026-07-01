@@ -21,7 +21,7 @@ from goodomics.projects import (
     new_project_id,
     validate_project_slug,
 )
-from goodomics.report.html import render_report
+from goodomics.report.html import render_report, render_report_result
 from goodomics.schemas.models import Run, Sample
 from goodomics.server.ai import (
     AIProviderNotConfigured,
@@ -30,11 +30,16 @@ from goodomics.server.ai import (
 )
 from goodomics.server.db.models import (
     CohortRecord,
+    InsightRecord,
+    InsightResultCacheRecord,
+    InsightRevisionRecord,
     QCPolicyRecord,
+    RenderedReportRecord,
     ReportRecord,
-    ReportTemplateRecord,
-    ReportTemplateRevisionRecord,
+    ReportResultCacheRecord,
+    ReportRevisionRecord,
 )
+from goodomics.server.insights import execute_insight, execute_report
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
@@ -121,6 +126,7 @@ class ProjectPatch(SQLModel):
     name: str | None = None
     slug: str | None = None
     description: str | None = None
+    default_report_id: str | None = None
     metadata_json: dict[str, JsonValue] | None = None
 
 
@@ -129,10 +135,12 @@ class ProjectRead(SQLModel):
     slug: str | None = None
     name: str
     description: str | None = None
+    default_report_id: str | None = None
     metadata_json: dict[str, JsonValue]
     created_at: datetime
     run_count: int = 0
     sample_count: int = 0
+    subject_count: int = 0
     file_count: int = 0
     file_size_bytes: int = 0
     latest_activity_at: datetime | None = None
@@ -166,43 +174,91 @@ class FileRead(SQLModel):
     created_at: datetime | None = None
 
 
-class ReportTemplateBase(SQLModel):
+class SavedInsightBase(SQLModel):
     name: str
     description: str | None = None
     config: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ReportTemplateCreate(ReportTemplateBase):
-    template_id: str | None = None
+class SavedInsightCreate(SavedInsightBase):
+    insight_id: str | None = None
+    project_id: str | None = None
 
 
-class ReportTemplatePatch(SQLModel):
+class SavedInsightPatch(SQLModel):
     name: str | None = None
     description: str | None = None
     config: dict[str, JsonValue] | None = None
 
 
-class ReportTemplateRead(ReportTemplateBase):
-    template_id: str
+class SavedInsightRead(SavedInsightBase):
+    insight_id: str
+    project_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedReportBase(SQLModel):
+    name: str
+    description: str | None = None
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class SavedReportCreate(SavedReportBase):
+    report_id: str | None = None
+    project_id: str | None = None
+
+
+class SavedReportPatch(SQLModel):
+    name: str | None = None
+    description: str | None = None
+    config: dict[str, JsonValue] | None = None
+
+
+class SavedReportRead(SavedReportBase):
+    report_id: str
+    project_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class ReportRenderRequest(SQLModel):
     results: str = "."
+    rendered_report_id: str | None = None
     report_id: str | None = None
     run_id: str | None = None
-    template_id: str | None = None
+    project_id: str | None = None
     title: str = "Goodomics Report"
+    refresh: bool = False
 
 
-class ReportRead(SQLModel):
-    report_id: str
+class RenderedReportRead(SQLModel):
+    rendered_report_id: str
+    project_id: str | None = None
     run_id: str | None = None
-    template_id: str | None = None
+    report_id: str | None = None
     title: str
     html: str
     created_at: datetime
+
+
+class InsightExecuteRequest(SQLModel):
+    config: dict[str, JsonValue] | None = None
+    project_id: str | None = None
+    refresh: bool = False
+
+
+class ReportExecuteRequest(SQLModel):
+    project_id: str | None = None
+    refresh: bool = False
+
+
+class InsightResultRead(SQLModel):
+    result: dict[str, JsonValue]
+
+
+class ReportResultRead(SQLModel):
+    result: dict[str, JsonValue]
 
 
 class CohortCreate(SQLModel):
@@ -329,9 +385,13 @@ CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
     "sample_sets": (SampleSetRecord, "sample_set_id"),
     "sample_set_members": (SampleSetMemberRecord, "id"),
     "qc_decisions": (QCDecisionRecord, "id"),
-    "report_templates": (ReportTemplateRecord, "template_id"),
-    "report_template_revisions": (ReportTemplateRevisionRecord, "id"),
+    "insights": (InsightRecord, "insight_id"),
+    "insight_revisions": (InsightRevisionRecord, "id"),
     "reports": (ReportRecord, "report_id"),
+    "report_revisions": (ReportRevisionRecord, "id"),
+    "rendered_reports": (RenderedReportRecord, "rendered_report_id"),
+    "insight_result_cache": (InsightResultCacheRecord, "cache_id"),
+    "report_result_cache": (ReportResultCacheRecord, "cache_id"),
     "cohorts": (CohortRecord, "cohort_id"),
     "qc_policies": (QCPolicyRecord, "policy_id"),
 }
@@ -340,17 +400,18 @@ EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     "projects": (
         ProjectRecord,
         "project_id",
-        {"name", "slug", "description", "metadata_json"},
+        {"name", "slug", "description", "default_report_id", "metadata_json"},
     ),
     "runs": (RunRecord, "run_id", {"project", "assay"}),
     "samples": (SampleRecord, "sample_id", {"sample_name", "metadata_json"}),
     "files": (FileRecord, "file_id", {"file_role", "path", "uri", "metadata_json"}),
-    "report_templates": (
-        ReportTemplateRecord,
-        "template_id",
+    "insights": (
+        InsightRecord,
+        "insight_id",
         {"name", "description", "config"},
     ),
-    "reports": (ReportRecord, "report_id", {"title"}),
+    "reports": (ReportRecord, "report_id", {"name", "description", "config"}),
+    "rendered_reports": (RenderedReportRecord, "rendered_report_id", {"title"}),
     "cohorts": (CohortRecord, "cohort_id", {"name", "description", "filters"}),
     "qc_policies": (QCPolicyRecord, "policy_id", {"name", "thresholds"}),
 }
@@ -644,6 +705,15 @@ async def patch_project(
             row.name = str(values["name"]).strip() or row.name
         if "description" in values:
             row.description = values["description"]
+        if "default_report_id" in values:
+            default_report_id = values["default_report_id"]
+            if default_report_id is not None:
+                report = await session.get(ReportRecord, str(default_report_id))
+                if report is None or report.project_id not in {None, project_id}:
+                    raise HTTPException(
+                        status_code=404, detail="Default report not found"
+                    )
+            row.default_report_id = default_report_id
         if "metadata_json" in values and values["metadata_json"] is not None:
             row.metadata_json = json.loads(json.dumps(values["metadata_json"]))
         session.add(row)
@@ -961,139 +1031,355 @@ async def _file_content_response(
     return FileResponse(path)
 
 
-@router.get("/report-templates", response_model=list[ReportTemplateRead])
-async def list_report_templates(request: Request) -> list[ReportTemplateRead]:
+@router.get("/insights", response_model=list[SavedInsightRead])
+async def list_insights(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[SavedInsightRead]:
     await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
     async with _session(request) as session:
-        rows = (await session.exec(select(ReportTemplateRecord))).all()
-    return [_template_from_row(row) for row in rows]
+        statement = select(InsightRecord)
+        if project_id is not None:
+            statement = statement.where(InsightRecord.project_id == project_id)
+        rows = (await session.exec(statement)).all()
+    return [SavedInsightRead.model_validate(row.model_dump()) for row in rows]
 
 
-@router.post("/report-templates", response_model=ReportTemplateRead, status_code=201)
-async def create_report_template(
-    payload: ReportTemplateCreate, request: Request
-) -> ReportTemplateRead:
+@router.post("/insights", response_model=SavedInsightRead, status_code=201)
+async def create_insight(
+    payload: SavedInsightCreate, request: Request
+) -> SavedInsightRead:
     await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
-    template_id = payload.template_id or _new_id("template")
+    insight_id = payload.insight_id or _new_id("insight")
     async with _session(request) as session:
-        template = ReportTemplateRecord(
-            template_id=template_id,
+        insight = InsightRecord(
+            insight_id=insight_id,
+            project_id=payload.project_id,
             name=payload.name,
             description=payload.description,
             config=payload.config,
             created_at=now,
             updated_at=now,
         )
-        revision = ReportTemplateRevisionRecord(
-            template_id=template_id,
+        revision = InsightRevisionRecord(
+            insight_id=insight_id,
             config=payload.config,
             created_at=now,
         )
-        session.add(template)
+        session.add(insight)
         session.add(revision)
         await session.commit()
-    return await get_report_template(template_id, request)
+    return await get_insight(insight_id, request)
 
 
-@router.get("/report-templates/{template_id}", response_model=ReportTemplateRead)
-async def get_report_template(template_id: str, request: Request) -> ReportTemplateRead:
+@router.get("/insights/{insight_id}", response_model=SavedInsightRead)
+async def get_insight(insight_id: str, request: Request) -> SavedInsightRead:
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(ReportTemplateRecord, template_id)
+        row = await session.get(InsightRecord, insight_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Report template not found")
-    return _template_from_row(row)
+        raise HTTPException(status_code=404, detail="Insight not found")
+    return SavedInsightRead.model_validate(row.model_dump())
 
 
-@router.patch("/report-templates/{template_id}", response_model=ReportTemplateRead)
-async def patch_report_template(
-    template_id: str, payload: ReportTemplatePatch, request: Request
-) -> ReportTemplateRead:
+@router.patch("/insights/{insight_id}", response_model=SavedInsightRead)
+async def patch_insight(
+    insight_id: str, payload: SavedInsightPatch, request: Request
+) -> SavedInsightRead:
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session(request) as session:
-            template = await session.get(ReportTemplateRecord, template_id)
-            if template is None:
-                raise HTTPException(status_code=404, detail="Report template not found")
+            insight = await session.get(InsightRecord, insight_id)
+            if insight is None:
+                raise HTTPException(status_code=404, detail="Insight not found")
             updated_at = datetime.now(UTC)
             for key, value in values.items():
-                setattr(template, key, value)
-            template.updated_at = updated_at
-            session.add(template)
+                setattr(insight, key, value)
+            insight.updated_at = updated_at
+            session.add(insight)
             if "config" in values:
                 session.add(
-                    ReportTemplateRevisionRecord(
-                        template_id=template_id,
+                    InsightRevisionRecord(
+                        insight_id=insight_id,
                         config=values["config"],
                         created_at=updated_at,
                     )
                 )
             await session.commit()
-    return await get_report_template(template_id, request)
+    return await get_insight(insight_id, request)
 
 
-@router.get("/report-templates/{template_id}/export.yaml")
-async def export_report_template_yaml(template_id: str, request: Request) -> Response:
-    template = await get_report_template(template_id, request)
-    body = yaml.safe_dump(_template_export(template), sort_keys=False)
+@router.get("/insights/{insight_id}/export.yaml")
+async def export_insight_yaml(insight_id: str, request: Request) -> Response:
+    insight = await get_insight(insight_id, request)
+    body = yaml.safe_dump(_saved_insight_export(insight), sort_keys=False)
     return Response(content=body, media_type="application/yaml")
 
 
-@router.get("/report-templates/{template_id}/export.json")
-async def export_report_template_json(
-    template_id: str, request: Request
-) -> dict[str, Any]:
-    template = await get_report_template(template_id, request)
-    return _template_export(template)
+@router.get("/insights/{insight_id}/export.json")
+async def export_insight_json(insight_id: str, request: Request) -> dict[str, Any]:
+    insight = await get_insight(insight_id, request)
+    return _saved_insight_export(insight)
 
 
-@router.post("/reports/render", response_model=ReportRead, status_code=201)
+@router.post("/insights/execute", response_model=InsightResultRead)
+async def execute_adhoc_insight(
+    payload: InsightExecuteRequest, request: Request
+) -> InsightResultRead:
+    await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    analytics_store = _analytics_store_for_project(request, payload.project_id)
+    try:
+        async with _session(request) as session:
+            result = await execute_insight(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=payload.project_id,
+                config=payload.config or {},
+                refresh=payload.refresh,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return InsightResultRead(result=result)
+
+
+@router.post("/insights/{insight_id}/execute", response_model=InsightResultRead)
+async def execute_saved_insight(
+    insight_id: str,
+    payload: InsightExecuteRequest,
+    request: Request,
+) -> InsightResultRead:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        insight = await session.get(InsightRecord, insight_id)
+        if insight is None:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        project_id = payload.project_id or insight.project_id
+        if project_id is not None:
+            await _require_project(request, project_id)
+        analytics_store = _analytics_store_for_project(request, project_id)
+        try:
+            result = await execute_insight(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                insight=insight,
+                config=payload.config,
+                refresh=payload.refresh,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    return InsightResultRead(result=result)
+
+
+@router.get("/reports", response_model=list[SavedReportRead])
+async def list_reports(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[SavedReportRead]:
+    await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
+    async with _session(request) as session:
+        statement = select(ReportRecord)
+        if project_id is not None:
+            statement = statement.where(ReportRecord.project_id == project_id)
+        rows = (await session.exec(statement)).all()
+    return [SavedReportRead.model_validate(row.model_dump()) for row in rows]
+
+
+@router.post("/reports", response_model=SavedReportRead, status_code=201)
+async def create_report(
+    payload: SavedReportCreate, request: Request
+) -> SavedReportRead:
+    await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    now = datetime.now(UTC)
+    report_id = payload.report_id or _new_id("report")
+    async with _session(request) as session:
+        report = ReportRecord(
+            report_id=report_id,
+            project_id=payload.project_id,
+            name=payload.name,
+            description=payload.description,
+            config=payload.config,
+            created_at=now,
+            updated_at=now,
+        )
+        revision = ReportRevisionRecord(
+            report_id=report_id,
+            config=payload.config,
+            created_at=now,
+        )
+        session.add(report)
+        session.add(revision)
+        await session.commit()
+    return await get_saved_report(report_id, request)
+
+
+@router.post("/reports/render", response_model=RenderedReportRead, status_code=201)
 async def render_standalone_report(
     payload: ReportRenderRequest, request: Request
-) -> ReportRead:
+) -> RenderedReportRead:
     await _ensure_schema(request)
-    report_id = payload.report_id or _new_id("report")
-    html = render_report(payload.results, title=payload.title)
+    rendered_report_id = payload.rendered_report_id or _new_id("rendered_report")
     created_at = datetime.now(UTC)
-    values = ReportRecord(
-        report_id=report_id,
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    if payload.report_id is not None:
+        async with _session(request) as session:
+            report = await session.get(ReportRecord, payload.report_id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="Report not found")
+            project_id = payload.project_id or report.project_id
+            insights = await _report_insights(session, report)
+            analytics_store = _analytics_store_for_project(request, project_id)
+            result = await execute_report(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                report=report,
+                insights=insights,
+                refresh=payload.refresh,
+            )
+            html = render_report_result(result)
+            title = report.name
+    else:
+        project_id = payload.project_id
+        html = render_report(payload.results, title=payload.title)
+        title = payload.title
+    values = RenderedReportRecord(
+        rendered_report_id=rendered_report_id,
+        project_id=project_id,
         run_id=payload.run_id,
-        template_id=payload.template_id,
-        title=payload.title,
+        report_id=payload.report_id,
+        title=title,
         html=html,
         created_at=created_at,
     )
     async with _session(request) as session:
-        existing = await session.get(ReportRecord, report_id)
+        existing = await session.get(RenderedReportRecord, rendered_report_id)
         if existing is not None:
             await session.delete(existing)
         session.add(values)
         await session.commit()
-    return ReportRead(
-        report_id=report_id,
+    return RenderedReportRead(
+        rendered_report_id=rendered_report_id,
+        project_id=project_id,
         run_id=payload.run_id,
-        template_id=payload.template_id,
-        title=payload.title,
+        report_id=payload.report_id,
+        title=title,
         html=html,
         created_at=created_at,
     )
 
 
-@router.get("/reports/{report_id}", response_model=ReportRead)
-async def get_report(report_id: str, request: Request) -> ReportRead:
+@router.get("/reports/{report_id}", response_model=SavedReportRead)
+async def get_saved_report(report_id: str, request: Request) -> SavedReportRead:
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await session.get(ReportRecord, report_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    return ReportRead.model_validate(row.model_dump())
+    return SavedReportRead.model_validate(row.model_dump())
 
 
-@router.get("/reports/{report_id}/export.html")
-async def export_report_html(report_id: str, request: Request) -> Response:
-    report = await get_report(report_id, request)
+@router.patch("/reports/{report_id}", response_model=SavedReportRead)
+async def patch_report(
+    report_id: str, payload: SavedReportPatch, request: Request
+) -> SavedReportRead:
+    await _ensure_schema(request)
+    values = payload.model_dump(exclude_unset=True)
+    if values:
+        async with _session(request) as session:
+            report = await session.get(ReportRecord, report_id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="Report not found")
+            updated_at = datetime.now(UTC)
+            for key, value in values.items():
+                setattr(report, key, value)
+            report.updated_at = updated_at
+            session.add(report)
+            if "config" in values:
+                session.add(
+                    ReportRevisionRecord(
+                        report_id=report_id,
+                        config=values["config"],
+                        created_at=updated_at,
+                    )
+                )
+            await session.commit()
+    return await get_saved_report(report_id, request)
+
+
+@router.get("/reports/{report_id}/export.yaml")
+async def export_report_yaml(report_id: str, request: Request) -> Response:
+    report = await get_saved_report(report_id, request)
+    body = yaml.safe_dump(_saved_report_export(report), sort_keys=False)
+    return Response(content=body, media_type="application/yaml")
+
+
+@router.get("/reports/{report_id}/export.json")
+async def export_report_json(report_id: str, request: Request) -> dict[str, Any]:
+    report = await get_saved_report(report_id, request)
+    return _saved_report_export(report)
+
+
+@router.post("/reports/{report_id}/execute", response_model=ReportResultRead)
+async def execute_saved_report(
+    report_id: str,
+    payload: ReportExecuteRequest,
+    request: Request,
+) -> ReportResultRead:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        report = await session.get(ReportRecord, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        project_id = payload.project_id or report.project_id
+        if project_id is not None:
+            await _require_project(request, project_id)
+        insights = await _report_insights(session, report)
+        analytics_store = _analytics_store_for_project(request, project_id)
+        try:
+            result = await execute_report(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                report=report,
+                insights=insights,
+                refresh=payload.refresh,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    return ReportResultRead(result=result)
+
+
+@router.get("/rendered-reports/{rendered_report_id}", response_model=RenderedReportRead)
+async def get_rendered_report(
+    rendered_report_id: str, request: Request
+) -> RenderedReportRead:
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = await session.get(RenderedReportRecord, rendered_report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Rendered report not found")
+    return RenderedReportRead.model_validate(row.model_dump())
+
+
+@router.get("/rendered-reports/{rendered_report_id}/export.html")
+async def export_rendered_report_html(
+    rendered_report_id: str, request: Request
+) -> Response:
+    report = await get_rendered_report(rendered_report_id, request)
     return Response(content=report.html, media_type="text/html")
 
 
@@ -1381,6 +1667,15 @@ async def _project_read(
             )
         ).one()
     )
+    subject_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(SubjectRecord)
+                .where(SubjectRecord.project_id == row.id)
+            )
+        ).one()
+    )
     latest_activity_at = (
         await session.exec(
             select(func.max(RunRecord.created_at)).where(RunRecord.project_id == row.id)
@@ -1404,6 +1699,7 @@ async def _project_read(
         **data,
         run_count=run_count,
         sample_count=sample_count,
+        subject_count=subject_count,
         file_count=file_count,
         file_size_bytes=file_size_bytes,
         latest_activity_at=latest_activity_at,
@@ -1786,17 +2082,46 @@ def _payload_source_hash(metadata_json: dict[str, Any]) -> str | None:
     return source_hash if isinstance(source_hash, str) else None
 
 
-def _template_from_row(row: ReportTemplateRecord) -> ReportTemplateRead:
-    return ReportTemplateRead.model_validate(row.model_dump())
-
-
-def _template_export(template: ReportTemplateRead) -> dict[str, Any]:
+def _saved_insight_export(insight: SavedInsightRead) -> dict[str, Any]:
     return {
-        "template_id": template.template_id,
-        "name": template.name,
-        "description": template.description,
-        "config": template.config,
+        "insight_id": insight.insight_id,
+        "project_id": insight.project_id,
+        "name": insight.name,
+        "description": insight.description,
+        "config": insight.config,
     }
+
+
+def _saved_report_export(report: SavedReportRead) -> dict[str, Any]:
+    return {
+        "report_id": report.report_id,
+        "project_id": report.project_id,
+        "name": report.name,
+        "description": report.description,
+        "config": report.config,
+    }
+
+
+async def _report_insights(
+    session: AsyncSession, report: ReportRecord
+) -> list[InsightRecord]:
+    items = report.config.get("items") if isinstance(report.config, dict) else None
+    insight_ids: list[str] = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("insight_id"), str):
+                insight_ids.append(item["insight_id"])
+    if not insight_ids:
+        return []
+    rows = (
+        await session.exec(
+            select(InsightRecord).where(
+                cast(Any, InsightRecord.insight_id).in_(insight_ids)
+            )
+        )
+    ).all()
+    by_id = {row.insight_id: row for row in rows}
+    return [by_id[insight_id] for insight_id in insight_ids if insight_id in by_id]
 
 
 async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]:

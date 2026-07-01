@@ -4,6 +4,7 @@ import { cn } from "../../lib/utils";
 export interface InputProps
   extends React.InputHTMLAttributes<HTMLInputElement> {}
 
+/** Goodomics text input primitive with consistent focus and disabled styling. */
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, ...props }, ref) => (
     <input

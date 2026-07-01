@@ -20,6 +20,7 @@ type TranscriptMessage = AiMessage & {
   toolCalls?: AiToolEvidence[];
 };
 
+/** Resizable side panel for project-grounded AI questions and answers. */
 export function AskAiSidePanel({
   defaultProjectId,
   defaultProjectName,
@@ -198,6 +199,7 @@ export function AskAiSidePanel({
   );
 }
 
+/** Empty-state prompt list that seeds the Ask AI composer. */
 function ExampleList({
   examples,
   onExampleSelect,
@@ -228,6 +230,7 @@ function ExampleList({
   );
 }
 
+/** Message composer for the Ask AI side panel. */
 function ChatComposer({
   chatDraft,
   disabled,
@@ -271,6 +274,7 @@ function ChatComposer({
   );
 }
 
+/** Chat transcript bubble for user and assistant messages. */
 function ChatBubble({ message }: { message: TranscriptMessage }) {
   const isUser = message.role === "user";
   return (
@@ -312,6 +316,7 @@ function ChatBubble({ message }: { message: TranscriptMessage }) {
   );
 }
 
+/** Message renderer that turns markdown and entity references into links. */
 function MessageContent({
   content,
   toolCalls,
@@ -347,6 +352,7 @@ function MessageContent({
   );
 }
 
+/** Internal or external link used inside AI responses. */
 function ChatLink({ href, label }: { href: string; label: string }) {
   const encodedHref = href.replaceAll(" ", "%20");
   if (encodedHref.startsWith("/")) {
