@@ -10,11 +10,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from goodomics.data_profiles import cbioportal_data_profile_for_meta
 from goodomics.ingest.base import (
     AnalyticsBulkLoad,
     AnalyticsStagedLoad,
     NormalizedIngestResult,
+)
+from goodomics.profiles.cbioportal import (
+    profile_for_meta as cbioportal_data_profile_for_meta,
 )
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,

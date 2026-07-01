@@ -4,6 +4,7 @@ import asyncio
 import re
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,6 +16,7 @@ from goodomics.ingest.multiqc import ingest_multiqc
 from goodomics.projects import DEFAULT_PROJECT_ID, new_project_id
 from goodomics.server.ai import GoodomicsChatService, ProviderResponse, ProviderToolCall
 from goodomics.server.app import create_app
+from goodomics.server.insights import compile_insight_result
 from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import GoodomicsQueryTools
@@ -767,8 +769,8 @@ def test_run_analytics_and_file_content_endpoints(
         project_content = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['file_id']}/content"
         )
-        legacy_metrics = test_client.get("/api/v1/runs/run-1/metrics")
-        legacy_project_metrics = test_client.get(
+        removed_metrics = test_client.get("/api/v1/runs/run-1/metrics")
+        removed_project_metrics = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/metrics"
         )
 
@@ -831,8 +833,8 @@ def test_run_analytics_and_file_content_endpoints(
     assert "MultiQC" in content.text
     assert project_content.status_code == 200
     assert "MultiQC" in project_content.text
-    assert legacy_metrics.status_code == 404
-    assert legacy_project_metrics.status_code == 404
+    assert removed_metrics.status_code == 404
+    assert removed_project_metrics.status_code == 404
 
 
 def test_database_summary_reports_control_and_analytics_counts(
@@ -880,45 +882,137 @@ def test_server_default_database_matches_cli_local_state(
     assert Settings().database_url == DEFAULT_DATABASE_URL
 
 
-def test_report_template_round_trips_to_yaml_and_json(client: TestClient) -> None:
-    created = client.post(
-        "/api/v1/report-templates",
+def test_insight_and_report_round_trip_execute_and_cache(
+    client: TestClient,
+) -> None:
+    project = client.get("/api/v1/projects").json()[0]
+    project_id = project["project_id"]
+    created_run = client.post(
+        "/api/v1/runs",
+        json={"run_id": "report-run-1", "project_id": project_id, "assay": "rna"},
+    )
+    assert created_run.status_code == 201
+
+    insight_config = {
+        "version": 1,
+        "title": "Runs by kind",
+        "visualization": "bar",
+        "query": {
+            "source": {"store": "catalog", "table": "runs"},
+            "dimensions": ["run_kind"],
+            "measures": [{"field": "*", "aggregation": "count", "label": "Runs"}],
+        },
+    }
+    created_insight = client.post(
+        "/api/v1/insights",
         json={
-            "template_id": "rnaseq-qc",
-            "name": "RNA-seq QC",
-            "config": {"sections": ["summary", "metrics"]},
+            "insight_id": "runs-by-kind",
+            "project_id": project_id,
+            "name": "Runs by kind",
+            "config": insight_config,
         },
     )
+    assert created_insight.status_code == 201
 
-    assert created.status_code == 201
-    patched = client.patch(
-        "/api/v1/report-templates/rnaseq-qc",
-        json={"description": "Production RNA-seq QC"},
+    first_result = client.post(
+        "/api/v1/insights/runs-by-kind/execute",
+        json={"project_id": project_id},
     )
-    assert patched.status_code == 200
-    assert patched.json()["description"] == "Production RNA-seq QC"
+    assert first_result.status_code == 200
+    assert first_result.json()["result"]["cached"] is False
+    second_result = client.post(
+        "/api/v1/insights/runs-by-kind/execute",
+        json={"project_id": project_id},
+    )
+    assert second_result.status_code == 200
+    assert second_result.json()["result"]["cached"] is True
 
-    yaml_export = client.get("/api/v1/report-templates/rnaseq-qc/export.yaml")
+    created_report = client.post(
+        "/api/v1/reports",
+        json={
+            "report_id": "project-overview",
+            "project_id": project_id,
+            "name": "Project overview",
+            "config": {
+                "version": 1,
+                "items": [
+                    {"insight_id": "runs-by-kind", "x": 0, "y": 0, "w": 6, "h": 4}
+                ],
+            },
+        },
+    )
+    assert created_report.status_code == 201
+
+    yaml_export = client.get("/api/v1/reports/project-overview/export.yaml")
     assert yaml_export.status_code == 200
-    assert "template_id: rnaseq-qc" in yaml_export.text
+    assert "report_id: project-overview" in yaml_export.text
 
-    json_export = client.get("/api/v1/report-templates/rnaseq-qc/export.json")
-    assert json_export.status_code == 200
-    assert json_export.json()["config"] == {"sections": ["summary", "metrics"]}
+    report_result = client.post(
+        "/api/v1/reports/project-overview/execute",
+        json={"project_id": project_id, "refresh": True},
+    )
+    assert report_result.status_code == 200
+    assert report_result.json()["result"]["insights"][0]["insight_id"] == "runs-by-kind"
+
+    default_project = client.patch(
+        f"/api/v1/projects/{project_id}",
+        json={"default_report_id": "project-overview"},
+    )
+    assert default_project.status_code == 200
+    assert default_project.json()["default_report_id"] == "project-overview"
+
+    rejected = client.post(
+        "/api/v1/insights/execute",
+        json={
+            "project_id": project_id,
+            "config": {
+                "query": {
+                    "source": {"store": "catalog", "table": "runs"},
+                    "sql": "DELETE FROM runs",
+                }
+            },
+        },
+    )
+    assert rejected.status_code == 400
+
+
+def test_histogram_insight_compiles_numeric_bins() -> None:
+    result = compile_insight_result(
+        config={
+            "title": "Value distribution",
+            "visualization": "histogram",
+            "query": {"y": "value", "bins": 2},
+        },
+        columns=["value"],
+        rows=[
+            {"value": 1},
+            {"value": 2},
+            {"value": 3},
+            {"value": 4},
+        ],
+        insight_id="value-distribution",
+        computed_at=datetime.now(UTC),
+        cached=False,
+    )
+
+    assert result["visualization"] == "histogram"
+    assert result["echarts_options"]["xAxis"]["name"] == "value"
+    assert result["echarts_options"]["series"][0]["type"] == "bar"
+    assert result["echarts_options"]["series"][0]["data"] == [2, 2]
 
 
 def test_report_render_exports_standalone_html(client: TestClient) -> None:
     rendered = client.post(
         "/api/v1/reports/render",
         json={
-            "report_id": "report-1",
+            "rendered_report_id": "rendered-report-1",
             "results": "./examples/rnaseq",
             "title": "RNA report",
         },
     )
 
     assert rendered.status_code == 201
-    html_export = client.get("/api/v1/reports/report-1/export.html")
+    html_export = client.get("/api/v1/rendered-reports/rendered-report-1/export.html")
     assert html_export.status_code == 200
     assert "<h1>RNA report</h1>" in html_export.text
 

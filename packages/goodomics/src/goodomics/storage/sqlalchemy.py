@@ -87,6 +87,7 @@ class ProjectRecord(SQLModel, table=True):
     slug: str | None = Field(default=None, max_length=255, index=True)
     name: str = Field(max_length=255)
     description: str | None = None
+    default_report_id: str | None = Field(default=None, max_length=255)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
 
@@ -301,8 +302,8 @@ class SQLModelGoodomicsStore:
         return _project_from_row(row) if row is not None else None
 
     async def save_run(self, run: Run) -> None:
-        # Lightweight compatibility path for callers that only provide a Run
-        # with embedded samples. Rich ingest paths use replace_run_catalog().
+        # Lightweight save path for callers that provide a Run with embedded
+        # samples. Rich ingest paths use replace_run_catalog().
         await self.ensure_schema()
         project = await self.ensure_project(run.project_id or run.project)
         async with AsyncSession(self._get_engine()) as session:

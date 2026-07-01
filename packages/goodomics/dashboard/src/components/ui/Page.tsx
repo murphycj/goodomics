@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+/** Standard page heading wrapper used by non-canvas dashboard pages. */
 export function Page({
   title,
   subtitle,

@@ -32,8 +32,8 @@ Goodomics is useful in a few modes:
   dataframes, and notebook objects without writing a full plugin.
 - [Server](interfaces/server.md): run the optional FastAPI, MCP, database, and
   dashboard server.
-- [Dashboard](interfaces/dashboard.md): browse runs and edit report templates.
-- [Report templates](reports/report-templates.md): define portable report
+- [Dashboard](interfaces/dashboard.md): browse runs and edit reports and insights.
+- [Reports and insights](reports/report-templates.md): define portable report
   layouts for the CLI and dashboard.
 
 ## Trust boundary

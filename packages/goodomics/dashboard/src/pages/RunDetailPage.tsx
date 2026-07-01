@@ -49,6 +49,7 @@ import {
 
 const tabs = ["overview", "metrics", "payloads", "files"] as const;
 
+/** Run detail page with overview, metrics, payloads, and files. */
 export function RunDetailPage({
   projectId,
   runId,
@@ -129,6 +130,7 @@ export function RunDetailPage({
   );
 }
 
+/** Summary section for run identity and stored artifact counts. */
 function RunOverview({
   files,
   metrics,
@@ -162,6 +164,7 @@ function RunOverview({
   );
 }
 
+/** Searchable scalar metric table for a run. */
 function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
@@ -225,6 +228,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   );
 }
 
+/** Table payload list with an inline preview for selected payloads. */
 function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   const [selected, setSelected] = useState<AnalyticsPayload | null>(null);
   return (
@@ -268,6 +272,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   );
 }
 
+/** Snapshot preview of the first rows and columns in a table payload. */
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
   return (
@@ -306,6 +311,7 @@ function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   );
 }
 
+/** Stored file table with links to generated report artifacts. */
 function FilesTable({
   projectId,
   query,

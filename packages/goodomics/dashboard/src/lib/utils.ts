@@ -10,7 +10,18 @@ export function projectIdFromPath(pathname: string) {
   return pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;
 }
 
-export function formatDate(value: string) {
+/** Formats API timestamps as either full local datetimes or compact table dates. */
+export function formatDate(
+  value: string,
+  options: { style?: "date" | "datetime" } = {},
+) {
+  if (options.style === "date") {
+    return new Date(value).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
   return new Date(value).toLocaleString();
 }
 

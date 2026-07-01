@@ -7,7 +7,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from goodomics.data_profiles import GOODOMICS_SDK_METRICS, built_in_data_profile
+from goodomics.profiles.registry import built_in_data_profile
+from goodomics.profiles.sdk import GOODOMICS_SDK_METRICS
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,

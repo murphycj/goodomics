@@ -116,7 +116,7 @@ Reuse a built-in profile ID when your custom parser emits the same semantic
 contract as an existing Goodomics parser:
 
 ```python
-from goodomics.data_profiles import CBIOPORTAL_MUTATIONS_MAF
+from goodomics.profiles.cbioportal import CBIOPORTAL_MUTATIONS_MAF
 
 out.metric("variant_count", 12, sample_id="S1", profile=CBIOPORTAL_MUTATIONS_MAF)
 ```

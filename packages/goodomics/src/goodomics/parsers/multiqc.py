@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from goodomics.data_profiles import MULTIQC_METRICS, MULTIQC_PAYLOADS
+from goodomics.profiles.multiqc import MULTIQC_METRICS, MULTIQC_PAYLOADS
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     MetricDefinition,

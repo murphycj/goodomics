@@ -24,10 +24,12 @@ const projectSchema = z.object({
   slug: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
+  default_report_id: z.string().nullable(),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
   created_at: z.string(),
   run_count: z.number(),
   sample_count: z.number(),
+  subject_count: z.number(),
   file_count: z.number(),
   file_size_bytes: z.number(),
   latest_activity_at: z.string().nullable(),
@@ -152,13 +154,32 @@ const databaseTablePageSchema = z.object({
   sort_direction: z.enum(['asc', 'desc']).nullable(),
 });
 
-const templateSchema = z.object({
-  template_id: z.string(),
+const insightSchema = z.object({
+  insight_id: z.string(),
+  project_id: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
   config: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const reportSchema = z.object({
+  report_id: z.string(),
+  project_id: z.string().nullable(),
+  name: z.string(),
+  description: z.string().nullable(),
+  config: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const insightResultSchema = z.object({
+  result: z.record(z.string(), z.unknown()),
+});
+
+const reportResultSchema = z.object({
+  result: z.record(z.string(), z.unknown()),
 });
 
 const aiMessageSchema = z.object({
@@ -192,7 +213,10 @@ export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
 export type DatabaseSummary = z.infer<typeof databaseSummarySchema>;
 export type DatabaseTable = z.infer<typeof databaseTableSchema>;
 export type DatabaseTablePage = z.infer<typeof databaseTablePageSchema>;
-export type ReportTemplate = z.infer<typeof templateSchema>;
+export type SavedInsight = z.infer<typeof insightSchema>;
+export type SavedReport = z.infer<typeof reportSchema>;
+export type InsightResult = z.infer<typeof insightResultSchema>['result'];
+export type ReportResult = z.infer<typeof reportResultSchema>['result'];
 export type AiMessage = z.infer<typeof aiMessageSchema>;
 export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
 export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
@@ -295,6 +319,19 @@ export async function createProject(payload: {
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
+  return projectSchema.parse(await response.json());
+}
+
+export async function patchProject(
+  projectId: string,
+  payload: { default_report_id?: string | null; name?: string; description?: string | null },
+) {
+  const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
   return projectSchema.parse(await response.json());
 }
 
@@ -407,8 +444,127 @@ export function previewProjectDatabaseTable({
   );
 }
 
-export function listTemplates() {
-  return getJson('/api/v1/report-templates', z.array(templateSchema));
+export function listInsights(projectId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(`/api/v1/insights?${params.toString()}`, z.array(insightSchema));
+}
+
+export function getInsight(insightId: string) {
+  return getJson(`/api/v1/insights/${encodeURIComponent(insightId)}`, insightSchema);
+}
+
+export async function createInsight(payload: {
+  insight_id?: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  config: Record<string, unknown>;
+}) {
+  const response = await fetch('/api/v1/insights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return insightSchema.parse(await response.json());
+}
+
+export async function patchInsight(
+  insightId: string,
+  payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
+) {
+  const response = await fetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return insightSchema.parse(await response.json());
+}
+
+export async function executeInsight({
+  insightId,
+  projectId,
+  config,
+  refresh,
+}: {
+  insightId?: string;
+  projectId: string;
+  config?: Record<string, unknown>;
+  refresh?: boolean;
+}) {
+  const response = await fetch(
+    insightId
+      ? `/api/v1/insights/${encodeURIComponent(insightId)}/execute`
+      : '/api/v1/insights/execute',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        config,
+        refresh: Boolean(refresh),
+      }),
+    },
+  );
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return insightResultSchema.parse(await response.json()).result;
+}
+
+export function listReports(projectId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(`/api/v1/reports?${params.toString()}`, z.array(reportSchema));
+}
+
+export function getReport(reportId: string) {
+  return getJson(`/api/v1/reports/${encodeURIComponent(reportId)}`, reportSchema);
+}
+
+export async function createReport(payload: {
+  report_id?: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  config: Record<string, unknown>;
+}) {
+  const response = await fetch('/api/v1/reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return reportSchema.parse(await response.json());
+}
+
+export async function patchReport(
+  reportId: string,
+  payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
+) {
+  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return reportSchema.parse(await response.json());
+}
+
+export async function executeReport({
+  reportId,
+  projectId,
+  refresh,
+}: {
+  reportId: string;
+  projectId: string;
+  refresh?: boolean;
+}) {
+  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, refresh: Boolean(refresh) }),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return reportResultSchema.parse(await response.json()).result;
 }
 
 export function listNamedRows(path: string) {

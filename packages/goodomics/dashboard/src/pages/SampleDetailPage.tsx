@@ -56,6 +56,7 @@ import {
 
 const tabs = ["overview", "metrics", "payloads", "files"] as const;
 
+/** Sample detail page with run-scoped metrics, payloads, and files. */
 export function SampleDetailPage({
   projectId,
   sampleId,
@@ -182,6 +183,7 @@ export function SampleDetailPage({
   );
 }
 
+/** Select control for choosing which sample-associated run to inspect. */
 function RunSelector({
   onSelect,
   query,
@@ -216,6 +218,7 @@ function RunSelector({
   );
 }
 
+/** Summary section for sample identity and selected run artifact counts. */
 function SampleOverview({
   files,
   metrics,
@@ -257,6 +260,7 @@ function SampleOverview({
   );
 }
 
+/** Searchable scalar metric table for the selected sample run. */
 function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
@@ -320,6 +324,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   );
 }
 
+/** Table payload list for the selected sample run. */
 function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   const [selected, setSelected] = useState<AnalyticsPayload | null>(null);
   return (
@@ -363,6 +368,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   );
 }
 
+/** Snapshot preview of the first rows and columns in a sample payload. */
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
   return (
@@ -401,6 +407,7 @@ function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   );
 }
 
+/** Stored file table for the selected sample run. */
 function FilesTable({
   projectId,
   query,

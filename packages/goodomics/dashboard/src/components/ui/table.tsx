@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "../../lib/utils";
 
+/** Scrollable table frame with Goodomics border and shadow styling. */
 const TableWrap = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div
@@ -15,6 +16,7 @@ const TableWrap = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivE
 );
 TableWrap.displayName = "TableWrap";
 
+/** Base table element with a stable minimum width for data-heavy views. */
 const Table = React.forwardRef<
   HTMLTableElement,
   React.TableHTMLAttributes<HTMLTableElement>
@@ -27,6 +29,7 @@ const Table = React.forwardRef<
 ));
 Table.displayName = "Table";
 
+/** Table header section primitive. */
 const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
@@ -35,6 +38,7 @@ const TableHeader = React.forwardRef<
 ));
 TableHeader.displayName = "TableHeader";
 
+/** Table body section primitive. */
 const TableBody = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
@@ -43,6 +47,7 @@ const TableBody = React.forwardRef<
 ));
 TableBody.displayName = "TableBody";
 
+/** Table row primitive with hover and divider styling. */
 const TableRow = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
@@ -58,6 +63,7 @@ const TableRow = React.forwardRef<
 ));
 TableRow.displayName = "TableRow";
 
+/** Table column heading primitive. */
 const TableHead = React.forwardRef<
   HTMLTableCellElement,
   React.ThHTMLAttributes<HTMLTableCellElement>
@@ -73,6 +79,7 @@ const TableHead = React.forwardRef<
 ));
 TableHead.displayName = "TableHead";
 
+/** Table data cell primitive. */
 const TableCell = React.forwardRef<
   HTMLTableCellElement,
   React.TdHTMLAttributes<HTMLTableCellElement>

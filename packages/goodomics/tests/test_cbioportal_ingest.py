@@ -8,7 +8,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from fixtures import write_cbioportal_fixture
-from goodomics.data_profiles import (
+from goodomics.ingest.cbioportal import ingest_cbioportal_study
+from goodomics.parsers.cbioportal import parse_cbioportal_study
+from goodomics.profiles.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
@@ -17,8 +19,6 @@ from goodomics.data_profiles import (
     CBIOPORTAL_MUTATIONS_MAF,
     CBIOPORTAL_STRUCTURAL_VARIANTS,
 )
-from goodomics.ingest.cbioportal import ingest_cbioportal_study
-from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.schemas.models import (
     CopyNumberSegment,

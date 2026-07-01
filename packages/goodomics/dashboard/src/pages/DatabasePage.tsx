@@ -54,6 +54,7 @@ const COPY_FORMAT_LABELS = {
 } as const;
 type CopyFormat = keyof typeof COPY_FORMAT_LABELS;
 
+/** Project database browser for catalog and analytical tables. */
 export function DatabasePage({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<{ store: TableStore; name: string } | null>(
     null,
@@ -93,7 +94,14 @@ export function DatabasePage({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (selected !== null || tables.length === 0) return;
-    const firstPopulated = tables.find((table) => table.rows > 0) ?? tables[0];
+    const params = new URLSearchParams(window.location.search);
+    const requestedStore = params.get("store");
+    const requestedTable = params.get("table");
+    const requested = tables.find(
+      (table) =>
+        table.store === requestedStore && table.name === requestedTable,
+    );
+    const firstPopulated = requested ?? tables.find((table) => table.rows > 0) ?? tables[0];
     setSelected({ store: firstPopulated.store, name: firstPopulated.name });
   }, [selected, tables]);
 
@@ -420,6 +428,7 @@ function defaultColumnWidth(column: string) {
   return DEFAULT_COLUMN_WIDTH;
 }
 
+/** Small storage summary panel for the database sidebar. */
 function SummaryMetrics({
   query,
 }: {
@@ -477,6 +486,7 @@ function SummaryMetrics({
   );
 }
 
+/** Sidebar table navigator grouped by catalog and analytics stores. */
 function TableBrowser({
   tables,
   selected,
@@ -534,6 +544,7 @@ function TableBrowser({
   );
 }
 
+/** Data grid cell renderer that preserves nulls, booleans, and structured values. */
 function CellValue({ value }: { value: unknown }) {
   if (value === null || value === undefined) {
     return <span className="block w-full truncate text-left text-[#9aa5b5]">NULL</span>;
@@ -555,6 +566,7 @@ function CellValue({ value }: { value: unknown }) {
   return <span className="block w-full truncate text-left">{String(value)}</span>;
 }
 
+/** Slide-out panel for inspecting a full table cell value. */
 function CellPreviewPanel({
   isOpen,
   onClosed,

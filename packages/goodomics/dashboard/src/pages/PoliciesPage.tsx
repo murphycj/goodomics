@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listNamedRows } from "../api";
 import { GenericRows, Page } from "../components/ui";
 
+/** Simple QC policy registry page while policy editing is still pending. */
 export function PoliciesPage() {
   const policies = useQuery({
     queryKey: ["qc-policies"],

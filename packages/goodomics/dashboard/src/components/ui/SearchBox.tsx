@@ -1,5 +1,6 @@
 import { Search } from "lucide-react";
 
+/** Inline search input with a leading search icon. */
 export function SearchBox({
   onChange,
   placeholder,

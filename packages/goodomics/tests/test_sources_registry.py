@@ -111,7 +111,7 @@ def test_fake_entry_point_source_is_discovered(monkeypatch: pytest.MonkeyPatch) 
     assert get_source("external-demo").label == "External demo"
 
 
-def test_profile_providers_and_compatibility_facade() -> None:
+def test_profile_providers_cover_built_in_contracts() -> None:
     built_ins = {item.data_profile_id for item in all_built_in_data_profiles()}
 
     assert "multiqc:qc_metrics" in built_ins
@@ -132,7 +132,8 @@ def test_profile_providers_and_compatibility_facade() -> None:
     )
     assert custom.data_profile_id == "cbioportal:custom:unknown:weird_custom_profile"
 
-    from goodomics.data_profiles import MULTIQC_METRICS, built_in_data_profile
+    from goodomics.profiles.multiqc import MULTIQC_METRICS
+    from goodomics.profiles.registry import built_in_data_profile
 
     assert MULTIQC_METRICS == "multiqc:qc_metrics"
     assert built_in_data_profile(MULTIQC_METRICS).name
@@ -209,7 +210,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
 
 
 def test_custom_parser_reuses_builtin_profile_id(tmp_path: Path) -> None:
-    from goodomics.data_profiles import MULTIQC_METRICS
+    from goodomics.profiles.multiqc import MULTIQC_METRICS
 
     @parser(key="builtin-profile-parser", profiles=[MULTIQC_METRICS])
     def parse_metrics(path: object, out: ParserOutput) -> None:
