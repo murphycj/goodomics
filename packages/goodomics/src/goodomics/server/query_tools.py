@@ -15,6 +15,7 @@ from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
+    DataProfileFieldRecord,
     DataProfileRecord,
     FileLinkRecord,
     FileRecord,
@@ -27,22 +28,33 @@ from goodomics.storage.sqlalchemy import (
     get_record_by_field,
 )
 
+# This module is the "friendly read API" for agents and query tools. It bridges
+# the SQL catalog, which tracks projects/runs/samples/files/profiles, and the
+# DuckDB analytics store, which holds metric values and other analytical facts.
+# The public methods intentionally return compact dictionaries with dashboard
+# links and stable public IDs rather than raw SQLModel or DuckDB records.
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
 @dataclass(frozen=True)
 class QueryToolContext:
+    # Query tools are deliberately thin: settings locate project DuckDB files,
+    # while the SQLModel store opens catalog sessions.
     settings: Settings
     store: SQLModelGoodomicsStore
 
 
 class GoodomicsQueryTools:
+    # Read-only helper surface for AI/MCP-style calls. Methods return plain
+    # dictionaries so tool responses stay compact and JSON-native.
     def __init__(self, context: QueryToolContext) -> None:
         self.context = context
 
     async def list_projects(
         self, query: str | None = None, limit: int = 20
     ) -> dict[str, Any]:
+        # Start from the catalog project list, then apply lightweight in-memory
+        # filtering. Counts and dashboard links are added by _project_summary().
         projects = await self._all_projects()
         term = _normalize(query or "")
         if term:
@@ -58,12 +70,95 @@ class GoodomicsQueryTools:
             "projects": [await self._project_summary(project) for project in projects]
         }
 
+    async def list_data_profiles(
+        self,
+        project: str | None = None,
+        query: str | None = None,
+        limit: int = 20,
+        field_limit: int = 25,
+    ) -> dict[str, Any]:
+        # Project arguments may be IDs, slugs, or names. Resolve first so the
+        # SQL query can filter by the integer project primary key.
+        project_id, project_resolution = await self._optional_project_id(project)
+        if project is not None and project_id is None:
+            return project_resolution or {"profiles": []}
+
+        await self.context.store.ensure_schema()
+        term = _normalize(query or "")
+        async with self._session() as session:
+            project_pk: int | None = None
+            if project_id is not None:
+                project_row = await get_record_by_field(
+                    session, ProjectRecord, ProjectRecord.project_id, project_id
+                )
+                project_pk = project_row.id if project_row is not None else None
+            statement = select(DataProfileRecord)
+            if project_pk is not None:
+                # Profiles can be project-local or global built-ins; include both
+                # so agents can discover core contracts and imported project data.
+                statement = statement.where(
+                    (cast(Any, DataProfileRecord.project_id) == project_pk)
+                    | (cast(Any, DataProfileRecord.project_id).is_(None))
+                )
+            statement = statement.order_by(DataProfileRecord.name).limit(
+                _bounded_limit(limit)
+            )
+            profiles = list((await session.exec(statement)).all())
+            if term:
+                # The SQL query has already handled project visibility. This
+                # second pass keeps text search simple across a few profile
+                # descriptors without exposing raw SQL search syntax.
+                profiles = [
+                    profile
+                    for profile in profiles
+                    if term in _normalize(profile.name)
+                    or term in _normalize(profile.data_profile_id)
+                    or term in _normalize(profile.data_type)
+                ]
+            profile_ids = [profile.id for profile in profiles if profile.id is not None]
+            fields_by_profile: dict[int | None, list[DataProfileFieldRecord]] = {}
+            if profile_ids:
+                # Fetch fields in one query rather than one query per profile.
+                # Responses are capped per profile so wide schemas do not swamp
+                # an agent/tool response.
+                rows = (
+                    await session.exec(
+                        select(DataProfileFieldRecord)
+                        .where(
+                            cast(Any, DataProfileFieldRecord.data_profile_id).in_(
+                                profile_ids
+                            )
+                        )
+                        .order_by(
+                            DataProfileFieldRecord.field_role,
+                            DataProfileFieldRecord.field_id,
+                        )
+                    )
+                ).all()
+                bounded_fields = _bounded_limit(field_limit, maximum=100)
+                for row in rows:
+                    bucket = fields_by_profile.setdefault(row.data_profile_id, [])
+                    if len(bucket) < bounded_fields:
+                        bucket.append(row)
+            return {
+                "profiles": [
+                    _data_profile_payload(
+                        profile, fields_by_profile.get(profile.id, [])
+                    )
+                    for profile in profiles
+                ]
+            }
+
     async def resolve_project(self, reference: str, limit: int = 5) -> dict[str, Any]:
+        # Resolution returns status/candidates instead of raising. That lets
+        # callers surface ambiguity to users or agents in a structured way.
         reference = reference.strip()
         if not reference:
             return {"status": "not_found", "project": None, "candidates": []}
 
         projects = await self._all_projects()
+        # Exact stable IDs win first because project_id is the canonical public
+        # identifier used by API routes and generated dashboard links.
         for project in projects:
             if reference == project.project_id:
                 return {
@@ -72,6 +167,8 @@ class GoodomicsQueryTools:
                     "project": await self._project_summary(project),
                     "candidates": [],
                 }
+        # Slugs are user-facing aliases, so they are tried after project_id but
+        # before name and fuzzy matching.
         for project in projects:
             if reference == (project.slug or ""):
                 return {
@@ -81,6 +178,8 @@ class GoodomicsQueryTools:
                     "candidates": [],
                 }
 
+        # Normalize names before exact comparison so punctuation/case differences
+        # in a human-entered project name do not block a clear match.
         normalized_reference = _normalize(reference)
         normalized_name_matches = [
             project
@@ -104,6 +203,9 @@ class GoodomicsQueryTools:
                 ],
             }
 
+        # Fuzzy scoring is only used after exact ID, slug, and name matching
+        # fail. This avoids choosing a "near" name when the user supplied a
+        # precise but less human-readable identifier.
         candidates = sorted(
             (
                 (
@@ -118,6 +220,9 @@ class GoodomicsQueryTools:
             key=lambda item: item[0],
             reverse=True,
         )
+        # Fuzzy matching is intentionally conservative: a confident winner is
+        # auto-selected only when it is both high scoring and clearly separated
+        # from the next candidate.
         candidates = [item for item in candidates if item[0] >= 0.35][
             : _bounded_limit(limit)
         ]
@@ -144,6 +249,9 @@ class GoodomicsQueryTools:
         }
 
     async def get_project_summary(self, project: str) -> dict[str, Any]:
+        # Compose a quick orientation payload: project counts plus a small set of
+        # recent runs and sample examples. This is meant for "where am I?" agent
+        # answers, not exhaustive browsing.
         resolution = await self.resolve_project(project)
         project_id = _matched_project_id(resolution)
         if project_id is None:
@@ -163,6 +271,9 @@ class GoodomicsQueryTools:
     async def list_recent_runs(
         self, project: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
+        # Without a project argument this intentionally spans all projects. With
+        # a project argument, failed resolution is returned alongside an empty
+        # result so the caller can explain the issue.
         project_id, resolution = await self._optional_project_id(project)
         if resolution is not None and project_id is None:
             return {"project_resolution": resolution, "runs": []}
@@ -181,6 +292,8 @@ class GoodomicsQueryTools:
         assay: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        # Project-scoped run listing is stricter than list_recent_runs(): a
+        # project reference is required and must resolve cleanly.
         project_id, resolution = await self._required_project_id(project)
         if project_id is None:
             return {"project_resolution": resolution, "runs": []}
@@ -201,6 +314,8 @@ class GoodomicsQueryTools:
         query: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        # Samples live in the SQL catalog. Analytical rows in DuckDB reference
+        # them by integer ID, but tool callers work with stable sample_id labels.
         project_id, resolution = await self._required_project_id(project)
         if project_id is None:
             return {"project_resolution": resolution, "samples": []}
@@ -210,6 +325,8 @@ class GoodomicsQueryTools:
         statement = select(SampleRecord).where(SampleRecord.project_id == project_pk)
         term = (query or "").strip().lower()
         if term:
+            # Sample browsing supports simple substring search over the stable
+            # sample ID and optional display name.
             pattern = f"%{term}%"
             statement = statement.where(
                 (func.lower(SampleRecord.sample_id).like(pattern))
@@ -227,6 +344,9 @@ class GoodomicsQueryTools:
         }
 
     async def get_run(self, run_id: str, project: str | None = None) -> dict[str, Any]:
+        # The store-level get_run returns the public Run schema, including
+        # embedded samples. If a project is supplied, verify that the run belongs
+        # to it before returning data.
         run = await self.context.store.get_run(run_id)
         if run is None:
             return {"status": "not_found", "run": None}
@@ -248,6 +368,8 @@ class GoodomicsQueryTools:
     async def list_run_samples(
         self, run_id: str, project: str | None = None
     ) -> dict[str, Any]:
+        # Reuse get_run() for existence and optional project validation, then
+        # fetch the full run model so we can expose its embedded sample list.
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
         if not isinstance(run, dict):
@@ -268,6 +390,8 @@ class GoodomicsQueryTools:
         metric_query: str | None = None,
         limit: int = 30,
     ) -> dict[str, Any]:
+        # Metrics are stored in DuckDB, but run lookup starts in SQL so we can
+        # convert the public run_id label to the internal integer run primary key.
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
         if not isinstance(run, dict):
@@ -290,10 +414,12 @@ class GoodomicsQueryTools:
                 metrics = [
                     metric
                     for metric in metrics
-                    if term in str(metric.get("metric_id", "")).lower()
+                    if term in str(metric.get("field_id", "")).lower()
                     or term in str(metric.get("value", "")).lower()
                 ]
         except Exception:
+            # Tool calls should remain useful if the analytics store is missing
+            # or stale. Catalog-backed run details can still be returned.
             metrics = []
 
         bounded = _bounded_limit(limit)
@@ -309,6 +435,8 @@ class GoodomicsQueryTools:
         kind: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        # Files are catalog records with link rows that describe whether a file
+        # belongs to a run, sample, import, or data profile.
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
         if not isinstance(run, dict):
@@ -329,6 +457,8 @@ class GoodomicsQueryTools:
             .where(FileLinkRecord.run_id == run_row.id)
         )
         if kind:
+            # kind maps to FileRecord.file_role, e.g. "multiqc_report" or
+            # source-specific roles assigned by an ingest path.
             direct_statement = direct_statement.where(
                 func.lower(FileRecord.file_role) == kind.lower()
             )
@@ -336,6 +466,8 @@ class GoodomicsQueryTools:
         data_import_id = run.get("data_import_id")
         async with self._session() as session:
             rows: list[dict[str, Any]] = []
+            # Return direct run files first, then import-level source files that
+            # explain where imported-result runs came from.
             for file, link in (await session.exec(direct_statement)).all():
                 rows.append(
                     await _file_payload_public(
@@ -347,6 +479,8 @@ class GoodomicsQueryTools:
                     )
                 )
             if isinstance(data_import_id, str):
+                # Imported-result runs often inherit evidence from the import
+                # event rather than owning every source file directly.
                 data_import_row = await get_record_by_field(
                     session,
                     DataImportRecord,
@@ -393,6 +527,8 @@ class GoodomicsQueryTools:
         }
 
     async def _all_projects(self) -> list[ProjectRecord]:
+        # The default project is created lazily, so a project list call is safe
+        # even against a fresh local database.
         await self.context.store.ensure_default_project()
         async with self._session() as session:
             return list(
@@ -407,6 +543,8 @@ class GoodomicsQueryTools:
             )
 
     async def _get_project(self, project_id: str) -> ProjectRecord | None:
+        # Public methods pass stable project_id labels. Most SQL filters need
+        # the integer primary key stored on the ProjectRecord.
         await self.context.store.ensure_schema()
         async with self._session() as session:
             return await get_record_by_field(
@@ -414,6 +552,8 @@ class GoodomicsQueryTools:
             )
 
     async def _project_summary(self, project: ProjectRecord) -> dict[str, Any]:
+        # Project summaries calculate small aggregate counts on demand. That
+        # avoids keeping denormalized counters in sync during ingest/edit flows.
         async with self._session() as session:
             run_count = int(
                 (
@@ -474,6 +614,8 @@ class GoodomicsQueryTools:
     async def _project_candidate(
         self, project: ProjectRecord, reference: str, *, score: float | None = None
     ) -> dict[str, Any]:
+        # Ambiguous project matches still include full summaries so the caller
+        # has enough context to choose the intended project.
         payload = await self._project_summary(project)
         candidate_score = score
         if candidate_score is None:
@@ -496,6 +638,9 @@ class GoodomicsQueryTools:
         limit: int = 20,
         order_recent: bool = False,
     ) -> list[dict[str, Any]]:
+        # Shared run-list builder used by both global and project-scoped tools.
+        # It accepts public project IDs but filters RunRecord.project_id by SQL
+        # primary key.
         await self.context.store.ensure_schema()
         statement = select(RunRecord)
         if project_id is not None:
@@ -521,6 +666,8 @@ class GoodomicsQueryTools:
     async def _optional_project_id(
         self, project: str | None
     ) -> tuple[str | None, dict[str, Any] | None]:
+        # Optional project filters should not force the default project. Returning
+        # (None, None) means "query globally".
         if not project:
             return None, None
         return await self._required_project_id(project)
@@ -528,16 +675,22 @@ class GoodomicsQueryTools:
     async def _required_project_id(
         self, project: str
     ) -> tuple[str | None, dict[str, Any]]:
+        # Required project references preserve the full resolution payload so
+        # public methods can report ambiguous/not-found lookups.
         resolution = await self.resolve_project(project)
         return _matched_project_id(resolution), resolution
 
     def _session(self) -> AsyncSession:
+        # Sessions are short-lived and method-local; no query tool method relies
+        # on transaction state leaking into another tool call.
         return AsyncSession(self.context.store._get_engine())
 
     def _analytics_store(self, project_id: str | None) -> DuckDBAnalyticsStore:
         settings = self.context.settings
         if settings.analytics_path:
             return DuckDBAnalyticsStore(settings.analytics_path)
+        # In project mode each workspace has an isolated DuckDB file; callers
+        # without a project fall back to the default project analytics store.
         return DuckDBAnalyticsStore(
             analytics_path_for_project(
                 settings.analytics_root, project_id or DEFAULT_PROJECT_ID
@@ -546,6 +699,7 @@ class GoodomicsQueryTools:
 
 
 def _matched_project_id(resolution: dict[str, Any]) -> str | None:
+    # Extract the stable project_id only from successful resolution payloads.
     project = resolution.get("project")
     if isinstance(project, dict):
         project_id = project.get("project_id")
@@ -554,10 +708,14 @@ def _matched_project_id(resolution: dict[str, Any]) -> str | None:
 
 
 def _normalize(value: str) -> str:
+    # Normalize user-facing identifiers for forgiving matching. This deliberately
+    # removes punctuation so names, slugs, and typed phrases compare similarly.
     return "".join(character.lower() for character in value if character.isalnum())
 
 
 def _score(reference: str, candidate: str) -> float:
+    # Score is a blend of substring friendliness and SequenceMatcher similarity.
+    # It is used only for project disambiguation, not as a database filter.
     left = _normalize(reference)
     right = _normalize(candidate)
     if not left or not right:
@@ -570,12 +728,16 @@ def _score(reference: str, candidate: str) -> float:
 
 
 def _bounded_limit(limit: int, *, maximum: int = 50) -> int:
+    # Keep tool responses compact and prevent accidental huge catalog/analytics
+    # reads from being returned to an agent.
     return max(1, min(limit, maximum))
 
 
 async def _run_record_payload_public(
     session: AsyncSession, row: RunRecord
 ) -> dict[str, Any]:
+    # RunRecord stores project/import as integer foreign keys. Convert them to
+    # public labels before building the tool payload.
     project_id = await _public_label(
         session, ProjectRecord, "project_id", row.project_id
     )
@@ -607,6 +769,8 @@ async def _run_record_payload_public(
 
 
 def _run_payload(run: Any) -> dict[str, Any]:
+    # Public Run models already carry labels, so this helper only adds links and
+    # a lightweight sample count.
     payload = run.model_dump(mode="json", exclude={"samples"})
     app_path = _run_path(run.project_id, run.run_id)
     payload["app_path"] = app_path
@@ -620,6 +784,8 @@ def _run_payload(run: Any) -> dict[str, Any]:
 async def _sample_payload_public(
     session: AsyncSession, row: SampleRecord
 ) -> dict[str, Any]:
+    # SampleRecord uses integer foreign keys for project/subject; expose public
+    # labels in tool output.
     project_id = await _public_label(
         session, ProjectRecord, "project_id", row.project_id
     )
@@ -639,6 +805,8 @@ async def _sample_payload_public(
 
 
 def _sample_model_payload(sample: Any) -> dict[str, Any]:
+    # Samples embedded in public Run models are already label-based, unlike raw
+    # SampleRecord rows from SQL.
     payload = _sample_link_fields(
         project_id=sample.project_id,
         sample_id=sample.sample_id,
@@ -659,6 +827,8 @@ def _sample_link_fields(
     sample_id: str,
     sample_name: str | None,
 ) -> dict[str, Any]:
+    # Keep dashboard link fields consistent across sample-list and run-sample
+    # payloads.
     label = sample_name or sample_id
     app_path = _sample_path(project_id, sample_id)
     return {
@@ -671,16 +841,21 @@ def _sample_link_fields(
 
 
 def _project_path(project_id: str) -> str:
+    # quote(..., safe="") prevents slashes or spaces in source IDs from being
+    # interpreted as route separators.
     return f"/project/{quote(project_id, safe='')}"
 
 
 def _run_path(project_id: str | None, run_id: str) -> str | None:
+    # Some legacy/global run payloads may not have a project label; without it,
+    # the dashboard cannot build a project-scoped route.
     if project_id is None:
         return None
     return f"{_project_path(project_id)}/runs/{quote(run_id, safe='')}"
 
 
 def _sample_path(project_id: str | None, sample_id: str) -> str | None:
+    # Sample pages are project-scoped, so a missing project means no safe link.
     if project_id is None:
         return None
     return f"{_project_path(project_id)}/samples/{quote(sample_id, safe='')}"
@@ -693,6 +868,8 @@ def _file_payload(
     association_scope: str = "direct_run",
     association_reason: str | None = None,
 ) -> dict[str, Any]:
+    # This first pass preserves the raw link IDs. _file_payload_public() upgrades
+    # them to stable labels when a session is available.
     metadata_value = file.metadata_json
     metadata = metadata_value if isinstance(metadata_value, dict) else {}
     source_path = metadata.get("source_path")
@@ -732,6 +909,8 @@ async def _file_payload_public(
         association_scope=association_scope,
         association_reason=association_reason,
     )
+    # File links store SQL primary keys internally, but query tools should expose
+    # stable public labels because their output is read by users and agents.
     payload.update(
         {
             "project_id": await _public_label(
@@ -761,6 +940,9 @@ async def _public_label(
     label_name: str,
     identifier: int | None,
 ) -> str | None:
+    # Generic FK-to-label lookup used when turning catalog rows into tool
+    # payloads. Missing links are tolerated because older/local data may be
+    # partially populated.
     if identifier is None:
         return None
     row = await get_record_by_field(session, model, cast(Any, model).id, identifier)
@@ -771,6 +953,8 @@ async def _public_label(
 
 
 def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # A file can appear via both a direct run link and an import-level link.
+    # Keep the richest association for each file_id.
     by_file_id: dict[str, dict[str, Any]] = {}
     for file in files:
         file_id = file.get("file_id")
@@ -783,6 +967,8 @@ def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
+    # Direct associations are more specific than import-level associations, and
+    # profile-linked files are usually more informative than generic files.
     scope = file.get("association_scope")
     if not isinstance(scope, str):
         scope = ""
@@ -795,12 +981,60 @@ def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
 
 
 def _analytics_metric_payload(value: Any) -> dict[str, Any]:
+    # DuckDB metric rows are typed value records. Collapse the active value
+    # column into a single "value" key for simpler tool output.
     return {
         "run_id": value.run_id,
         "data_profile_id": value.data_profile_id,
         "run_sample_id": value.run_sample_id,
         "sample_id": value.sample_id,
-        "metric_id": value.metric_id,
-        "value": value.value,
+        "field_id": value.field_id,
+        "value_type": value.value_type,
+        "value": _sample_metric_value(value),
         "source_file_id": value.source_file_id,
+    }
+
+
+def _sample_metric_value(value: Any) -> JsonValue:
+    # SampleMetric stores exactly one typed value column depending on value_type.
+    if getattr(value, "value_type", None) == "numeric":
+        return value.value_numeric
+    if getattr(value, "value_type", None) == "json":
+        return value.value_json
+    return value.value_string
+
+
+def _data_profile_payload(
+    profile: DataProfileRecord,
+    fields: list[DataProfileFieldRecord],
+) -> dict[str, Any]:
+    # Data profiles are semantic query contracts. Include a bounded field list so
+    # agents can discover available measures without loading every raw row.
+    return {
+        "data_profile_id": profile.data_profile_id,
+        "name": profile.name,
+        "data_type": profile.data_type,
+        "assay": profile.assay,
+        "entity_grain": profile.entity_grain,
+        "value_semantics": profile.value_semantics,
+        "primary_table": profile.primary_table,
+        "summary": profile.summary_json,
+        "fields": [_data_profile_field_payload(field) for field in fields],
+    }
+
+
+def _data_profile_field_payload(field: DataProfileFieldRecord) -> dict[str, Any]:
+    # Field metadata explains how to query and display an individual metric or
+    # attribute within a profile.
+    return {
+        "field_id": field.field_id,
+        "field_role": field.field_role,
+        "entity_scope": field.entity_scope,
+        "display_name": field.display_name,
+        "value_type": field.value_type,
+        "unit": field.unit,
+        "direction": field.direction,
+        "description": field.description,
+        "summary": field.summary_json,
+        "query_ref": field.query_ref_json,
     }

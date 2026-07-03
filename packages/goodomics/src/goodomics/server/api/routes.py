@@ -43,6 +43,7 @@ from goodomics.server.insights import execute_insight, execute_report
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
+    DataProfileFieldRecord,
     DataProfileRecord,
     FileLinkRecord,
     FileRecord,
@@ -320,13 +321,47 @@ class DatabaseTablePageRead(SQLModel):
     sort_direction: str | None = None
 
 
+class DataProfileFieldRead(SQLModel):
+    field_id: str
+    field_role: str
+    entity_scope: str | None = None
+    display_name: str
+    value_type: str
+    unit: str | None = None
+    direction: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    query_ref: dict[str, JsonValue] = Field(default_factory=dict)
+    summary: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DataProfileRead(SQLModel):
+    data_profile_id: str
+    name: str
+    data_type: str
+    assay: str | None = None
+    entity_grain: str | None = None
+    value_semantics: str | None = None
+    primary_table: str | None = None
+    physical_tables: dict[str, JsonValue] = Field(default_factory=dict)
+    summary: dict[str, JsonValue] = Field(default_factory=dict)
+    last_profiled_at: datetime | None = None
+    source_fingerprint: str | None = None
+    query_modes: dict[str, JsonValue] = Field(default_factory=dict)
+    mcp_description: str | None = None
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+    fields: list[DataProfileFieldRead] = Field(default_factory=list)
+
+
 class AnalyticsMetricRead(SQLModel):
     run_id: int | str
     data_profile_id: int | str
     run_sample_id: int | str | None = None
     sample_id: int | str | None = None
-    metric_id: int | str
-    value: float | str
+    field_id: int | str
+    value_type: str
+    value: float | str | bool | dict[str, Any] | list[Any] | None = None
     source_file_id: int | str | None = None
 
 
@@ -380,6 +415,7 @@ CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
     "run_samples": (RunSampleRecord, "run_sample_id"),
     "data_imports": (DataImportRecord, "data_import_id"),
     "data_profiles": (DataProfileRecord, "data_profile_id"),
+    "data_profile_fields": (DataProfileFieldRecord, "id"),
     "files": (FileRecord, "file_id"),
     "file_links": (FileLinkRecord, "id"),
     "sample_sets": (SampleSetRecord, "sample_set_id"),
@@ -991,6 +1027,61 @@ async def list_run_analytics_payloads(
     return _analytics_payload_reads(analytics_store.list_profile_payloads(run.id))
 
 
+@router.get("/profiles", response_model=list[DataProfileRead])
+async def list_data_profiles(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[DataProfileRead]:
+    if project_id is not None:
+        await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        statement = select(DataProfileRecord)
+        if project_pk is not None:
+            statement = statement.where(
+                or_(
+                    cast(Any, DataProfileRecord.project_id).is_(None),
+                    cast(Any, DataProfileRecord.project_id) == project_pk,
+                )
+            )
+        statement = statement.order_by(DataProfileRecord.name)
+        profiles = list((await session.exec(statement)).all())
+        fields_by_profile = await _fields_by_profile(session, profiles)
+    return [
+        _data_profile_read(profile, fields_by_profile.get(profile.id, []))
+        for profile in profiles
+    ]
+
+
+@router.get("/profiles/{data_profile_id:path}", response_model=DataProfileRead)
+async def get_data_profile(
+    data_profile_id: str,
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> DataProfileRead:
+    if project_id is not None:
+        await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        statement = select(DataProfileRecord).where(
+            DataProfileRecord.data_profile_id == data_profile_id
+        )
+        if project_pk is not None:
+            statement = statement.where(
+                or_(
+                    cast(Any, DataProfileRecord.project_id).is_(None),
+                    cast(Any, DataProfileRecord.project_id) == project_pk,
+                )
+            )
+        profile = (await session.exec(statement)).first()
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Data profile not found")
+        fields_by_profile = await _fields_by_profile(session, [profile])
+    return _data_profile_read(profile, fields_by_profile.get(profile.id, []))
+
+
 @router.get("/files/{file_id}/content")
 async def get_file_content(file_id: str, request: Request) -> FileResponse:
     return await _file_content_response(file_id, request)
@@ -1484,8 +1575,7 @@ async def get_database_summary(
         file_size_bytes=_path_size(Path(request.app.state.settings.file_root)),
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
-        total_scalar_metrics=analytics_counts.get("sample_metric_numeric", 0)
-        + analytics_counts.get("sample_metric_string", 0),
+        total_scalar_metrics=analytics_counts.get("sample_metrics", 0),
         total_payloads=analytics_counts.get("profile_payloads", 0),
         control_tables=[
             TableCountRead(name=name, rows=count)
@@ -2014,12 +2104,21 @@ def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
             data_profile_id=metric.data_profile_id,
             run_sample_id=metric.run_sample_id,
             sample_id=metric.sample_id,
-            metric_id=metric.metric_id,
-            value=metric.value,
+            field_id=metric.field_id,
+            value_type=metric.value_type,
+            value=_sample_metric_value(metric),
             source_file_id=metric.source_file_id,
         )
         for metric in metrics
     ]
+
+
+def _sample_metric_value(metric: Any) -> JsonValue:
+    if getattr(metric, "value_type", None) == "numeric":
+        return metric.value_numeric
+    if getattr(metric, "value_type", None) == "json":
+        return metric.value_json
+    return metric.value_string
 
 
 def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
@@ -2374,6 +2473,140 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     if isinstance(row, SampleRecord) and "metadata_json" in data:
         data["metadata"] = data.pop("metadata_json")
     return data
+
+
+async def _fields_by_profile(
+    session: AsyncSession,
+    profiles: list[DataProfileRecord],
+) -> dict[int | None, list[DataProfileFieldRecord]]:
+    profile_ids = [profile.id for profile in profiles if profile.id is not None]
+    if not profile_ids:
+        return {}
+    rows = (
+        await session.exec(
+            select(DataProfileFieldRecord)
+            .where(cast(Any, DataProfileFieldRecord.data_profile_id).in_(profile_ids))
+            .order_by(
+                DataProfileFieldRecord.field_role, DataProfileFieldRecord.field_id
+            )
+        )
+    ).all()
+    grouped: dict[int | None, list[DataProfileFieldRecord]] = {}
+    for row in rows:
+        grouped.setdefault(row.data_profile_id, []).append(row)
+    return grouped
+
+
+def _data_profile_read(
+    profile: DataProfileRecord,
+    fields: list[DataProfileFieldRecord],
+) -> DataProfileRead:
+    field_reads = [_data_profile_field_read(field) for field in fields]
+    if not field_reads:
+        field_reads = _synthetic_profile_fields(profile)
+    return DataProfileRead(
+        data_profile_id=profile.data_profile_id,
+        name=profile.name,
+        data_type=profile.data_type,
+        assay=profile.assay,
+        entity_grain=profile.entity_grain,
+        value_semantics=profile.value_semantics,
+        primary_table=profile.primary_table,
+        physical_tables=dict(profile.physical_tables_json),
+        summary=dict(profile.summary_json),
+        last_profiled_at=profile.last_profiled_at,
+        source_fingerprint=profile.source_fingerprint,
+        query_modes=dict(profile.query_modes_json),
+        mcp_description=profile.mcp_description,
+        metadata_json=dict(profile.metadata_json),
+        fields=field_reads,
+    )
+
+
+def _synthetic_profile_fields(profile: DataProfileRecord) -> list[DataProfileFieldRead]:
+    fields = {
+        "feature_value_numeric": [
+            ("value", "measure", "Value", "numeric", "value"),
+        ],
+        "feature_call": [
+            ("call_code", "attribute", "Call code", "string", "call_code"),
+            ("call_rank", "measure", "Call rank", "numeric", "call_rank"),
+        ],
+        "copy_number_segments": [
+            ("segment_mean", "measure", "Segment mean", "numeric", "segment_mean"),
+            ("num_probes", "measure", "Number of probes", "numeric", "num_probes"),
+        ],
+        "sample_variant_calls": [
+            (
+                "allele_fraction",
+                "measure",
+                "Allele fraction",
+                "numeric",
+                "allele_fraction",
+            ),
+            ("genotype", "attribute", "Genotype", "string", "genotype"),
+            ("filter", "attribute", "Filter", "string", "filter"),
+        ],
+        "sample_structural_variant_calls": [
+            ("call_status", "attribute", "Call status", "string", "call_status"),
+            (
+                "split_read_count",
+                "measure",
+                "Split read count",
+                "numeric",
+                "split_read_count",
+            ),
+            (
+                "paired_end_read_count",
+                "measure",
+                "Paired-end read count",
+                "numeric",
+                "paired_end_read_count",
+            ),
+        ],
+        "profile_payloads": [
+            ("payload_kind", "attribute", "Payload kind", "string", "payload_kind"),
+            ("payload_name", "attribute", "Payload name", "string", "payload_name"),
+        ],
+    }.get(profile.primary_table or "", [])
+    return [
+        DataProfileFieldRead(
+            field_id=field_id,
+            field_role=field_role,
+            entity_scope=profile.entity_grain,
+            display_name=display_name,
+            value_type=value_type,
+            unit=profile.unit if value_type == "numeric" else None,
+            direction=None,
+            description=profile.mcp_description,
+            priority=None,
+            query_ref={
+                "table": profile.primary_table,
+                "value_column": value_column,
+                "synthetic": True,
+            },
+            summary=dict(profile.summary_json),
+            metadata_json={"synthetic": True},
+        )
+        for field_id, field_role, display_name, value_type, value_column in fields
+    ]
+
+
+def _data_profile_field_read(field: DataProfileFieldRecord) -> DataProfileFieldRead:
+    return DataProfileFieldRead(
+        field_id=field.field_id,
+        field_role=field.field_role,
+        entity_scope=field.entity_scope,
+        display_name=field.display_name,
+        value_type=field.value_type,
+        unit=field.unit,
+        direction=field.direction,
+        description=field.description,
+        priority=field.priority,
+        query_ref=dict(field.query_ref_json),
+        summary=dict(field.summary_json),
+        metadata_json=dict(field.metadata_json),
+    )
 
 
 async def _file_from_rows_public(

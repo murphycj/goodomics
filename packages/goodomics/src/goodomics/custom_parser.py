@@ -16,10 +16,10 @@ from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataImport,
     DataProfile,
+    DataProfileField,
     Feature,
     FileAsset,
     FileLink,
-    MetricDefinition,
     Run,
     RunSample,
     Sample,
@@ -75,6 +75,7 @@ class ParserOutput:
     data_profiles: dict[str, DataProfile] = field(default_factory=dict)
     samples: dict[str, Sample] = field(default_factory=dict)
     run_samples: dict[str, RunSample] = field(default_factory=dict)
+    data_profile_fields: dict[str, DataProfileField] = field(default_factory=dict)
     files: dict[str, FileAsset] = field(default_factory=dict)
     file_links: list[FileLink] = field(default_factory=list)
     batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
@@ -146,18 +147,16 @@ class ParserOutput:
     ) -> None:
         """Emit a sample-level or run-level metric.
 
-        Numeric values go to `sample_metric_numeric`; strings go to
-        `sample_metric_string`. When `sample_id` is omitted, the metric belongs
+        Numeric and string values go to unified `sample_metrics` rows. When
+        `sample_id` is omitted, the metric belongs
         to the run rather than a specific sample. When `profile` is omitted,
         Goodomics creates a default `user:<parser-key>:metrics` profile so simple
         metric-only parsers stay lightweight.
         """
         profile_id = self._profile_id(profile)
-        metric_id = f"{profile_id}:{name}"
+        field_id = f"{profile_id}:{name}"
         value_type = "numeric" if isinstance(value, int | float) else "string"
-        # Metric definitions are the metric catalog; metric observations below
-        # are the actual sample/run values stored in DuckDB.
-        self._add_metric_definition(metric_id, name, profile_id, value_type, unit)
+        self._add_metric_field(field_id, name, profile_id, value_type, unit)
         common = {
             "data_profile_id": profile_id,
             "run_id": self.run_id,
@@ -165,17 +164,25 @@ class ParserOutput:
                 self.run_sample_id(sample_id) if sample_id is not None else None
             ),
             "sample_id": sample_id,
-            "metric_id": metric_id,
+            "field_id": field_id,
         }
         if sample_id is not None:
             self.sample(sample_id)
         if value_type == "numeric":
-            self.batch.sample_metric_numeric.append(
-                UnresolvedAnalyticalRecord(**common, value=float(value))
+            self.batch.sample_metrics.append(
+                UnresolvedAnalyticalRecord(
+                    **common,
+                    value_type="numeric",
+                    value_numeric=float(value),
+                )
             )
         else:
-            self.batch.sample_metric_string.append(
-                UnresolvedAnalyticalRecord(**common, value=str(value))
+            self.batch.sample_metrics.append(
+                UnresolvedAnalyticalRecord(
+                    **common,
+                    value_type="string",
+                    value_string=str(value),
+                )
             )
 
     def feature_value(
@@ -186,7 +193,6 @@ class ParserOutput:
         value: float | int,
         profile: DataProfile | str,
         feature_type: str = "gene",
-        value_semantics: str = "value",
     ) -> None:
         """Emit a numeric value for a feature in one sample.
 
@@ -217,7 +223,6 @@ class ParserOutput:
                 sample_id=sample_id,
                 feature_id=feature_label,
                 value=float(value),
-                value_semantics=value_semantics,
             )
         )
 
@@ -382,6 +387,10 @@ class ParserOutput:
                 self.data_profiles.values(),
                 key=lambda data_profile: data_profile.data_profile_id,
             ),
+            data_profile_fields=sorted(
+                self.data_profile_fields.values(),
+                key=lambda field: (field.data_profile_id, field.field_id),
+            ),
             files=sorted(self.files.values(), key=lambda file: file.file_id),
             file_links=self.file_links,
             analytics_batch=self._deduped_batch(),
@@ -402,29 +411,34 @@ class ParserOutput:
             self.profile(_profile_from_id(value, self.parser_key))
         return value
 
-    def _add_metric_definition(
+    def _add_metric_field(
         self,
-        metric_id: str,
+        field_id: str,
         name: str,
         namespace: str,
         value_type: str,
         unit: str | None,
     ) -> None:
-        """Add one metric definition unless it is already staged."""
-        if any(
-            metric.metric_id == metric_id for metric in self.batch.metric_definitions
-        ):
+        """Add one profile field unless it is already staged."""
+        if field_id in self.data_profile_fields:
             return
-        self.batch.metric_definitions.append(
-            MetricDefinition(
-                metric_id=metric_id,
-                namespace=namespace,
-                metric_name=name,
-                display_name=name,
-                value_type="numeric" if value_type == "numeric" else "string",
-                unit=unit,
-                producer_tool=self.parser_key,
-            )
+        self.data_profile_fields[field_id] = DataProfileField(
+            data_profile_id=namespace,
+            field_id=field_id,
+            field_role="metric",
+            entity_scope="run_sample",
+            display_name=name,
+            value_type="numeric" if value_type == "numeric" else "string",
+            unit=unit,
+            query_ref_json={
+                "table": "sample_metrics",
+                "field_column": "field_id",
+                "field_value": field_id,
+                "value_column": (
+                    "value_numeric" if value_type == "numeric" else "value_string"
+                ),
+            },
+            metadata_json={"producer_tool": self.parser_key},
         )
 
     def _deduped_batch(self) -> AnalyticsIngestBatch:
@@ -501,6 +515,7 @@ class CustomParser:
                 samples=normalized.samples,
                 run_samples=normalized.run_samples,
                 data_profiles=normalized.data_profiles,
+                data_profile_fields=normalized.data_profile_fields,
                 files=normalized.files,
                 file_links=normalized.file_links,
             )
@@ -525,8 +540,7 @@ class CustomParser:
             data_import_id=data_import_id,
             samples_ingested=len(normalized.samples),
             profiles_ingested=len(normalized.data_profiles),
-            metrics_ingested=len(normalized.analytics_batch.sample_metric_numeric)
-            + len(normalized.analytics_batch.sample_metric_string),
+            metrics_ingested=len(normalized.analytics_batch.sample_metrics),
             feature_values_ingested=len(
                 normalized.analytics_batch.feature_value_numeric
             ),
