@@ -10,7 +10,7 @@ from typing import Any
 from goodomics.profiles.multiqc import MULTIQC_METRICS, MULTIQC_PAYLOADS
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    MetricDefinition,
+    DataProfileField,
     UnresolvedAnalyticalRecord,
 )
 
@@ -29,7 +29,7 @@ class MultiQCOutput:
 class MultiQCParseResult:
     sample_metric_numeric: list[Any] = field(default_factory=list)
     sample_metric_string: list[Any] = field(default_factory=list)
-    definitions: list[MetricDefinition] = field(default_factory=list)
+    fields: list[DataProfileField] = field(default_factory=list)
     payloads: list[Any] = field(default_factory=list)
     tool_versions: list[Any] = field(default_factory=list)
     data_sources: list[Any] = field(default_factory=list)
@@ -63,13 +63,15 @@ class MultiQCParseResult:
 
     def to_batch(self, *, run_id: str) -> AnalyticsIngestBatch:
         return AnalyticsIngestBatch(
-            metric_definitions=_dedupe_definitions(self.definitions),
-            sample_metric_numeric=self.sample_metric_numeric,
-            sample_metric_string=self.sample_metric_string,
+            sample_metrics=[*self.sample_metric_numeric, *self.sample_metric_string],
             profile_payloads=self.payloads,
             tool_versions=self.tool_versions,
             data_sources=self.data_sources,
         )
+
+    @property
+    def profile_fields(self) -> list[DataProfileField]:
+        return _dedupe_fields(self.fields)
 
 
 def parse_multiqc_bundle(path: Path, *, run_id: str) -> MultiQCParseResult:
@@ -176,6 +178,8 @@ def _parse_metric_table(
 ) -> None:
     rows = _read_tsv(path)
     source_hash = sha256_file(path)
+    fields: dict[str, DataProfileField] = {}
+    field_values: dict[str, list[Any]] = {}
     for row in rows:
         sample_id = _clean_text(row.get("Sample"))
         for column, raw_value in row.items():
@@ -194,8 +198,9 @@ def _parse_metric_table(
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
-                        metric_id=metric_id,
-                        value=value_num,
+                        field_id=metric_id,
+                        value_type="numeric",
+                        value_numeric=value_num,
                         source_file_id=str(path),
                     )
                 )
@@ -206,23 +211,48 @@ def _parse_metric_table(
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
-                        metric_id=metric_id,
-                        value=value_text or "",
+                        field_id=metric_id,
+                        value_type="string",
+                        value_string=value_text or "",
                         source_file_id=str(path),
                     )
                 )
-            result.definitions.append(
-                MetricDefinition(
-                    metric_id=metric_id,
-                    namespace=tool,
-                    metric_name=metric_id,
-                    display_name=display_name,
-                    value_type="numeric" if value_num is not None else "string",
-                    unit=None,
-                    producer_tool=tool,
-                    producer_module=module,
-                )
+            field_values.setdefault(metric_id, []).append(
+                value_num if value_num is not None else value_text
             )
+            if metric_id not in fields:
+                value_type = "numeric" if value_num is not None else "string"
+                fields[metric_id] = DataProfileField(
+                    data_profile_id=MULTIQC_METRICS_PROFILE,
+                    field_id=metric_id,
+                    field_role="metric",
+                    entity_scope="run_sample",
+                    display_name=display_name,
+                    value_type=value_type,
+                    unit=None,
+                    query_ref_json={
+                        "table": "sample_metrics",
+                        "field_column": "field_id",
+                        "field_value": metric_id,
+                        "value_column": (
+                            "value_numeric"
+                            if value_type == "numeric"
+                            else "value_string"
+                        ),
+                    },
+                    metadata_json={"producer_tool": tool, "producer_module": module},
+                )
+    for metric_id, profile_field in fields.items():
+        result.fields.append(
+            profile_field.model_copy(
+                update={
+                    "summary_json": _field_summary(
+                        profile_field.value_type,
+                        field_values.get(metric_id, []),
+                    )
+                }
+            )
+        )
     if rows:
         result.payloads.append(
             UnresolvedAnalyticalRecord(
@@ -426,10 +456,60 @@ def _record_value(record: Any, key: str) -> Any:
     return getattr(record, key, None)
 
 
-def _dedupe_definitions(
-    definitions: list[MetricDefinition],
-) -> list[MetricDefinition]:
-    by_id: dict[tuple[str, str], MetricDefinition] = {}
-    for definition in definitions:
-        by_id[(definition.metric_id, definition.value_type)] = definition
+def _field_summary(
+    value_type: str, values: list[Any], *, cap: int = 100
+) -> dict[str, Any]:
+    present = [value for value in values if value is not None]
+    summary: dict[str, Any] = {
+        "count": len(values),
+        "non_null_count": len(present),
+        "null_count": len(values) - len(present),
+    }
+    if value_type == "numeric":
+        numeric = sorted(
+            float(value)
+            for value in present
+            if isinstance(value, int | float) and not isinstance(value, bool)
+        )
+        if numeric:
+            summary.update(
+                {
+                    "min": numeric[0],
+                    "max": numeric[-1],
+                    "mean": sum(numeric) / len(numeric),
+                    "median": _quantile(numeric, 0.5),
+                    "q05": _quantile(numeric, 0.05),
+                    "q95": _quantile(numeric, 0.95),
+                }
+            )
+        return summary
+    counts: dict[str, int] = {}
+    for value in present:
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    summary["distinct_count"] = len(counts)
+    summary["top_values"] = [
+        {"value": value, "count": count}
+        for value, count in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0])
+        )[:cap]
+    ]
+    summary["examples"] = list(dict.fromkeys(str(value) for value in present))[:cap]
+    return summary
+
+
+def _quantile(values: list[float], q: float) -> float:
+    if len(values) == 1:
+        return values[0]
+    position = (len(values) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    weight = position - lower
+    return values[lower] * (1 - weight) + values[upper] * weight
+
+
+def _dedupe_fields(fields: list[DataProfileField]) -> list[DataProfileField]:
+    by_id: dict[tuple[str, str], DataProfileField] = {}
+    for profile_field in fields:
+        by_id[(profile_field.field_id, profile_field.value_type)] = profile_field
     return list(by_id.values())

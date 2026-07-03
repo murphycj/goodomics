@@ -252,6 +252,7 @@ def _save_multiqc_parse_result(
                 built_in_data_profile(MULTIQC_METRICS),
                 built_in_data_profile(MULTIQC_PAYLOADS),
             ],
+            data_profile_fields=parsed.profile_fields,
             files=files,
             file_links=file_links,
         )
