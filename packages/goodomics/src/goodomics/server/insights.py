@@ -476,7 +476,9 @@ async def _compile_profile_query(
         dimension = (
             "run_sample_id"
             if table == "sample_metrics" and entity != "sample"
-            else "sample_id" if table == "sample_metrics" else "entity_id"
+            else "sample_id"
+            if table == "sample_metrics"
+            else "entity_id"
         )
         parameters: list[Any] = []
         select_parts = [
