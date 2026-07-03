@@ -3,11 +3,16 @@ import { X } from "lucide-react";
 import * as React from "react";
 import { cn } from "../../lib/utils";
 
+/** Radix dialog root re-export for Goodomics modal composition. */
 const Dialog = DialogPrimitive.Root;
+/** Radix dialog trigger re-export for opening Goodomics modals. */
 const DialogTrigger = DialogPrimitive.Trigger;
+/** Radix dialog portal re-export for modal layering. */
 const DialogPortal = DialogPrimitive.Portal;
+/** Radix dialog close re-export for close controls. */
 const DialogClose = DialogPrimitive.Close;
 
+/** Modal backdrop with Goodomics overlay styling. */
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -30,6 +35,7 @@ type DialogContentProps = React.ComponentPropsWithoutRef<
   showCloseButton?: boolean;
 };
 
+/** Centered modal content wrapper with optional built-in close button. */
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
@@ -66,6 +72,7 @@ const DialogContent = React.forwardRef<
 );
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+/** Vertical dialog header used for titles and short explanatory text. */
 const DialogHeader = ({
   className,
   ...props
@@ -74,6 +81,7 @@ const DialogHeader = ({
 );
 DialogHeader.displayName = "DialogHeader";
 
+/** Right-aligned dialog footer for primary and secondary actions. */
 const DialogFooter = ({
   className,
   ...props
@@ -85,6 +93,7 @@ const DialogFooter = ({
 );
 DialogFooter.displayName = "DialogFooter";
 
+/** Dialog title primitive with Goodomics heading typography. */
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>

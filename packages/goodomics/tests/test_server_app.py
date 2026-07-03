@@ -4,17 +4,27 @@ import asyncio
 import re
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 import goodomics.server.app as server_app
 import pytest
 from fastapi.testclient import TestClient
-from fixtures import write_multiqc_fixture
+from fixtures import write_cbioportal_fixture, write_multiqc_fixture
+from goodomics.ingest.cbioportal import ingest_cbioportal_study
 from goodomics.ingest.multiqc import ingest_multiqc
+from goodomics.profiles.cbioportal import (
+    CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
+    CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
+    CBIOPORTAL_COPY_NUMBER_SEGMENTS,
+    CBIOPORTAL_GENE_PANEL_MATRIX,
+    CBIOPORTAL_MUTATIONS_MAF,
+)
 from goodomics.projects import DEFAULT_PROJECT_ID, new_project_id
 from goodomics.server.ai import GoodomicsChatService, ProviderResponse, ProviderToolCall
 from goodomics.server.app import create_app
+from goodomics.server.insights import compile_insight_result
 from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import GoodomicsQueryTools
@@ -22,6 +32,7 @@ from goodomics.server.settings import Settings
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataProfileFieldRecord,
     RunSampleRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
@@ -75,6 +86,23 @@ def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
                 await session.exec(
                     select(RunSampleRecord).where(
                         RunSampleRecord.run_sample_id == run_sample_id
+                    )
+                )
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _field_pk(database_url: str, field_id: str) -> int:
+    async def load() -> int:
+        store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(DataProfileFieldRecord).where(
+                        DataProfileFieldRecord.field_id == field_id
                     )
                 )
             ).one()
@@ -751,40 +779,34 @@ def test_run_analytics_and_file_content_endpoints(
             },
         )
         metric_preview = test_client.get(
-            "/api/v1/database/analytics/tables/sample_metric_numeric/rows",
+            "/api/v1/database/analytics/tables/sample_metrics/rows",
             params={
                 "project_id": DEFAULT_PROJECT_ID,
                 "limit": 2,
-                "sort_by": "metric_id",
+                "sort_by": "field_id",
                 "sort_direction": "asc",
             },
         )
         bad_preview = test_client.get(
-            "/api/v1/database/analytics/tables/sample_metric_numeric/rows",
+            "/api/v1/database/analytics/tables/sample_metrics/rows",
             params={"sort_by": "missing_column"},
         )
         content = test_client.get(f"/api/v1/files/{report['file_id']}/content")
         project_content = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/files/{report['file_id']}/content"
         )
-        legacy_metrics = test_client.get("/api/v1/runs/run-1/metrics")
-        legacy_project_metrics = test_client.get(
+        removed_metrics = test_client.get("/api/v1/runs/run-1/metrics")
+        removed_project_metrics = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/metrics"
         )
 
     assert metrics.status_code == 200
-    with DuckDBAnalyticsStore(analytics_path)._connect() as connection:
-        percent_mapped_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'general_stats.salmon_percent_mapped'
-            """
-        ).fetchone()
-        percent_mapped_metric_id = _scalar(percent_mapped_metric_id)
-        s1_sample_id = _sample_pk(database_url, "S1")
-        s1_run_sample_id = _run_sample_pk(database_url, "run-1:S1")
-    assert any(item["metric_id"] == percent_mapped_metric_id for item in metrics.json())
+    percent_mapped_field_id = _field_pk(
+        database_url, "general_stats.salmon_percent_mapped"
+    )
+    s1_sample_id = _sample_pk(database_url, "S1")
+    s1_run_sample_id = _run_sample_pk(database_url, "run-1:S1")
+    assert any(item["field_id"] == percent_mapped_field_id for item in metrics.json())
     assert payloads.status_code == 200
     assert any(item["payload_name"] == "salmon_plot" for item in payloads.json())
     assert project_metrics.status_code == 200
@@ -814,7 +836,7 @@ def test_run_analytics_and_file_content_endpoints(
         for table in tables
     )
     assert any(
-        table["store"] == "analytics" and table["name"] == "sample_metric_numeric"
+        table["store"] == "analytics" and table["name"] == "sample_metrics"
         for table in tables
     )
     assert "file_id" in file_rows[0]
@@ -825,14 +847,14 @@ def test_run_analytics_and_file_content_endpoints(
     assert metric_preview.status_code == 200
     assert metric_preview.json()["columns"]
     assert len(metric_preview.json()["rows"]) == 2
-    assert metric_preview.json()["sort_by"] == "metric_id"
+    assert metric_preview.json()["sort_by"] == "field_id"
     assert bad_preview.status_code == 400
     assert content.status_code == 200
     assert "MultiQC" in content.text
     assert project_content.status_code == 200
     assert "MultiQC" in project_content.text
-    assert legacy_metrics.status_code == 404
-    assert legacy_project_metrics.status_code == 404
+    assert removed_metrics.status_code == 404
+    assert removed_project_metrics.status_code == 404
 
 
 def test_database_summary_reports_control_and_analytics_counts(
@@ -866,6 +888,215 @@ def test_database_summary_reports_control_and_analytics_counts(
     assert body["total_payloads"] > 0
 
 
+def test_profile_browser_and_profile_first_insight_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+    file_root = tmp_path / "state" / "files"
+    ingest_multiqc(
+        write_multiqc_fixture(tmp_path / "results"),
+        run_id="run-1",
+        project="demo",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+    monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
+    monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
+    monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
+
+    with TestClient(create_app()) as test_client:
+        profiles = test_client.get(
+            "/api/v1/profiles",
+        )
+        profile = test_client.get(
+            "/api/v1/profiles/multiqc:qc_metrics",
+        )
+        result = test_client.post(
+            "/api/v1/insights/execute",
+            json={
+                "refresh": True,
+                "config": {
+                    "title": "Average mapping",
+                    "visualization": "table",
+                    "query": {
+                        "source": {
+                            "kind": "data_profile",
+                            "data_profile_id": "multiqc:qc_metrics",
+                        },
+                        "fields": ["general_stats.salmon_percent_mapped"],
+                        "entity": "run_sample",
+                        "measures": [
+                            {
+                                "field": "general_stats.salmon_percent_mapped",
+                                "aggregation": "avg",
+                                "label": "Average mapped",
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+    assert profiles.status_code == 200
+    assert any(
+        item["data_profile_id"] == "multiqc:qc_metrics" for item in profiles.json()
+    )
+    assert profile.status_code == 200
+    field = next(
+        item
+        for item in profile.json()["fields"]
+        if item["field_id"] == "general_stats.salmon_percent_mapped"
+    )
+    assert field["value_type"] == "numeric"
+    assert field["summary"]["non_null_count"] > 0
+    assert result.status_code == 200
+    rows = result.json()["result"]["rows"]
+    assert rows
+    assert result.json()["result"]["columns"] == ["run_sample_id", "average_mapped"]
+
+
+def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+    file_root = tmp_path / "state" / "files"
+    ingest_cbioportal_study(
+        write_cbioportal_fixture(tmp_path / "study"),
+        data_import_id="run-cbio",
+        project="demo",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+    sex_field_pk = _field_pk(database_url, "subject:sex")
+    with DuckDBAnalyticsStore(analytics_path)._connect() as connection:
+        connection.execute(
+            "DELETE FROM dim_fields WHERE field_label = ?", ["subject:sex"]
+        )
+        connection.execute(
+            "INSERT INTO dim_fields (field_id, field_label) VALUES (?, ?)",
+            [900001, "subject:sex"],
+        )
+        connection.execute(
+            "UPDATE entity_attributes SET field_id = ? WHERE field_id = ?",
+            [900001, sex_field_pk],
+        )
+    monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
+    monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
+    monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
+
+    with TestClient(create_app()) as test_client:
+        project_id = test_client.get("/api/v1/projects").json()[0]["project_id"]
+        profiles = {
+            profile_id: test_client.get(f"/api/v1/profiles/{profile_id}")
+            for profile_id in [
+                CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
+                CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
+                CBIOPORTAL_COPY_NUMBER_SEGMENTS,
+                CBIOPORTAL_GENE_PANEL_MATRIX,
+                CBIOPORTAL_MUTATIONS_MAF,
+            ]
+        }
+        result = test_client.post(
+            "/api/v1/insights/execute",
+            json={
+                "project_id": project_id,
+                "refresh": True,
+                "config": {
+                    "title": "Patients by sex",
+                    "visualization": "pie",
+                    "query": {
+                        "source": {
+                            "kind": "data_profile",
+                            "data_profile_id": CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
+                        },
+                        "fields": ["subject:sex"],
+                        "dimensions": ["subject_sex"],
+                        "measures": [
+                            {
+                                "field": "*",
+                                "aggregation": "count",
+                                "label": "Count",
+                            }
+                        ],
+                    },
+                    "display": {
+                        "colors": {
+                            "subject:sex": "#7c3aed",
+                            "subject_sex": "#7c3aed",
+                            "sex": "#7c3aed",
+                        }
+                    },
+                },
+            },
+        )
+        genotype_bar = test_client.post(
+            "/api/v1/insights/execute",
+            json={
+                "project_id": project_id,
+                "refresh": True,
+                "config": {
+                    "title": "Mutations by genotype",
+                    "visualization": "bar",
+                    "query": {
+                        "source": {
+                            "kind": "data_profile",
+                            "data_profile_id": CBIOPORTAL_MUTATIONS_MAF,
+                        },
+                        "fields": ["genotype"],
+                        "dimensions": ["genotype"],
+                        "measures": [
+                            {
+                                "field": "*",
+                                "aggregation": "count",
+                                "label": "Count",
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert all(response.status_code == 200 for response in profiles.values())
+    assert any(
+        field["field_id"] == "subject:sex"
+        for field in profiles[CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES].json()["fields"]
+    )
+    assert any(
+        field["field_id"] == "call_code"
+        for field in profiles[CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS].json()["fields"]
+    )
+    assert any(
+        field["field_id"] == "segment_mean"
+        for field in profiles[CBIOPORTAL_COPY_NUMBER_SEGMENTS].json()["fields"]
+    )
+    assert any(
+        field["field_id"] == "payload_kind"
+        for field in profiles[CBIOPORTAL_GENE_PANEL_MATRIX].json()["fields"]
+    )
+    assert any(
+        field["field_id"] == "allele_fraction"
+        for field in profiles[CBIOPORTAL_MUTATIONS_MAF].json()["fields"]
+    )
+    assert result.status_code == 200
+    body = result.json()["result"]
+    assert body["columns"] == ["subject_sex", "count"]
+    assert {row["subject_sex"] for row in body["rows"]} == {"Female", "Male"}
+    pie_series = body["echarts_options"]["series"][0]
+    assert "itemStyle" not in pie_series
+    slice_colors = [
+        item["itemStyle"]["color"] for item in pie_series["data"] if "itemStyle" in item
+    ]
+    assert len(slice_colors) == 2
+    assert len(set(slice_colors)) == 2
+    assert genotype_bar.status_code == 200
+    genotype_body = genotype_bar.json()["result"]
+    assert genotype_body["columns"] == ["genotype", "count"]
+    assert genotype_body["rows"] == [{"genotype": "SOMATIC", "count": 1}]
+
+
 def test_missing_file_content_returns_404(client: TestClient) -> None:
     response = client.get("/api/v1/files/missing/content")
 
@@ -880,45 +1111,173 @@ def test_server_default_database_matches_cli_local_state(
     assert Settings().database_url == DEFAULT_DATABASE_URL
 
 
-def test_report_template_round_trips_to_yaml_and_json(client: TestClient) -> None:
-    created = client.post(
-        "/api/v1/report-templates",
+def test_insight_and_report_round_trip_execute_and_cache(
+    client: TestClient,
+) -> None:
+    project = client.get("/api/v1/projects").json()[0]
+    project_id = project["project_id"]
+    created_run = client.post(
+        "/api/v1/runs",
+        json={"run_id": "report-run-1", "project_id": project_id, "assay": "rna"},
+    )
+    assert created_run.status_code == 201
+
+    insight_config = {
+        "version": 1,
+        "title": "Runs by kind",
+        "visualization": "bar",
+        "query": {
+            "source": {"store": "catalog", "table": "runs"},
+            "dimensions": ["run_kind"],
+            "measures": [{"field": "*", "aggregation": "count", "label": "Runs"}],
+        },
+    }
+    created_insight = client.post(
+        "/api/v1/insights",
         json={
-            "template_id": "rnaseq-qc",
-            "name": "RNA-seq QC",
-            "config": {"sections": ["summary", "metrics"]},
+            "insight_id": "runs-by-kind",
+            "project_id": project_id,
+            "name": "Runs by kind",
+            "config": insight_config,
         },
     )
+    assert created_insight.status_code == 201
 
-    assert created.status_code == 201
-    patched = client.patch(
-        "/api/v1/report-templates/rnaseq-qc",
-        json={"description": "Production RNA-seq QC"},
+    first_result = client.post(
+        "/api/v1/insights/runs-by-kind/execute",
+        json={"project_id": project_id},
     )
-    assert patched.status_code == 200
-    assert patched.json()["description"] == "Production RNA-seq QC"
+    assert first_result.status_code == 200
+    assert first_result.json()["result"]["cached"] is False
+    second_result = client.post(
+        "/api/v1/insights/runs-by-kind/execute",
+        json={"project_id": project_id},
+    )
+    assert second_result.status_code == 200
+    assert second_result.json()["result"]["cached"] is True
 
-    yaml_export = client.get("/api/v1/report-templates/rnaseq-qc/export.yaml")
+    created_report = client.post(
+        "/api/v1/reports",
+        json={
+            "report_id": "project-overview",
+            "project_id": project_id,
+            "name": "Project overview",
+            "config": {
+                "version": 1,
+                "items": [
+                    {"insight_id": "runs-by-kind", "x": 0, "y": 0, "w": 6, "h": 4}
+                ],
+            },
+        },
+    )
+    assert created_report.status_code == 201
+
+    yaml_export = client.get("/api/v1/reports/project-overview/export.yaml")
     assert yaml_export.status_code == 200
-    assert "template_id: rnaseq-qc" in yaml_export.text
+    assert "report_id: project-overview" in yaml_export.text
 
-    json_export = client.get("/api/v1/report-templates/rnaseq-qc/export.json")
-    assert json_export.status_code == 200
-    assert json_export.json()["config"] == {"sections": ["summary", "metrics"]}
+    report_result = client.post(
+        "/api/v1/reports/project-overview/execute",
+        json={"project_id": project_id, "refresh": True},
+    )
+    assert report_result.status_code == 200
+    assert report_result.json()["result"]["insights"][0]["insight_id"] == "runs-by-kind"
+
+    default_project = client.patch(
+        f"/api/v1/projects/{project_id}",
+        json={"default_report_id": "project-overview"},
+    )
+    assert default_project.status_code == 200
+    assert default_project.json()["default_report_id"] == "project-overview"
+
+    rejected = client.post(
+        "/api/v1/insights/execute",
+        json={
+            "project_id": project_id,
+            "config": {
+                "query": {
+                    "source": {"store": "catalog", "table": "runs"},
+                    "sql": "DELETE FROM runs",
+                }
+            },
+        },
+    )
+    assert rejected.status_code == 400
+
+
+def test_histogram_insight_compiles_numeric_bins() -> None:
+    result = compile_insight_result(
+        config={
+            "title": "Value distribution",
+            "visualization": "histogram",
+            "query": {"y": "value", "bins": 2},
+            "display": {"colors": {"value": "#7c3aed"}},
+        },
+        columns=["value"],
+        rows=[
+            {"value": 1},
+            {"value": 2},
+            {"value": 3},
+            {"value": 4},
+        ],
+        insight_id="value-distribution",
+        computed_at=datetime.now(UTC),
+        cached=False,
+    )
+
+    assert result["visualization"] == "histogram"
+    assert result["echarts_options"]["xAxis"]["type"] == "value"
+    assert result["echarts_options"]["xAxis"]["name"] == "value"
+    assert result["echarts_options"]["xAxis"]["nameLocation"] == "middle"
+    assert result["echarts_options"]["xAxis"]["scale"] is True
+    assert "min" not in result["echarts_options"]["xAxis"]
+    assert "max" not in result["echarts_options"]["xAxis"]
+    assert result["echarts_options"]["yAxis"]["nameLocation"] == "middle"
+    assert result["echarts_options"]["series"][0]["type"] == "bar"
+    assert result["echarts_options"]["series"][0]["itemStyle"]["color"] == "#7c3aed"
+    assert result["echarts_options"]["series"][0]["data"] == [
+        {"name": "1-2.5", "value": [1.75, 2]},
+        {"name": "2.5-4", "value": [3.25, 2]},
+    ]
+
+
+def test_histogram_insight_compiles_multiple_numeric_series() -> None:
+    result = compile_insight_result(
+        config={
+            "title": "Two distributions",
+            "visualization": "histogram",
+            "query": {"fields": ["age", "tmb"], "bins": 2},
+            "display": {"colors": {"age": "#38bdf8", "tmb": "#7c3aed"}},
+        },
+        columns=["sample_id", "age", "tmb"],
+        rows=[
+            {"sample_id": "S1", "age": 30, "tmb": 1},
+            {"sample_id": "S2", "age": 40, "tmb": 2},
+            {"sample_id": "S3", "age": 50, "tmb": 3},
+            {"sample_id": "S4", "age": 60, "tmb": 4},
+        ],
+        insight_id="two-distributions",
+        computed_at=datetime.now(UTC),
+        cached=False,
+    )
+
+    series = result["echarts_options"]["series"]
+    assert [item["name"] for item in series] == ["age", "tmb"]
+    assert [item["itemStyle"]["color"] for item in series] == ["#38bdf8", "#7c3aed"]
 
 
 def test_report_render_exports_standalone_html(client: TestClient) -> None:
     rendered = client.post(
         "/api/v1/reports/render",
         json={
-            "report_id": "report-1",
+            "rendered_report_id": "rendered-report-1",
             "results": "./examples/rnaseq",
             "title": "RNA report",
         },
     )
 
     assert rendered.status_code == 201
-    html_export = client.get("/api/v1/reports/report-1/export.html")
+    html_export = client.get("/api/v1/rendered-reports/rendered-report-1/export.html")
     assert html_export.status_code == 200
     assert "<h1>RNA report</h1>" in html_export.text
 

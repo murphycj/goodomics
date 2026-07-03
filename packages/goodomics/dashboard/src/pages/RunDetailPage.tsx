@@ -49,6 +49,7 @@ import {
 
 const tabs = ["overview", "metrics", "payloads", "files"] as const;
 
+/** Run detail page with overview, metrics, payloads, and files. */
 export function RunDetailPage({
   projectId,
   runId,
@@ -129,6 +130,7 @@ export function RunDetailPage({
   );
 }
 
+/** Summary section for run identity and stored artifact counts. */
 function RunOverview({
   files,
   metrics,
@@ -162,6 +164,7 @@ function RunOverview({
   );
 }
 
+/** Searchable scalar metric table for a run. */
 function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
@@ -172,7 +175,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
         metric.sample_id,
         metric.run_sample_id,
         metric.data_profile_id,
-        metric.metric_id,
+        metric.field_id,
         metric.value,
         metric.source_file_id,
       ]
@@ -199,17 +202,17 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
                 <TableRow>
                   <TableHead>Sample</TableHead>
                   <TableHead>Profile</TableHead>
-                  <TableHead>Metric</TableHead>
+                  <TableHead>Field</TableHead>
                   <TableHead>Value</TableHead>
                   <TableHead>Source</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {metrics.map((metric, index) => (
-                  <TableRow key={`${metric.metric_id}-${metric.run_sample_id}-${index}`}>
+                  <TableRow key={`${metric.field_id}-${metric.run_sample_id}-${index}`}>
                     <TableCell>{metric.sample_id ?? metric.run_sample_id ?? "—"}</TableCell>
                     <TableCell>{metric.data_profile_id}</TableCell>
-                    <TableCell className="font-mono">{metric.metric_id}</TableCell>
+                    <TableCell className="font-mono">{metric.field_id}</TableCell>
                     <TableCell>{formatMetricValue(metric)}</TableCell>
                     <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
                       {metric.source_file_id ?? "—"}
@@ -225,6 +228,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
   );
 }
 
+/** Table payload list with an inline preview for selected payloads. */
 function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   const [selected, setSelected] = useState<AnalyticsPayload | null>(null);
   return (
@@ -268,6 +272,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   );
 }
 
+/** Snapshot preview of the first rows and columns in a table payload. */
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
   return (
@@ -306,6 +311,7 @@ function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   );
 }
 
+/** Stored file table with links to generated report artifacts. */
 function FilesTable({
   projectId,
   query,

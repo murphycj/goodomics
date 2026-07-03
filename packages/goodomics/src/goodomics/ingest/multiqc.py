@@ -10,17 +10,14 @@ from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from goodomics.data_profiles import (
-    MULTIQC_METRICS,
-    MULTIQC_PAYLOADS,
-    built_in_data_profile,
-)
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
     discover_multiqc_outputs,
     parse_multiqc_bundle,
     parse_multiqc_outputs,
 )
+from goodomics.profiles.multiqc import MULTIQC_METRICS, MULTIQC_PAYLOADS
+from goodomics.profiles.registry import built_in_data_profile
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     DataImport,
@@ -255,6 +252,7 @@ def _save_multiqc_parse_result(
                 built_in_data_profile(MULTIQC_METRICS),
                 built_in_data_profile(MULTIQC_PAYLOADS),
             ],
+            data_profile_fields=parsed.profile_fields,
             files=files,
             file_links=file_links,
         )

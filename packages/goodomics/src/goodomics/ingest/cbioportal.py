@@ -98,6 +98,7 @@ def ingest_cbioportal_study(
                 samples=parsed.samples,
                 run_samples=parsed.run_samples,
                 data_profiles=parsed.data_profiles,
+                data_profile_fields=parsed.data_profile_fields,
                 files=parsed.files,
                 file_links=parsed.file_links,
                 sample_sets=parsed.sample_sets,

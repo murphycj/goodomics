@@ -10,7 +10,18 @@ export function projectIdFromPath(pathname: string) {
   return pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;
 }
 
-export function formatDate(value: string) {
+/** Formats API timestamps as either full local datetimes or compact table dates. */
+export function formatDate(
+  value: string,
+  options: { style?: "date" | "datetime" } = {},
+) {
+  if (options.style === "date") {
+    return new Date(value).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
   return new Date(value).toLocaleString();
 }
 
@@ -25,9 +36,10 @@ export function formatBytes(value: number) {
 }
 
 export function formatMetricValue(metric: AnalyticsMetric) {
-  return typeof metric.value === "number"
-    ? metric.value.toLocaleString()
-    : metric.value;
+  if (typeof metric.value === "number") return metric.value.toLocaleString();
+  if (metric.value == null) return "—";
+  if (typeof metric.value === "object") return JSON.stringify(metric.value);
+  return String(metric.value);
 }
 
 export function shortPath(path: string) {

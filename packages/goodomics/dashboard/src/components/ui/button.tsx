@@ -33,6 +33,7 @@ export interface ButtonProps
   asChild?: boolean;
 }
 
+/** Goodomics button primitive with variant, size, and Radix Slot support. */
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
     const Comp = asChild ? Slot : "button";

@@ -2,10 +2,14 @@ import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import * as React from "react";
 import { cn } from "../../lib/utils";
 
+/** Radix dropdown root re-export for Goodomics action menus. */
 const DropdownMenu = DropdownMenuPrimitive.Root;
+/** Radix dropdown trigger re-export for Goodomics action menus. */
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
+/** Radix dropdown portal re-export for floating menu layers. */
 const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 
+/** Floating dropdown panel with Goodomics menu styling. */
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
@@ -27,6 +31,7 @@ const DropdownMenuContent = React.forwardRef<
 ));
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName;
 
+/** Selectable row inside a dropdown menu. */
 const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item>
@@ -43,6 +48,7 @@ const DropdownMenuItem = React.forwardRef<
 ));
 DropdownMenuItem.displayName = DropdownMenuPrimitive.Item.displayName;
 
+/** Section label for grouped dropdown menu actions. */
 const DropdownMenuLabel = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Label>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
@@ -58,6 +64,7 @@ const DropdownMenuLabel = React.forwardRef<
 ));
 DropdownMenuLabel.displayName = DropdownMenuPrimitive.Label.displayName;
 
+/** Visual divider between dropdown menu action groups. */
 const DropdownMenuSeparator = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Separator>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>

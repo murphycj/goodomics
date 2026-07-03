@@ -4,15 +4,28 @@ import asyncio
 import logging
 from enum import StrEnum
 from pathlib import Path
+from typing import Any, cast
 
 import typer
 from rich.console import Console
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from typer.core import TyperGroup
 
 from goodomics.ingest.runner import print_ingest_result, run_ingest
-from goodomics.report.html import load_report_template, write_report
+from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
+from goodomics.report.html import (
+    load_report_template,
+    render_report_result,
+    write_report,
+)
+from goodomics.server.db.models import InsightRecord, ReportRecord
+from goodomics.server.insights import execute_report
 from goodomics.server.logging import build_uvicorn_log_config
+from goodomics.server.settings import Settings
 from goodomics.storage.database import resolve_database_url
+from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
 
 
 class LogLevel(StrEnum):
@@ -147,13 +160,85 @@ def report(
     results: Path = RESULTS_ARGUMENT,
     out: Path = REPORT_OUT_OPTION,
     template: Path | None = TEMPLATE_OPTION,
+    project: str | None = PROJECT_OPTION,
+    report_name: str | None = REPORT_OPTION,
+    database_url: str | None = DATABASE_URL_OPTION,
+    analytics_path: Path | None = ANALYTICS_PATH_OPTION,
     log_level: LogLevel = LOG_LEVEL_OPTION,
 ) -> None:
     """Generate a standalone Goodomics HTML report."""
     _configure_cli_logging(log_level)
+    if report_name:
+        console.print(f"Rendering saved report [bold]{report_name}[/bold]")
+        asyncio.run(
+            _write_saved_report(
+                report_name=report_name,
+                out=out,
+                project=project,
+                database_url=database_url,
+                analytics_path=analytics_path,
+            )
+        )
+        console.print(f"Writing report to [bold]{out}[/bold]")
+        return
     console.print(f"Scanning [bold]{results}[/bold]")
     write_report(results, out, template=load_report_template(template))
     console.print(f"Writing report to [bold]{out}[/bold]")
+
+
+async def _write_saved_report(
+    *,
+    report_name: str,
+    out: Path,
+    project: str | None,
+    database_url: str | None,
+    analytics_path: Path | None,
+) -> None:
+    settings = Settings()
+    store = SQLModelGoodomicsStore(resolve_database_url(database_url))
+    await store.ensure_schema()
+    async with AsyncSession(store._get_engine()) as session:
+        saved_report = await session.get(ReportRecord, report_name)
+        if saved_report is None:
+            rows = (
+                await session.exec(
+                    select(ReportRecord).where(ReportRecord.name == report_name)
+                )
+            ).all()
+            saved_report = rows[0] if rows else None
+        if saved_report is None:
+            raise typer.BadParameter(f"Saved report not found: {report_name}")
+        project_id = project or saved_report.project_id or DEFAULT_PROJECT_ID
+        insight_ids = [
+            item["insight_id"]
+            for item in saved_report.config.get("items", [])
+            if isinstance(item, dict) and isinstance(item.get("insight_id"), str)
+        ]
+        insights = (
+            await session.exec(
+                select(InsightRecord).where(
+                    cast(Any, InsightRecord.insight_id).in_(insight_ids)
+                )
+            )
+        ).all()
+        by_id = {insight.insight_id: insight for insight in insights}
+        ordered_insights = [
+            by_id[insight_id] for insight_id in insight_ids if insight_id in by_id
+        ]
+        analytics_store = DuckDBAnalyticsStore(
+            analytics_path
+            or settings.analytics_path
+            or analytics_path_for_project(settings.analytics_root, project_id)
+        )
+        result = await execute_report(
+            session=session,
+            analytics_store=analytics_store,
+            project_id=project_id,
+            report=saved_report,
+            insights=ordered_insights,
+            refresh=True,
+        )
+    out.write_text(render_report_result(result), encoding="utf-8")
 
 
 @app.command()

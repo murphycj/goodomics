@@ -24,6 +24,16 @@ goodomics report ./results --template rnaseq-qc.yaml --out report.html
 The report command should support exported dashboard templates, so templates can
 round-trip between local report generation and dashboard editing.
 
+Saved report definitions can also be rendered from the local Goodomics catalog:
+
+```bash
+goodomics report ./results --report project-overview --project rnaseq-core --out report.html
+```
+
+When `--report` is provided, Goodomics loads the saved report, executes its
+saved insights against the selected project's SQL catalog and DuckDB analytical
+store, and writes a self-contained HTML snapshot.
+
 !!! note "Offline reports"
     Standalone reports should be self-contained HTML files by default. They
     should not require CDN-hosted JavaScript, CSS, fonts, or images.

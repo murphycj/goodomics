@@ -17,6 +17,7 @@ const sidebarModeOptions = [
   { value: "hover", label: "Expand on hover" },
 ] as const satisfies ReadonlyArray<{ value: SidebarMode; label: string }>;
 
+/** Sidebar display mode picker shown at the bottom of project navigation. */
 export function SidebarModeSelect({
   expanded,
   hoverModeHeldOpen,

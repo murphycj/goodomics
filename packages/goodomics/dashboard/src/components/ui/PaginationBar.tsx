@@ -10,6 +10,7 @@ import {
 
 const DEFAULT_PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
+/** Shared pagination footer for grid and table views. */
 export function PaginationBar({
   className = "",
   isLoading = false,

@@ -188,3 +188,36 @@ code {
   min-height: 0;
   flex-direction: column;
 }
+
+.report-card {
+  overflow: hidden;
+  border: 1px solid #dce3eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgb(25 32 43 / 0.05);
+}
+
+.report-card-header {
+  background: #ffffff;
+}
+
+.report-card-drag-handle {
+  cursor: default;
+}
+
+.report-grid-editing .report-card {
+  border-color: #8edeb4;
+  box-shadow: 0 0 0 2px rgb(43 191 122 / 0.12);
+}
+
+.report-grid-editing .report-card-header {
+  background: #f6fbf8;
+}
+
+.report-grid-editing .report-card-drag-handle {
+  cursor: grab;
+}
+
+.report-grid-editing .react-resizable-handle::after {
+  border-color: #16784a;
+}

@@ -1,3 +1,4 @@
+/** Statistic tile for compact metric counts on detail pages. */
 export function SummaryTile({
   label,
   value,

@@ -13,16 +13,10 @@ from pydantic import BaseModel
 
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    AttributeDefinition,
     CohortSummary,
     CopyNumberSegment,
     DataSource,
-    DuckDBMetadata,
-    EntityAttributeBoolean,
-    EntityAttributeDate,
-    EntityAttributeJson,
-    EntityAttributeNumeric,
-    EntityAttributeString,
+    EntityAttribute,
     Feature,
     FeatureAlias,
     FeatureCall,
@@ -31,12 +25,9 @@ from goodomics.schemas.models import (
     FeatureValueNumeric,
     GeneAlterationState,
     GenomicInterval,
-    MetricDefinition,
     ProfilePayload,
     SampleIntervalValue,
-    SampleMetricJson,
-    SampleMetricNumeric,
-    SampleMetricString,
+    SampleMetric,
     SampleStructuralVariantCall,
     SampleVariantCall,
     StructuralVariantEvent,
@@ -220,94 +211,20 @@ class AnalyticalTableSerializer:
 # and then adding one serializer entry here for table-specific behavior.
 SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
-        "duckdb_metadata",
-        DuckDBMetadata,
-        "project_id",
-        unique_columns=("project_id",),
-    ),
-    AnalyticalTableSerializer(
-        "metric_definitions",
-        MetricDefinition,
-        "metric_id",
-        unique_columns=("metric_id",),
-    ),
-    AnalyticalTableSerializer(
-        "attribute_definitions",
-        AttributeDefinition,
-        "entity_scope, attribute_id",
-        unique_columns=("entity_scope", "attribute_id"),
-    ),
-    AnalyticalTableSerializer(
-        "entity_attribute_numeric",
-        EntityAttributeNumeric,
-        "entity_scope, entity_id, attribute_id",
+        "entity_attributes",
+        EntityAttribute,
+        "entity_scope, entity_id, field_id",
         unique_columns=(
             "entity_scope",
             "entity_id",
-            "attribute_id",
+            "field_id",
             "data_profile_id",
         ),
     ),
     AnalyticalTableSerializer(
-        "entity_attribute_string",
-        EntityAttributeString,
-        "entity_scope, entity_id, attribute_id",
-        unique_columns=(
-            "entity_scope",
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-        ),
-    ),
-    AnalyticalTableSerializer(
-        "entity_attribute_boolean",
-        EntityAttributeBoolean,
-        "entity_scope, entity_id, attribute_id",
-        unique_columns=(
-            "entity_scope",
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-        ),
-    ),
-    AnalyticalTableSerializer(
-        "entity_attribute_date",
-        EntityAttributeDate,
-        "entity_scope, entity_id, attribute_id",
-        unique_columns=(
-            "entity_scope",
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-        ),
-    ),
-    AnalyticalTableSerializer(
-        "entity_attribute_json",
-        EntityAttributeJson,
-        "entity_scope, entity_id, attribute_id",
-        unique_columns=(
-            "entity_scope",
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-        ),
-    ),
-    AnalyticalTableSerializer(
-        "sample_metric_numeric",
-        SampleMetricNumeric,
-        "data_profile_id, run_id, run_sample_id, metric_id",
-        run_column="run_id",
-    ),
-    AnalyticalTableSerializer(
-        "sample_metric_string",
-        SampleMetricString,
-        "data_profile_id, run_id, run_sample_id, metric_id",
-        run_column="run_id",
-    ),
-    AnalyticalTableSerializer(
-        "sample_metric_json",
-        SampleMetricJson,
-        "data_profile_id, run_id, run_sample_id, metric_id",
+        "sample_metrics",
+        SampleMetric,
+        "data_profile_id, run_id, run_sample_id, field_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -429,11 +346,11 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "cohort_summaries",
         CohortSummary,
-        "sample_set_id, data_profile_id, metric_id, feature_id",
+        "sample_set_id, data_profile_id, field_id, feature_id",
         unique_columns=(
             "sample_set_id",
             "data_profile_id",
-            "metric_id",
+            "field_id",
             "feature_id",
         ),
     ),
@@ -514,7 +431,7 @@ DIMENSIONS_BY_COLUMN: dict[str, DuckDBDimension] = {
     "source_file_id": DuckDBDimension(
         "dim_files", "source_file_id", "source_file_label"
     ),
-    "metric_id": DuckDBDimension("dim_metrics", "metric_id", "metric_label"),
+    "field_id": DuckDBDimension("dim_fields", "field_id", "field_label"),
     "variant_id": DuckDBDimension("dim_variants", "variant_id", "variant_label"),
     "interval_id": DuckDBDimension("dim_intervals", "interval_id", "interval_label"),
     "feature_set_id": DuckDBDimension(
@@ -524,9 +441,6 @@ DIMENSIONS_BY_COLUMN: dict[str, DuckDBDimension] = {
         "dim_structural_variants",
         "structural_variant_id",
         "structural_variant_label",
-    ),
-    "attribute_id": DuckDBDimension(
-        "dim_attributes", "attribute_id", "attribute_label"
     ),
     "event_id": DuckDBDimension("dim_events", "event_id", "event_label"),
     "payload_id": DuckDBDimension("dim_payloads", "payload_id", "payload_label"),
@@ -655,58 +569,18 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         catalog_columns=_catalog_id_columns(*columns),
     )
     for table, columns in {
-        "entity_attribute_numeric": (
+        "entity_attributes": (
             "entity_id",
-            "attribute_id",
+            "field_id",
             "data_profile_id",
             "source_file_id",
         ),
-        "entity_attribute_string": (
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-            "source_file_id",
-        ),
-        "entity_attribute_boolean": (
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-            "source_file_id",
-        ),
-        "entity_attribute_date": (
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-            "source_file_id",
-        ),
-        "entity_attribute_json": (
-            "entity_id",
-            "attribute_id",
-            "data_profile_id",
-            "source_file_id",
-        ),
-        "sample_metric_numeric": (
+        "sample_metrics": (
             "data_profile_id",
             "run_id",
             "run_sample_id",
             "sample_id",
-            "metric_id",
-            "source_file_id",
-        ),
-        "sample_metric_string": (
-            "data_profile_id",
-            "run_id",
-            "run_sample_id",
-            "sample_id",
-            "metric_id",
-            "source_file_id",
-        ),
-        "sample_metric_json": (
-            "data_profile_id",
-            "run_id",
-            "run_sample_id",
-            "sample_id",
-            "metric_id",
+            "field_id",
             "source_file_id",
         ),
         "feature_aliases": ("feature_id",),
@@ -799,7 +673,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "cohort_summaries": (
             "sample_set_id",
             "data_profile_id",
-            "metric_id",
+            "field_id",
             "feature_id",
         ),
         "tool_versions": ("run_id", "source_file_id"),
@@ -938,26 +812,14 @@ class DuckDBAnalyticsStore:
         run_id: Any,
         batch: AnalyticsIngestBatch | None = None,
         *,
-        metrics: Sequence[SampleMetricNumeric | SampleMetricString] | None = None,
-        definitions: Sequence[MetricDefinition] | None = None,
+        metrics: Sequence[SampleMetric] | None = None,
         payloads: Sequence[ProfilePayload] | None = None,
         tool_versions: Sequence[ToolVersion] | None = None,
         data_sources: Sequence[DataSource] | None = None,
     ) -> None:
         if batch is None:
-            metric_records = list(metrics or [])
             batch = AnalyticsIngestBatch(
-                metric_definitions=list(definitions or []),
-                sample_metric_numeric=[
-                    metric
-                    for metric in metric_records
-                    if _is_numeric_metric_record(metric)
-                ],
-                sample_metric_string=[
-                    metric
-                    for metric in metric_records
-                    if not _is_numeric_metric_record(metric)
-                ],
+                sample_metrics=list(metrics or []),
                 profile_payloads=list(payloads or []),
                 tool_versions=list(tool_versions or []),
                 data_sources=list(data_sources or []),
@@ -1012,14 +874,8 @@ class DuckDBAnalyticsStore:
         *,
         sample_id: Any | None = None,
         run_sample_id: Any | None = None,
-    ) -> list[SampleMetricNumeric | SampleMetricString]:
-        numeric = self.fetch_records(
-            "sample_metric_numeric", SampleMetricNumeric, run_id=run_id
-        )
-        string = self.fetch_records(
-            "sample_metric_string", SampleMetricString, run_id=run_id
-        )
-        values = [*numeric, *string]
+    ) -> list[SampleMetric]:
+        values = self.fetch_records("sample_metrics", SampleMetric, run_id=run_id)
         if sample_id is None and run_sample_id is None:
             return values
         resolved_sample_id = sample_id
@@ -1104,18 +960,54 @@ class DuckDBAnalyticsStore:
             total,
         )
 
+    def query_rows(
+        self,
+        query: str,
+        *,
+        parameters: Sequence[Any] = (),
+        limit: int = 1000,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        if not self.path.exists():
+            return [], []
+        self.ensure_schema()
+        bounded_query = f"SELECT * FROM ({query}) AS goodomics_query LIMIT ?"
+        with self._connect() as connection:
+            cursor = connection.execute(
+                bounded_query, [*parameters, min(max(limit, 1), 5000)]
+            )
+            columns = [description[0] for description in cursor.description or []]
+            rows = cursor.fetchall()
+        return (
+            columns,
+            [
+                {
+                    column: _from_db_value(column, value)
+                    for column, value in zip(columns, row, strict=True)
+                }
+                for row in rows
+            ],
+        )
+
     def database_size_bytes(self) -> int:
         return self.path.stat().st_size if self.path.exists() else 0
 
     def _create_derived_views(self, connection: duckdb.DuckDBPyConnection) -> None:
         connection.execute(f"""
             CREATE OR REPLACE VIEW sample_metric_numeric_by_metric AS
-            SELECT *
-            FROM sample_metric_numeric
+            SELECT
+                data_profile_id,
+                run_id,
+                run_sample_id,
+                sample_id,
+                field_id,
+                source_file_id,
+                value_numeric AS value
+            FROM sample_metrics
+            WHERE value_type = 'numeric'
             ORDER BY {
             _physical_order_by(
-                INTEGER_KEYED_TABLES["sample_metric_numeric"],
-                "data_profile_id, metric_id, value, run_sample_id",
+                INTEGER_KEYED_TABLES["sample_metrics"],
+                "data_profile_id, field_id, value_numeric, run_sample_id",
             )
         }
             """)
@@ -1719,16 +1611,6 @@ def _dimension_id_for_label(
         [label],
     ).fetchone()
     return int(row[0]) if row is not None else None
-
-
-def _is_numeric_metric_record(record: Any) -> bool:
-    if isinstance(record, SampleMetricNumeric):
-        return True
-    if isinstance(record, SampleMetricString):
-        return False
-    return isinstance(_field_value(record, "value"), int | float) and not isinstance(
-        _field_value(record, "value"), bool
-    )
 
 
 def _physical_storage_row(

@@ -20,7 +20,7 @@ The guiding identity rule:
   `data_profile_id`, `file_id`, and `feature_label` are stable, indexed label
   columns, not the physical join mechanism.
 - DuckDB analytical fact tables use integer columns named for the referenced
-  entity, such as `sample_id`, `run_sample_id`, `feature_id`, `metric_id`, and
+  entity, such as `sample_id`, `run_sample_id`, `feature_id`, `field_id`, and
   `data_profile_id`.
 - User/API/ingest boundaries may accept readable labels, then resolve them to
   integer IDs before writing analytical rows.
@@ -204,11 +204,12 @@ payload metadata, and source metadata carry provenance such as cBioPortal study
 IDs, source filenames, generated import IDs, source `stable_id` values, and
 platform descriptions.
 
-A data profile is also not the same thing as a metric definition. A profile
-might be `multiqc:qc_metrics`; the metrics inside it might be
-`duplication_rate`, `insert_size_mean`, and `mean_coverage`. Keep profile-level
-query behavior and agent descriptions on `data_profiles`, and keep per-metric
-labels, units, directions, and descriptions in `metric_definitions`.
+A data profile is also not the same thing as a field definition. A profile might
+be `multiqc:qc_metrics`; the fields inside it might be `duplication_rate`,
+`insert_size_mean`, and `mean_coverage`. Keep profile-level query behavior,
+source fingerprints, summaries, and agent descriptions on `data_profiles`, and
+keep per-field labels, units, directions, query refs, and compact summaries in
+`data_profile_fields`.
 
 | Column                  | Notes                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -225,6 +226,13 @@ labels, units, directions, and descriptions in `metric_definitions`.
 | `feature_type`          | Example: `metric`, `gene`, `transcript`, `protein`, `antibody`, `variant`, `interval`, `pathway`, `signature` |
 | `value_type`            | Example: `numeric`, `categorical`, `call`, `matrix`                                                           |
 | `unit`                  | Nullable default unit                                                                                         |
+| `entity_grain`          | Default entity grain, such as `run_sample`, `sample`, `subject`, `feature`, or `run`                          |
+| `value_semantics`       | Profile-level meaning, such as `tpm`, `count`, `log2_cna`, `beta`, `score`, or `zscore`                       |
+| `primary_table`         | Default analytical table for profile-first queries                                                            |
+| `physical_tables_json`  | Physical tables/views used by the profile                                                                     |
+| `summary_json`          | Compact profile-level summary                                                                                 |
+| `last_profiled_at`      | Last time field/profile summaries were computed                                                               |
+| `source_fingerprint`    | Fingerprint for invalidating derived summaries/cache rows                                                     |
 | `query_modes_json`      | Supported query modes, such as sample, metric, gene, region                                                   |
 | `mcp_description`       | Agent-readable description                                                                                    |
 | `metadata_json`         | Flexible profile metadata                                                                                     |
@@ -311,8 +319,13 @@ samples, data profiles, sample sets, and files where relevant.
 
 | Table                  | Purpose                               |
 | ---------------------- | ------------------------------------- |
-| `reports`              | Rendered reports and report metadata  |
-| `report_templates`     | Versioned report template definitions |
+| `insights`             | Saved chart, metric, and table definitions |
+| `insight_revisions`    | Version history for saved insights    |
+| `reports`              | Saved report layouts composed of insights |
+| `report_revisions`     | Version history for saved reports     |
+| `rendered_reports`     | Generated HTML report snapshots       |
+| `insight_result_cache` | Cached computed insight payloads      |
+| `report_result_cache`  | Cached computed report payloads       |
 | `qc_policies`          | Threshold and decision policies       |
 | `qc_decisions`         | Stored review/evaluation decisions    |
 | `interpretation_notes` | Human- or agent-drafted notes         |
@@ -375,7 +388,7 @@ Examples:
 | `sample_id`       | `samples.sample_id` or `dim_samples.sample_label`                         |
 | `subject_id`      | `subjects.subject_id` or `dim_subjects.subject_label`                     |
 | `feature_id`      | `features.feature_label` or `dim_features.feature_label`                  |
-| `metric_id`       | `metric_definitions.metric_label` or `dim_metrics.metric_label`           |
+| `field_id`        | `data_profile_fields.field_id` or `dim_fields.field_label`                |
 | `variant_id`      | `variants.variant_label` or `dim_variants.variant_label`                  |
 
 DuckDB analytical fact tables should rely primarily on physical ordering and
@@ -390,118 +403,69 @@ General rule:
 | ------------------------------ | ------------------------------------------------------------- |
 | Sample/run detail              | `data_profile_id, run_id, run_sample_id, ...`                 |
 | Feature/gene across a cohort   | `data_profile_id, feature_id, run_sample_id`                  |
-| Metric scans/distributions     | `data_profile_id, metric_id, value, run_sample_id`            |
-| Attribute facets/filters       | `entity_scope, attribute_id, value, entity_id`                |
+| Metric scans/distributions     | `data_profile_id, field_id, value_numeric, run_sample_id`     |
+| Attribute facets/filters       | `entity_scope, field_id, value_*, entity_id`                  |
 | Genomic range queries          | `genome_build, contig, start_pos, end_pos`                    |
 | Alteration frequency/OncoPrint | `feature_id, alteration_type, data_profile_id, run_sample_id` |
 
 Do not maintain many duplicate layouts speculatively. Add a derived layout when
 it serves a named UI, SDK, MCP, report, or notebook access path.
 
-### `duckdb_metadata`
+### `data_profile_fields`
 
-One-row metadata table for the project-scoped analytical store.
+SQL-side field catalog for queryable metrics, clinical attributes, metadata
+facets, and other user-facing fields inside a data profile.
 
-| Column           | Notes                                              |
-| ---------------- | -------------------------------------------------- |
-| `project_id`     | Project this DuckDB belongs to                     |
-| `project_name`   | Optional copied project name for exports/debugging |
-| `schema_version` | Analytical schema version                          |
-| `created_at`     | Creation timestamp                                 |
-| `updated_at`     | Last metadata/schema update timestamp              |
-| `metadata_json`  | Store-level metadata                               |
-
-If Goodomics later supports a multi-project analytical warehouse backend, that
-backend can add `project_id` back as a partition/key. The default local DuckDB
-path stays project-scoped.
-
-### `metric_definitions`
-
-Metric dictionary for generic metrics.
-
-`data_profiles` describe a logical dataset, while `metric_definitions` describe
-individual metrics inside metric-oriented profiles. For example,
-`picard_alignment_metrics` is a data profile; `duplication_rate` and
-`insert_size_mean` are metric definitions.
-
-| Column            | Notes                                                              |
-| ----------------- | ------------------------------------------------------------------ |
-| `id`              | Optional integer dictionary ID when materialized                   |
-| `metric_label`    | Stable readable metric key, unique/indexed                         |
-| `metric_id`       | Stable external/source metric ID when distinct from `metric_label` |
-| `namespace`       | Namespace/tool/module prefix                                       |
-| `metric_name`     | Stable metric name                                                 |
-| `display_name`    | Human-readable label                                               |
-| `value_type`      | Example: `numeric`, `string`, `json`                               |
-| `unit`            | Nullable unit                                                      |
-| `direction`       | Example: `higher_is_better`, `lower_is_better`                     |
-| `description`     | Metric description                                                 |
-| `producer_tool`   | Tool most associated with this metric                              |
-| `producer_module` | Tool/module section                                                |
-| `schema_version`  | Metric schema/parser version                                       |
-
-### `attribute_definitions`
-
-Dictionary for queryable metadata and clinical/context attributes.
-
-Control-store `metadata_json` fields can keep flexible provenance and display
-metadata, but any attribute that participates in filters, facets, histograms,
-cohort comparisons, joins, dashboards, or MCP queries should also be stored in
-typed analytical attribute tables.
+`data_profiles` describe a logical dataset. `data_profile_fields` describe the
+queryable columns or measures inside that dataset. For example,
+`multiqc:qc_metrics` is a data profile; `percent_duplicates` and
+`general_stats.salmon_percent_mapped` are fields.
 
 | Column            | Notes                                                                     |
 | ----------------- | ------------------------------------------------------------------------- |
-| `id`              | Optional integer dictionary ID when materialized                          |
-| `attribute_label` | Stable readable attribute key, unique/indexed                             |
-| `attribute_id`    | Stable external/source attribute ID when distinct from `attribute_label`  |
+| `data_profile_id` | SQL FK to the owning profile                                              |
+| `field_id`        | Stable readable/source field key                                          |
+| `field_role`      | Example: `metric`, `attribute`, `dimension`, `measure`                    |
 | `entity_scope`    | Example: `subject`, `sample`, `run`, `run_sample`, `file`, `data_profile` |
 | `display_name`    | Human-readable label                                                      |
 | `value_type`      | Example: `numeric`, `string`, `boolean`, `date`, `json`                   |
 | `unit`            | Nullable unit                                                             |
-| `description`     | Attribute description                                                     |
+| `direction`       | Example: `higher_is_better`, `lower_is_better`                            |
+| `description`     | Field description                                                         |
 | `priority`        | Optional UI/report priority                                               |
-| `metadata_json`   | Flexible attribute metadata                                               |
+| `query_ref_json`  | Physical table/value column hints for the query resolver                  |
+| `summary_json`    | Compact min/max/top-values/examples summary                               |
+| `metadata_json`   | Flexible field metadata                                                   |
 
-### Entity Attribute Fact Tables
+### Entity Attributes
 
-Typed EAV-style tables for faceted metadata and clinical/context values.
-
-| Table                      | Value column      | Purpose                                           |
-| -------------------------- | ----------------- | ------------------------------------------------- |
-| `entity_attribute_numeric` | `value DOUBLE`    | Numeric attributes and histogram/binning inputs   |
-| `entity_attribute_string`  | `value TEXT`      | Categorical/string attributes and faceted filters |
-| `entity_attribute_boolean` | `value BOOLEAN`   | Boolean attributes                                |
-| `entity_attribute_date`    | `value TIMESTAMP` | Date/time attributes                              |
-| `entity_attribute_json`    | `value_json JSON` | Rare structured attributes                        |
-
-Common columns:
+Unified EAV-style table for faceted metadata and clinical/context values:
+`entity_attributes`.
 
 | Column            | Notes                                                          |
 | ----------------- | -------------------------------------------------------------- |
 | `entity_scope`    | Entity type the value belongs to                               |
-| `entity_id`       | Internal entity key                                            |
-| `attribute_id`    | Attribute definition integer ID                                |
+| `entity_id`       | Internal or stable entity key                                  |
+| `field_id`        | Data profile field integer ID                                  |
 | `data_profile_id` | Nullable source profile integer ID, when imported as a profile |
 | `source_file_id`  | Nullable source file integer ID                                |
+| `value_type`      | `numeric`, `string`, `boolean`, `date`, or `json`              |
+| `value_numeric`   | Numeric value when `value_type = numeric`                      |
+| `value_string`    | String/categorical value when `value_type = string`            |
+| `value_boolean`   | Boolean value when `value_type = boolean`                      |
+| `value_datetime`  | Date/time value when `value_type = date`                       |
+| `value_json`      | Rare structured value when `value_type = json`                 |
 
 Recommended physical layouts:
 
-| Table/layout               | Physical order                                 | Optimized for                                          |
-| -------------------------- | ---------------------------------------------- | ------------------------------------------------------ |
-| Canonical attribute tables | `entity_scope, entity_id, attribute_id`        | Fetch all attributes for one entity                    |
-| Attribute-filter layouts   | `entity_scope, attribute_id, value, entity_id` | Facets, counts, filters, histograms, cohort comparison |
+| Table/layout            | Physical order                           | Optimized for                                          |
+| ----------------------- | ---------------------------------------- | ------------------------------------------------------ |
+| Canonical attributes    | `entity_scope, entity_id, field_id`      | Fetch all attributes for one entity                    |
+| Attribute filter layout | `entity_scope, field_id, value_*, entity_id` | Facets, counts, filters, histograms, cohort comparison |
 
-### Generic Metric Fact Tables
+### Sample Metrics
 
-Canonical tables for generic metrics.
-
-| Table                   | Value column      | Purpose                                |
-| ----------------------- | ----------------- | -------------------------------------- |
-| `sample_metric_numeric` | `value DOUBLE`    | Numeric metric observations            |
-| `sample_metric_string`  | `value TEXT`      | String/categorical metric observations |
-| `sample_metric_json`    | `value_json JSON` | Rare structured metric observations    |
-
-Common columns:
+Unified table for generic sample/run metrics: `sample_metrics`.
 
 | Column            | Notes                                             |
 | ----------------- | ------------------------------------------------- |
@@ -509,20 +473,22 @@ Common columns:
 | `run_id`          | Producing/importing run integer ID                |
 | `run_sample_id`   | Nullable processed sample integer ID              |
 | `sample_id`       | Nullable sample integer ID shortcut for filtering |
-| `metric_id`       | Metric definition integer ID                      |
+| `field_id`        | Data profile field integer ID                     |
 | `source_file_id`  | Nullable source file integer ID                   |
+| `value_type`      | `numeric`, `string`, or `json`                    |
+| `value_numeric`   | Numeric value when `value_type = numeric`         |
+| `value_string`    | String/categorical value when `value_type = string` |
+| `value_json`      | Rare structured value when `value_type = json`    |
 
 Recommended physical layouts:
 
-| Table                             | Physical order                                      | Optimized for                                            |
+| Table/layout                      | Physical order                                      | Optimized for                                            |
 | --------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| `sample_metric_numeric`           | `data_profile_id, run_id, run_sample_id, metric_id` | Canonical table and fast run/sample detail queries       |
-| `sample_metric_numeric_by_metric` | `data_profile_id, metric_id, value, run_sample_id`  | Derived table for metric scans, distributions, and top-N |
+| `sample_metrics`                  | `data_profile_id, run_id, run_sample_id, field_id`  | Canonical table and fast run/sample detail queries       |
+| `sample_metric_numeric_by_metric` | `data_profile_id, field_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
 
-The canonical numeric table should be physically sorted for sample-centric
-queries. The by-metric table is the one duplicate needed for the other hot path.
-This avoids maintaining three copies of numeric metrics. Add by-metric tables
-for string or JSON metrics only if real query pressure appears.
+Keep direct table/SQL access available as an advanced mode, but use profiles and
+fields as the default report, insight, dashboard, and MCP query surface.
 
 ### `features`
 
@@ -613,8 +579,8 @@ Recommended derived layouts:
 | By sample | `data_profile_id, run_sample_id, feature_id`        | Sample detail pages and sample profile exports             |
 | By value  | `data_profile_id, feature_id, value, run_sample_id` | Threshold filters and top/bottom values                    |
 
-`expression_values` can exist as a view or compatibility alias over
-`feature_value_numeric` where `value_semantics` is expression-specific.
+Expression-specific measurements should use `feature_value_numeric` with an
+appropriate `value_semantics` value.
 
 ### `feature_call`
 
@@ -914,14 +880,14 @@ Recommended physical layouts:
 
 ### Cohort Summary Tables
 
-Precomputed reference-set and cohort statistics. Start with metric summaries,
-then add feature/profile summaries as query pressure appears.
+Precomputed reference-set and cohort statistics. Treat these as derived/cache
+data keyed by the sample set, profile, field or feature, and source fingerprint.
 
 | Column            | Notes                                  |
 | ----------------- | -------------------------------------- |
 | `sample_set_id`   | Cohort/reference set integer ID        |
 | `data_profile_id` | Profile integer ID summarized          |
-| `metric_id`       | Nullable metric integer ID summarized  |
+| `field_id`        | Nullable profile field integer ID summarized |
 | `feature_id`      | Nullable feature integer ID summarized |
 | `n`               | Observation count                      |
 | `mean`            | Mean                                   |
@@ -945,7 +911,7 @@ Examples:
 
 | Table                             | Should include profile identity? | Why                                                        |
 | --------------------------------- | -------------------------------- | ---------------------------------------------------------- |
-| `sample_metric_numeric`           | Yes                              | Metric value belongs to a logical metric profile           |
+| `sample_metrics`                  | Yes                              | Metric value belongs to a logical metric profile           |
 | `feature_value_numeric`           | Yes                              | Numeric feature value belongs to one feature-value profile |
 | `feature_call`                    | Yes                              | Feature call belongs to one call profile                   |
 | `sample_variant_calls`            | Yes                              | Call belongs to one variant-call profile                   |
@@ -1043,17 +1009,17 @@ display and user input, but table relationships use the integer `id` columns.
 
 ### Example Metric Observations
 
-| data_profile_id | run_id | run_sample_id | sample_id | metric_id | value  |
+| data_profile_id | run_id | run_sample_id | sample_id | field_id | value_numeric |
 | --------------- | ------ | ------------- | --------- | --------- | ------ |
 | `1`             | `2`    | `5`           | `3`       | `1`       | `91.2` |
 | `1`             | `3`    | `7`           | `3`       | `1`       | `93.8` |
 
 ### Example Numeric Feature Observations
 
-| data_profile_id | run_id | run_sample_id | sample_id | feature_id | value_semantics | value  |
-| --------------- | ------ | ------------- | --------- | ---------- | --------------- | ------ |
-| `5`             | `2`    | `5`           | `3`       | `1`        | `tpm`           | `12.4` |
-| `5`             | `3`    | `7`           | `3`       | `1`        | `tpm`           | `13.1` |
+| data_profile_id | run_id | run_sample_id | sample_id | feature_id | value  |
+| --------------- | ------ | ------------- | --------- | ---------- | ------ |
+| `5`             | `2`    | `5`           | `3`       | `1`        | `12.4` |
+| `5`             | `3`    | `7`           | `3`       | `1`        | `13.1` |
 
 ### Example Profile Availability
 

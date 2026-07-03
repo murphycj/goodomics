@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from goodomics import run
-from goodomics.data_profiles import (
-    BUILT_IN_DATA_PROFILES,
+from goodomics.profiles.base import PROFILE_NAMESPACE_PREFIXES
+from goodomics.profiles.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
@@ -14,14 +14,17 @@ from goodomics.data_profiles import (
     CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
     CBIOPORTAL_MUTATIONS_MAF,
     CBIOPORTAL_STRUCTURAL_VARIANTS,
-    PROFILE_NAMESPACE_PREFIXES,
-    cbioportal_data_profile_for_meta,
 )
+from goodomics.profiles.cbioportal import (
+    profile_for_meta as cbioportal_data_profile_for_meta,
+)
+from goodomics.profiles.registry import built_in_profiles
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import DataImport, QCDecision, Run, Sample
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataProfileFieldRecord,
     RunRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
@@ -42,6 +45,23 @@ def _run_pk(run_id: str) -> int:
         async with AsyncSession(catalog_store._get_engine()) as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _field_pk(field_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(DataProfileFieldRecord).where(
+                        DataProfileFieldRecord.field_id == field_id
+                    )
+                )
             ).one()
         assert row.id is not None
         return row.id
@@ -98,35 +118,20 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
     analytics_path = analytics_path_for_project(".goodomics", saved_run.project_id)
     analytics = DuckDBAnalyticsStore(analytics_path)
     values = analytics.list_metric_values(_run_pk("rnaseq-batch-042"))
-    with analytics._connect() as connection:
-        pct_mapped_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'goodomics:sdk_metrics:pct_mapped'
-            """
-        ).fetchone()
-        pct_mapped_metric_id = _scalar(pct_mapped_metric_id)
-        status_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'goodomics:sdk_metrics:status'
-            """
-        ).fetchone()
-        status_metric_id = _scalar(status_metric_id)
-        s1_sample_id = _sample_pk("S1")
+    pct_mapped_field_id = _field_pk("goodomics:sdk_metrics:pct_mapped")
+    status_field_id = _field_pk("goodomics:sdk_metrics:status")
+    s1_sample_id = _sample_pk("S1")
 
     assert any(
-        value.metric_id == pct_mapped_metric_id
+        value.field_id == pct_mapped_field_id
         and value.sample_id == s1_sample_id
-        and value.value == 91.2
+        and value.value_numeric == 91.2
         for value in values
     )
     assert any(
-        value.metric_id == status_metric_id
+        value.field_id == status_field_id
         and value.sample_id == s1_sample_id
-        and value.value == "pass"
+        and value.value_string == "pass"
         for value in values
     )
 
@@ -164,10 +169,11 @@ def test_qc_decision_status_values() -> None:
 
 
 def test_builtin_data_profile_registry_has_stable_namespaces() -> None:
-    assert len(BUILT_IN_DATA_PROFILES) == len(set(BUILT_IN_DATA_PROFILES))
+    built_in_data_profiles = built_in_profiles()
+    assert len(built_in_data_profiles) == len(set(built_in_data_profiles))
     assert all(
         profile_id.startswith(PROFILE_NAMESPACE_PREFIXES)
-        for profile_id in BUILT_IN_DATA_PROFILES
+        for profile_id in built_in_data_profiles
     )
 
 

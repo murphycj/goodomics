@@ -11,6 +11,7 @@ import {
 
 export type ColumnVisibilityOption = string | { key: string; label: string };
 
+/** Dropdown control for hiding and showing table/grid columns. */
 export function ColumnVisibilityMenu({
   columns,
   hiddenColumns,

@@ -3,6 +3,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { writeClipboardText } from "../../lib/clipboard";
 import { showToast } from "../../lib/toasts";
 
+/** Icon button that copies a value while preserving parent row click behavior. */
 export function CopyButton({
   label,
   value,

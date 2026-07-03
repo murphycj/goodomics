@@ -17,6 +17,7 @@ import {
 } from "../components/ui";
 import { formatBytes, formatDate } from "../lib/utils";
 
+/** Project directory landing page for opening or creating Goodomics workspaces. */
 export function HomePage() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { openSearch } = useSearch();

@@ -8,19 +8,9 @@ from pydantic import BaseModel
 from goodomics.schemas.models import AnalyticsIngestBatch
 
 CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
-    "entity_attribute_numeric": frozenset({"data_profile_id"}),
-    "entity_attribute_string": frozenset({"data_profile_id"}),
-    "entity_attribute_boolean": frozenset({"data_profile_id"}),
-    "entity_attribute_date": frozenset({"data_profile_id"}),
-    "entity_attribute_json": frozenset({"data_profile_id"}),
-    "sample_metric_numeric": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "sample_metric_string": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "sample_metric_json": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+    "entity_attributes": frozenset({"data_profile_id", "field_id"}),
+    "sample_metrics": frozenset(
+        {"data_profile_id", "run_id", "run_sample_id", "sample_id", "field_id"}
     ),
     "feature_value_numeric": frozenset(
         {"data_profile_id", "run_id", "run_sample_id", "sample_id"}

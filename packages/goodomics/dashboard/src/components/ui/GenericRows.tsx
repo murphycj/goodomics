@@ -1,6 +1,7 @@
 import type { QueryState } from "../../lib/types";
 import { AsyncBlock } from "./AsyncBlock";
 
+/** JSON preview for simple registry endpoints that do not have custom UI yet. */
 export function GenericRows<T extends unknown[]>({
   query,
   empty,

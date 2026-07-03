@@ -25,6 +25,7 @@ const SAMPLE_COLUMN_OPTIONS = [
 
 type SampleGridRow = SampleListItem & { __rowId: string };
 
+/** Full-height sample browser for a project. */
 export function ProjectSamplesPage({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col overflow-hidden">
@@ -33,6 +34,7 @@ export function ProjectSamplesPage({ projectId }: { projectId: string }) {
   );
 }
 
+/** Owns sample table state such as pagination and column visibility. */
 function SamplesPanel({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(SAMPLES_PAGE_SIZE);
@@ -99,6 +101,7 @@ function SamplesPanel({ projectId }: { projectId: string }) {
   );
 }
 
+/** React Data Grid view of samples with clickable rows. */
 function SamplesGrid({
   hiddenColumns,
   projectId,
@@ -191,6 +194,7 @@ function SamplesGrid({
   );
 }
 
+/** Truncated cell renderer that normalizes missing sample values. */
 function CellValue({ value }: { value?: string | null }) {
   return (
     <span className="block w-full truncate text-left text-[#253044]">
@@ -199,6 +203,7 @@ function CellValue({ value }: { value?: string | null }) {
   );
 }
 
+/** Centered loading, empty, or error message inside the samples grid canvas. */
 function GridMessage({
   children,
   tone = "muted",

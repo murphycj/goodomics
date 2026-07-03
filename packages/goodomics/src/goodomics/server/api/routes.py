@@ -1,3 +1,16 @@
+"""FastAPI routes for the Goodomics server API.
+
+This module owns the HTTP boundary for the dashboard and local server. Route
+handlers validate request models, enforce project scoping, delegate analytical
+work to the catalog/DuckDB stores, and translate internal SQLModel records into
+JSON-ready API shapes.
+
+The lower helpers intentionally keep database details close to the routes that
+need them: public IDs are resolved from internal integer keys, project-specific
+analytics stores are selected, and database-preview endpoints are constrained by
+the shared catalog registry.
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,8 +22,9 @@ from uuid import uuid4
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
-from sqlmodel import Field, SQLModel, select
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.projects import (
@@ -21,33 +35,35 @@ from goodomics.projects import (
     new_project_id,
     validate_project_slug,
 )
-from goodomics.report.html import render_report
+from goodomics.report.html import render_report, render_report_result
 from goodomics.schemas.models import Run, Sample
 from goodomics.server.ai import (
     AIProviderNotConfigured,
     ChatMessage,
     ChatResult,
 )
+from goodomics.server.db.catalog import CATALOG_TABLES, EDITABLE_TABLES
 from goodomics.server.db.models import (
     CohortRecord,
+    InsightRecord,
+    InsightRevisionRecord,
     QCPolicyRecord,
+    RenderedReportRecord,
     ReportRecord,
-    ReportTemplateRecord,
-    ReportTemplateRevisionRecord,
+    ReportRevisionRecord,
 )
+from goodomics.server.insights import execute_insight, execute_report
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
+    DataProfileFieldRecord,
     DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
-    QCDecisionRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
-    SampleSetMemberRecord,
-    SampleSetRecord,
     SubjectRecord,
     get_record_by_field,
     get_record_where,
@@ -57,7 +73,12 @@ router = APIRouter(prefix="/api/v1")
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
-class RunCreate(SQLModel):
+# Request/response schemas are kept near the routes that use them so FastAPI's
+# generated OpenAPI schema stays aligned with the HTTP surface. They use
+# Pydantic directly because they are HTTP DTOs, not SQL table records.
+class RunCreate(BaseModel):
+    """Payload for creating a run through the API."""
+
     run_id: str | None = None
     project_id: str | None = None
     project: str | None = None
@@ -65,19 +86,25 @@ class RunCreate(SQLModel):
     samples: list[Sample] = Field(default_factory=list)
 
 
-class RunPatch(SQLModel):
+class RunPatch(BaseModel):
+    """Fields that can be patched on an existing run."""
+
     project: str | None = None
     assay: str | None = None
 
 
-class RunPageRead(SQLModel):
+class RunPageRead(BaseModel):
+    """Paginated run list response."""
+
     items: list[Run]
     total: int
     limit: int
     offset: int
 
 
-class SampleListItemRead(SQLModel):
+class SampleListItemRead(BaseModel):
+    """Compact sample row used in paginated project sample lists."""
+
     sample_id: str
     project_id: str | None = None
     subject_id: str | None = None
@@ -89,14 +116,18 @@ class SampleListItemRead(SQLModel):
     latest_run_created_at: datetime | None = None
 
 
-class SamplePageRead(SQLModel):
+class SamplePageRead(BaseModel):
+    """Paginated sample list response."""
+
     items: list[SampleListItemRead]
     total: int
     limit: int
     offset: int
 
 
-class SampleRunRead(SQLModel):
+class SampleRunRead(BaseModel):
+    """Run membership for a sample, including run-sample status."""
+
     run_id: str
     project_id: str | None = None
     name: str | None = None
@@ -110,35 +141,46 @@ class SampleRunRead(SQLModel):
     run_sample_status: str
 
 
-class ProjectCreate(SQLModel):
+class ProjectCreate(BaseModel):
+    """Payload for creating a project."""
+
     name: str
     slug: str | None = None
     description: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ProjectPatch(SQLModel):
+class ProjectPatch(BaseModel):
+    """Fields that can be patched on an existing project."""
+
     name: str | None = None
     slug: str | None = None
     description: str | None = None
+    default_report_id: str | None = None
     metadata_json: dict[str, JsonValue] | None = None
 
 
-class ProjectRead(SQLModel):
+class ProjectRead(BaseModel):
+    """Project response enriched with dashboard summary counts."""
+
     project_id: str
     slug: str | None = None
     name: str
     description: str | None = None
+    default_report_id: str | None = None
     metadata_json: dict[str, JsonValue]
     created_at: datetime
     run_count: int = 0
     sample_count: int = 0
+    subject_count: int = 0
     file_count: int = 0
     file_size_bytes: int = 0
     latest_activity_at: datetime | None = None
 
 
-class SearchResultRead(SQLModel):
+class SearchResultRead(BaseModel):
+    """A lightweight result from the global sample/run search endpoint."""
+
     kind: str
     project_id: str | None = None
     project_name: str | None = None
@@ -147,7 +189,9 @@ class SearchResultRead(SQLModel):
     sample_name: str | None = None
 
 
-class FileRead(SQLModel):
+class FileRead(BaseModel):
+    """File metadata plus the catalog link explaining why it is in scope."""
+
     file_id: str
     project_id: str | None = None
     data_import_id: str | None = None
@@ -166,59 +210,141 @@ class FileRead(SQLModel):
     created_at: datetime | None = None
 
 
-class ReportTemplateBase(SQLModel):
+class SavedInsightBase(BaseModel):
+    """Shared fields for saved insight create/read payloads."""
+
     name: str
     description: str | None = None
     config: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ReportTemplateCreate(ReportTemplateBase):
-    template_id: str | None = None
+class SavedInsightCreate(SavedInsightBase):
+    """Payload for creating a saved insight."""
+
+    insight_id: str | None = None
+    project_id: str | None = None
 
 
-class ReportTemplatePatch(SQLModel):
+class SavedInsightPatch(BaseModel):
+    """Fields that can be patched on an existing saved insight."""
+
     name: str | None = None
     description: str | None = None
     config: dict[str, JsonValue] | None = None
 
 
-class ReportTemplateRead(ReportTemplateBase):
-    template_id: str
+class SavedInsightRead(SavedInsightBase):
+    """Saved insight response with stable ID and timestamps."""
+
+    insight_id: str
+    project_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
-class ReportRenderRequest(SQLModel):
+class SavedReportBase(BaseModel):
+    """Shared fields for saved report create/read payloads."""
+
+    name: str
+    description: str | None = None
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class SavedReportCreate(SavedReportBase):
+    """Payload for creating a saved report."""
+
+    report_id: str | None = None
+    project_id: str | None = None
+
+
+class SavedReportPatch(BaseModel):
+    """Fields that can be patched on an existing saved report."""
+
+    name: str | None = None
+    description: str | None = None
+    config: dict[str, JsonValue] | None = None
+
+
+class SavedReportRead(SavedReportBase):
+    """Saved report response with stable ID and timestamps."""
+
+    report_id: str
+    project_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportRenderRequest(BaseModel):
+    """Payload for rendering a saved or standalone HTML report."""
+
     results: str = "."
+    rendered_report_id: str | None = None
     report_id: str | None = None
     run_id: str | None = None
-    template_id: str | None = None
+    project_id: str | None = None
     title: str = "Goodomics Report"
+    refresh: bool = False
 
 
-class ReportRead(SQLModel):
-    report_id: str
+class RenderedReportRead(BaseModel):
+    """Persisted rendered report HTML and its source metadata."""
+
+    rendered_report_id: str
+    project_id: str | None = None
     run_id: str | None = None
-    template_id: str | None = None
+    report_id: str | None = None
     title: str
     html: str
     created_at: datetime
 
 
-class CohortCreate(SQLModel):
+class InsightExecuteRequest(BaseModel):
+    """Payload for executing an ad hoc or saved insight."""
+
+    config: dict[str, JsonValue] | None = None
+    project_id: str | None = None
+    refresh: bool = False
+
+
+class ReportExecuteRequest(BaseModel):
+    """Payload for executing a saved report."""
+
+    project_id: str | None = None
+    refresh: bool = False
+
+
+class InsightResultRead(BaseModel):
+    """Envelope for an executed insight result payload."""
+
+    result: dict[str, JsonValue]
+
+
+class ReportResultRead(BaseModel):
+    """Envelope for an executed report result payload."""
+
+    result: dict[str, JsonValue]
+
+
+class CohortCreate(BaseModel):
+    """Payload for creating a named cohort definition."""
+
     cohort_id: str | None = None
     name: str
     description: str | None = None
     filters: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class CohortPatch(SQLModel):
+class CohortPatch(BaseModel):
+    """Fields that can be patched on an existing cohort."""
+
     name: str | None = None
     description: str | None = None
     filters: dict[str, JsonValue] | None = None
 
 
-class CohortRead(SQLModel):
+class CohortRead(BaseModel):
+    """Saved cohort definition response."""
+
     cohort_id: str
     name: str
     description: str | None = None
@@ -226,25 +352,33 @@ class CohortRead(SQLModel):
     updated_at: datetime
 
 
-class QCPolicyCreate(SQLModel):
+class QCPolicyCreate(BaseModel):
+    """Payload for creating a QC policy definition."""
+
     policy_id: str | None = None
     name: str
     thresholds: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class QCPolicyPatch(SQLModel):
+class QCPolicyPatch(BaseModel):
+    """Fields that can be patched on an existing QC policy."""
+
     name: str | None = None
     thresholds: dict[str, JsonValue] | None = None
 
 
-class QCPolicyRead(SQLModel):
+class QCPolicyRead(BaseModel):
+    """Saved QC policy response."""
+
     policy_id: str
     name: str
     thresholds: dict[str, JsonValue]
     updated_at: datetime
 
 
-class DatabaseTableRead(SQLModel):
+class DatabaseTableRead(BaseModel):
+    """Summary row for a catalog or analytics table in the database browser."""
+
     name: str
     store: str = "catalog"
     rows: int = 0
@@ -252,7 +386,9 @@ class DatabaseTableRead(SQLModel):
     editable: bool = False
 
 
-class DatabaseTablePageRead(SQLModel):
+class DatabaseTablePageRead(BaseModel):
+    """Paginated preview of rows from one database table."""
+
     name: str
     store: str
     columns: list[str]
@@ -264,17 +400,59 @@ class DatabaseTablePageRead(SQLModel):
     sort_direction: str | None = None
 
 
-class AnalyticsMetricRead(SQLModel):
+class DataProfileFieldRead(BaseModel):
+    """Queryable field exposed by a data profile."""
+
+    field_id: str
+    field_role: str
+    entity_scope: str | None = None
+    display_name: str
+    value_type: str
+    unit: str | None = None
+    direction: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    query_ref: dict[str, JsonValue] = Field(default_factory=dict)
+    summary: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DataProfileRead(BaseModel):
+    """Data profile contract plus fields available to insight builders."""
+
+    data_profile_id: str
+    name: str
+    data_type: str
+    assay: str | None = None
+    entity_grain: str | None = None
+    value_semantics: str | None = None
+    primary_table: str | None = None
+    physical_tables: dict[str, JsonValue] = Field(default_factory=dict)
+    summary: dict[str, JsonValue] = Field(default_factory=dict)
+    last_profiled_at: datetime | None = None
+    source_fingerprint: str | None = None
+    query_modes: dict[str, JsonValue] = Field(default_factory=dict)
+    mcp_description: str | None = None
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+    fields: list[DataProfileFieldRead] = Field(default_factory=list)
+
+
+class AnalyticsMetricRead(BaseModel):
+    """Scalar analytical metric read from the DuckDB analytics store."""
+
     run_id: int | str
     data_profile_id: int | str
     run_sample_id: int | str | None = None
     sample_id: int | str | None = None
-    metric_id: int | str
-    value: float | str
+    field_id: int | str
+    value_type: str
+    value: float | str | bool | dict[str, Any] | list[Any] | None = None
     source_file_id: int | str | None = None
 
 
-class AnalyticsPayloadRead(SQLModel):
+class AnalyticsPayloadRead(BaseModel):
+    """Tabular analytical payload read from the DuckDB analytics store."""
+
     run_id: int | str
     data_profile_id: int | str
     run_sample_id: int | str | None = None
@@ -288,12 +466,16 @@ class AnalyticsPayloadRead(SQLModel):
     source_hash: str | None = None
 
 
-class TableCountRead(SQLModel):
+class TableCountRead(BaseModel):
+    """Row-count summary for one database table."""
+
     name: str
     rows: int
 
 
-class DatabaseSummaryRead(SQLModel):
+class DatabaseSummaryRead(BaseModel):
+    """Storage and table-count summary for the local Goodomics database."""
+
     sqlite_size_bytes: int
     duckdb_size_bytes: int
     file_size_bytes: int
@@ -305,64 +487,32 @@ class DatabaseSummaryRead(SQLModel):
     analytics_tables: list[TableCountRead]
 
 
-class DatabaseRowPatch(SQLModel):
+class DatabaseRowPatch(BaseModel):
+    """Patch payload for the constrained database editor endpoint."""
+
     values: dict[str, JsonValue]
     audit_note: str | None = None
 
 
-class AIChatRequest(SQLModel):
+class AIChatRequest(BaseModel):
+    """Chat request passed to the configured AI provider."""
+
     messages: list[ChatMessage]
     project_id: str | None = None
     conversation_id: str | None = None
 
 
-CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
-    "projects": (ProjectRecord, "project_id"),
-    "subjects": (SubjectRecord, "subject_id"),
-    "samples": (SampleRecord, "sample_id"),
-    "runs": (RunRecord, "run_id"),
-    "run_samples": (RunSampleRecord, "run_sample_id"),
-    "data_imports": (DataImportRecord, "data_import_id"),
-    "data_profiles": (DataProfileRecord, "data_profile_id"),
-    "files": (FileRecord, "file_id"),
-    "file_links": (FileLinkRecord, "id"),
-    "sample_sets": (SampleSetRecord, "sample_set_id"),
-    "sample_set_members": (SampleSetMemberRecord, "id"),
-    "qc_decisions": (QCDecisionRecord, "id"),
-    "report_templates": (ReportTemplateRecord, "template_id"),
-    "report_template_revisions": (ReportTemplateRevisionRecord, "id"),
-    "reports": (ReportRecord, "report_id"),
-    "cohorts": (CohortRecord, "cohort_id"),
-    "qc_policies": (QCPolicyRecord, "policy_id"),
-}
-
-EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
-    "projects": (
-        ProjectRecord,
-        "project_id",
-        {"name", "slug", "description", "metadata_json"},
-    ),
-    "runs": (RunRecord, "run_id", {"project", "assay"}),
-    "samples": (SampleRecord, "sample_id", {"sample_name", "metadata_json"}),
-    "files": (FileRecord, "file_id", {"file_role", "path", "uri", "metadata_json"}),
-    "report_templates": (
-        ReportTemplateRecord,
-        "template_id",
-        {"name", "description", "config"},
-    ),
-    "reports": (ReportRecord, "report_id", {"title"}),
-    "cohorts": (CohortRecord, "cohort_id", {"name", "description", "filters"}),
-    "qc_policies": (QCPolicyRecord, "policy_id", {"name", "thresholds"}),
-}
-
-
 @router.get("/health")
 async def health() -> dict[str, str]:
+    """Return a minimal liveness response for server health checks."""
+
     return {"status": "ok"}
 
 
 @router.post("/ai/chat", response_model=ChatResult)
 async def chat_with_ai(payload: AIChatRequest, request: Request) -> ChatResult:
+    """Send chat messages to the configured AI provider after scope checks."""
+
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     try:
@@ -377,6 +527,8 @@ async def chat_with_ai(payload: AIChatRequest, request: Request) -> ChatResult:
 
 @router.get("/projects", response_model=list[ProjectRead])
 async def list_projects(request: Request) -> list[ProjectRead]:
+    """List projects, creating the default project on first use."""
+
     await _ensure_default_project(request)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -392,6 +544,8 @@ async def list_projects(request: Request) -> list[ProjectRead]:
 
 @router.post("/projects", response_model=ProjectRead, status_code=201)
 async def create_project(payload: ProjectCreate, request: Request) -> ProjectRead:
+    """Create a project with a validated unique slug."""
+
     await _ensure_schema(request)
     slug = validate_project_slug(payload.slug or payload.name)
     async with _session(request) as session:
@@ -416,6 +570,8 @@ async def create_project(payload: ProjectCreate, request: Request) -> ProjectRea
 
 @router.get("/projects/{project_id}", response_model=ProjectRead)
 async def get_project(project_id: str, request: Request) -> ProjectRead:
+    """Return one project by public project ID."""
+
     return await _get_project_read(request, project_id)
 
 
@@ -425,6 +581,8 @@ async def get_project_run(
     run_id: str,
     request: Request,
 ) -> Run:
+    """Return a run only if it belongs to the requested project."""
+
     return await _get_project_run(request, project_id, run_id)
 
 
@@ -434,6 +592,8 @@ async def list_project_run_samples(
     run_id: str,
     request: Request,
 ) -> list[Sample]:
+    """Return samples attached to a project-scoped run."""
+
     run = await _get_project_run(request, project_id, run_id)
     return run.samples
 
@@ -444,6 +604,8 @@ async def list_project_run_files(
     run_id: str,
     request: Request,
 ) -> list[FileRead]:
+    """Return files linked to a project-scoped run."""
+
     await _get_project_run(request, project_id, run_id)
     return await _list_run_files(run_id, request, project_id=project_id)
 
@@ -457,6 +619,8 @@ async def list_project_run_analytics_metrics(
     run_id: str,
     request: Request,
 ) -> list[AnalyticsMetricRead]:
+    """Return scalar analytical metrics for a project-scoped run."""
+
     run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_metric_reads(
         _analytics_store_for_project(request, project_id).list_metric_values(run.id)
@@ -472,6 +636,8 @@ async def list_project_run_analytics_payloads(
     run_id: str,
     request: Request,
 ) -> list[AnalyticsPayloadRead]:
+    """Return tabular analytical payloads for a project-scoped run."""
+
     run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_payload_reads(
         _analytics_store_for_project(request, project_id).list_profile_payloads(run.id)
@@ -484,6 +650,8 @@ async def get_project_file_content(
     file_id: str,
     request: Request,
 ) -> FileResponse:
+    """Stream a stored file only if it is linked to the requested project."""
+
     return await _file_content_response(file_id, request, project_id=project_id)
 
 
@@ -494,6 +662,8 @@ async def list_project_samples(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> SamplePageRead:
+    """List samples in a project with run summary metadata."""
+
     await _require_project(request, project_id)
     return await _list_samples(
         request,
@@ -509,6 +679,8 @@ async def get_project_sample(
     sample_id: str,
     request: Request,
 ) -> Sample:
+    """Return a sample that belongs to, or was processed in, the project."""
+
     project = await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -547,6 +719,8 @@ async def list_project_sample_runs(
     sample_id: str,
     request: Request,
 ) -> list[SampleRunRead]:
+    """List runs in which a project sample appears."""
+
     await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -567,6 +741,8 @@ async def list_project_sample_files(
     sample_id: str,
     request: Request,
 ) -> list[FileRead]:
+    """Return files from the latest run for a project sample."""
+
     await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -588,6 +764,8 @@ async def list_project_sample_run_files(
     run_id: str,
     request: Request,
 ) -> list[FileRead]:
+    """Return files for a specific project sample/run pairing."""
+
     await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -605,6 +783,8 @@ async def list_project_sample_run_analytics_metrics(
     run_id: str,
     request: Request,
 ) -> list[AnalyticsMetricRead]:
+    """Return scalar metrics for a specific project sample/run pairing."""
+
     await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
@@ -622,6 +802,8 @@ async def list_project_sample_run_analytics_metrics(
 async def patch_project(
     project_id: str, payload: ProjectPatch, request: Request
 ) -> ProjectRead:
+    """Patch project metadata and validate default-report ownership."""
+
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     async with _session(request) as session:
@@ -644,6 +826,15 @@ async def patch_project(
             row.name = str(values["name"]).strip() or row.name
         if "description" in values:
             row.description = values["description"]
+        if "default_report_id" in values:
+            default_report_id = values["default_report_id"]
+            if default_report_id is not None:
+                report = await session.get(ReportRecord, str(default_report_id))
+                if report is None or report.project_id not in {None, project_id}:
+                    raise HTTPException(
+                        status_code=404, detail="Default report not found"
+                    )
+            row.default_report_id = default_report_id
         if "metadata_json" in values and values["metadata_json"] is not None:
             row.metadata_json = json.loads(json.dumps(values["metadata_json"]))
         session.add(row)
@@ -659,6 +850,8 @@ async def list_project_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> RunPageRead:
+    """List runs in one project."""
+
     await _require_project(request, project_id)
     return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
 
@@ -670,6 +863,8 @@ async def search_samples(
     project_id: str | None = Query(default=None),
     limit: int = Query(default=12, ge=1, le=50),
 ) -> list[SearchResultRead]:
+    """Search samples first, then fill remaining slots with matching runs."""
+
     await _ensure_schema(request)
     project_pk: int | None = None
     if project_id is not None:
@@ -763,11 +958,15 @@ async def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> RunPageRead:
+    """List runs globally or within one project."""
+
     return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
 
 
 @router.post("/runs", response_model=Run, status_code=201)
 async def create_run(payload: RunCreate, request: Request) -> Run:
+    """Create a run through the storage abstraction used by ingest code."""
+
     project = await request.app.state.store.ensure_project(
         payload.project_id or payload.project
     )
@@ -789,6 +988,8 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
 
 @router.get("/runs/{run_id}", response_model=Run)
 async def get_run(run_id: str, request: Request) -> Run:
+    """Return a run by public run ID."""
+
     run = await request.app.state.store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -797,6 +998,8 @@ async def get_run(run_id: str, request: Request) -> Run:
 
 @router.patch("/runs/{run_id}", response_model=Run)
 async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
+    """Patch editable run fields in the SQL catalog."""
+
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     if values:
@@ -815,18 +1018,24 @@ async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
 
 @router.get("/runs/{run_id}/samples", response_model=list[Sample])
 async def list_run_samples(run_id: str, request: Request) -> list[Sample]:
+    """Return samples attached to a run."""
+
     run = await get_run(run_id, request)
     return run.samples
 
 
 @router.get("/runs/{run_id}/files", response_model=list[FileRead])
 async def list_run_files(run_id: str, request: Request) -> list[FileRead]:
+    """Return files linked directly or indirectly to a run."""
+
     return await _list_run_files(run_id, request)
 
 
 async def _list_run_files(
     run_id: str, request: Request, *, project_id: str | None = None
 ) -> list[FileRead]:
+    """Resolve files linked to a run and its originating data import."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         run = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
@@ -842,6 +1051,7 @@ async def _list_run_files(
             project_pk = project.id
         if project_pk is not None and run.project_id != project_pk:
             raise HTTPException(status_code=404, detail="Run not found")
+        # Direct links are files explicitly associated with this run.
         direct_statement = (
             select(FileRecord, FileLinkRecord)
             .join(FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.id)
@@ -864,6 +1074,8 @@ async def _list_run_files(
                 )
             )
         if run.data_import_id is not None:
+            # Import-level files are source files that produced the run but were
+            # not linked to the run row directly.
             import_statement = (
                 select(FileRecord, FileLinkRecord)
                 .join(
@@ -902,6 +1114,8 @@ async def _list_run_files(
 async def list_run_analytics_metrics(
     run_id: str, request: Request
 ) -> list[AnalyticsMetricRead]:
+    """Return scalar analytics metrics for a run."""
+
     run = await _get_run_record(request, run_id)
     project_id = await _project_public_id_for_pk(request, run.project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
@@ -915,14 +1129,77 @@ async def list_run_analytics_metrics(
 async def list_run_analytics_payloads(
     run_id: str, request: Request
 ) -> list[AnalyticsPayloadRead]:
+    """Return tabular analytics payloads for a run."""
+
     run = await _get_run_record(request, run_id)
     project_id = await _project_public_id_for_pk(request, run.project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
     return _analytics_payload_reads(analytics_store.list_profile_payloads(run.id))
 
 
+@router.get("/profiles", response_model=list[DataProfileRead])
+async def list_data_profiles(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[DataProfileRead]:
+    """List data profiles visible to a project or globally."""
+
+    if project_id is not None:
+        await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        statement = select(DataProfileRecord)
+        if project_pk is not None:
+            statement = statement.where(
+                or_(
+                    cast(Any, DataProfileRecord.project_id).is_(None),
+                    cast(Any, DataProfileRecord.project_id) == project_pk,
+                )
+            )
+        statement = statement.order_by(DataProfileRecord.name)
+        profiles = list((await session.exec(statement)).all())
+        fields_by_profile = await _fields_by_profile(session, profiles)
+    return [
+        _data_profile_read(profile, fields_by_profile.get(profile.id, []))
+        for profile in profiles
+    ]
+
+
+@router.get("/profiles/{data_profile_id:path}", response_model=DataProfileRead)
+async def get_data_profile(
+    data_profile_id: str,
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> DataProfileRead:
+    """Return one data profile visible to a project or globally."""
+
+    if project_id is not None:
+        await _require_project(request, project_id)
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        statement = select(DataProfileRecord).where(
+            DataProfileRecord.data_profile_id == data_profile_id
+        )
+        if project_pk is not None:
+            statement = statement.where(
+                or_(
+                    cast(Any, DataProfileRecord.project_id).is_(None),
+                    cast(Any, DataProfileRecord.project_id) == project_pk,
+                )
+            )
+        profile = (await session.exec(statement)).first()
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Data profile not found")
+        fields_by_profile = await _fields_by_profile(session, [profile])
+    return _data_profile_read(profile, fields_by_profile.get(profile.id, []))
+
+
 @router.get("/files/{file_id}/content")
 async def get_file_content(file_id: str, request: Request) -> FileResponse:
+    """Stream a stored file by public file ID."""
+
     return await _file_content_response(file_id, request)
 
 
@@ -932,6 +1209,8 @@ async def _file_content_response(
     *,
     project_id: str | None = None,
 ) -> FileResponse:
+    """Validate file visibility and return a FastAPI file response."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await get_record_by_field(
@@ -953,6 +1232,7 @@ async def _file_content_response(
         raise HTTPException(status_code=404, detail="File not found")
     if row.path is None:
         raise HTTPException(status_code=404, detail="Stored file not found")
+    # Only serve files whose catalog row points at an existing local file.
     path = Path(row.path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file not found")
@@ -961,150 +1241,410 @@ async def _file_content_response(
     return FileResponse(path)
 
 
-@router.get("/report-templates", response_model=list[ReportTemplateRead])
-async def list_report_templates(request: Request) -> list[ReportTemplateRead]:
+@router.get("/insights", response_model=list[SavedInsightRead])
+async def list_insights(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[SavedInsightRead]:
+    """List saved insights globally or for one project."""
+
     await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
     async with _session(request) as session:
-        rows = (await session.exec(select(ReportTemplateRecord))).all()
-    return [_template_from_row(row) for row in rows]
+        statement = select(InsightRecord)
+        if project_id is not None:
+            statement = statement.where(InsightRecord.project_id == project_id)
+        rows = (await session.exec(statement)).all()
+    return [SavedInsightRead.model_validate(row.model_dump()) for row in rows]
 
 
-@router.post("/report-templates", response_model=ReportTemplateRead, status_code=201)
-async def create_report_template(
-    payload: ReportTemplateCreate, request: Request
-) -> ReportTemplateRead:
+@router.post("/insights", response_model=SavedInsightRead, status_code=201)
+async def create_insight(
+    payload: SavedInsightCreate, request: Request
+) -> SavedInsightRead:
+    """Create a saved insight and its initial revision."""
+
     await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
-    template_id = payload.template_id or _new_id("template")
+    insight_id = payload.insight_id or _new_id("insight")
     async with _session(request) as session:
-        template = ReportTemplateRecord(
-            template_id=template_id,
+        insight = InsightRecord(
+            insight_id=insight_id,
+            project_id=payload.project_id,
             name=payload.name,
             description=payload.description,
             config=payload.config,
             created_at=now,
             updated_at=now,
         )
-        revision = ReportTemplateRevisionRecord(
-            template_id=template_id,
+        revision = InsightRevisionRecord(
+            insight_id=insight_id,
             config=payload.config,
             created_at=now,
         )
-        session.add(template)
+        session.add(insight)
         session.add(revision)
         await session.commit()
-    return await get_report_template(template_id, request)
+    return await get_insight(insight_id, request)
 
 
-@router.get("/report-templates/{template_id}", response_model=ReportTemplateRead)
-async def get_report_template(template_id: str, request: Request) -> ReportTemplateRead:
+@router.get("/insights/{insight_id}", response_model=SavedInsightRead)
+async def get_insight(insight_id: str, request: Request) -> SavedInsightRead:
+    """Return a saved insight by ID."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(ReportTemplateRecord, template_id)
+        row = await session.get(InsightRecord, insight_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Report template not found")
-    return _template_from_row(row)
+        raise HTTPException(status_code=404, detail="Insight not found")
+    return SavedInsightRead.model_validate(row.model_dump())
 
 
-@router.patch("/report-templates/{template_id}", response_model=ReportTemplateRead)
-async def patch_report_template(
-    template_id: str, payload: ReportTemplatePatch, request: Request
-) -> ReportTemplateRead:
+@router.patch("/insights/{insight_id}", response_model=SavedInsightRead)
+async def patch_insight(
+    insight_id: str, payload: SavedInsightPatch, request: Request
+) -> SavedInsightRead:
+    """Patch a saved insight and record a revision when config changes."""
+
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session(request) as session:
-            template = await session.get(ReportTemplateRecord, template_id)
-            if template is None:
-                raise HTTPException(status_code=404, detail="Report template not found")
+            insight = await session.get(InsightRecord, insight_id)
+            if insight is None:
+                raise HTTPException(status_code=404, detail="Insight not found")
             updated_at = datetime.now(UTC)
             for key, value in values.items():
-                setattr(template, key, value)
-            template.updated_at = updated_at
-            session.add(template)
+                setattr(insight, key, value)
+            insight.updated_at = updated_at
+            session.add(insight)
             if "config" in values:
                 session.add(
-                    ReportTemplateRevisionRecord(
-                        template_id=template_id,
+                    InsightRevisionRecord(
+                        insight_id=insight_id,
                         config=values["config"],
                         created_at=updated_at,
                     )
                 )
             await session.commit()
-    return await get_report_template(template_id, request)
+    return await get_insight(insight_id, request)
 
 
-@router.get("/report-templates/{template_id}/export.yaml")
-async def export_report_template_yaml(template_id: str, request: Request) -> Response:
-    template = await get_report_template(template_id, request)
-    body = yaml.safe_dump(_template_export(template), sort_keys=False)
+@router.get("/insights/{insight_id}/export.yaml")
+async def export_insight_yaml(insight_id: str, request: Request) -> Response:
+    """Export a saved insight as portable YAML."""
+
+    insight = await get_insight(insight_id, request)
+    body = yaml.safe_dump(_saved_insight_export(insight), sort_keys=False)
     return Response(content=body, media_type="application/yaml")
 
 
-@router.get("/report-templates/{template_id}/export.json")
-async def export_report_template_json(
-    template_id: str, request: Request
-) -> dict[str, Any]:
-    template = await get_report_template(template_id, request)
-    return _template_export(template)
+@router.get("/insights/{insight_id}/export.json")
+async def export_insight_json(insight_id: str, request: Request) -> dict[str, Any]:
+    """Export a saved insight as portable JSON."""
+
+    insight = await get_insight(insight_id, request)
+    return _saved_insight_export(insight)
 
 
-@router.post("/reports/render", response_model=ReportRead, status_code=201)
+@router.post("/insights/execute", response_model=InsightResultRead)
+async def execute_adhoc_insight(
+    payload: InsightExecuteRequest, request: Request
+) -> InsightResultRead:
+    """Execute an insight config that has not been saved."""
+
+    await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    analytics_store = _analytics_store_for_project(request, payload.project_id)
+    try:
+        async with _session(request) as session:
+            result = await execute_insight(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=payload.project_id,
+                config=payload.config or {},
+                refresh=payload.refresh,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return InsightResultRead(result=result)
+
+
+@router.post("/insights/{insight_id}/execute", response_model=InsightResultRead)
+async def execute_saved_insight(
+    insight_id: str,
+    payload: InsightExecuteRequest,
+    request: Request,
+) -> InsightResultRead:
+    """Execute a saved insight, optionally overriding its config."""
+
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        insight = await session.get(InsightRecord, insight_id)
+        if insight is None:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        project_id = payload.project_id or insight.project_id
+        if project_id is not None:
+            await _require_project(request, project_id)
+        analytics_store = _analytics_store_for_project(request, project_id)
+        try:
+            result = await execute_insight(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                insight=insight,
+                config=payload.config,
+                refresh=payload.refresh,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    return InsightResultRead(result=result)
+
+
+@router.get("/reports", response_model=list[SavedReportRead])
+async def list_reports(
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> list[SavedReportRead]:
+    """List saved reports globally or for one project."""
+
+    await _ensure_schema(request)
+    if project_id is not None:
+        await _require_project(request, project_id)
+    async with _session(request) as session:
+        statement = select(ReportRecord)
+        if project_id is not None:
+            statement = statement.where(ReportRecord.project_id == project_id)
+        rows = (await session.exec(statement)).all()
+    return [SavedReportRead.model_validate(row.model_dump()) for row in rows]
+
+
+@router.post("/reports", response_model=SavedReportRead, status_code=201)
+async def create_report(
+    payload: SavedReportCreate, request: Request
+) -> SavedReportRead:
+    """Create a saved report and its initial revision."""
+
+    await _ensure_schema(request)
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    now = datetime.now(UTC)
+    report_id = payload.report_id or _new_id("report")
+    async with _session(request) as session:
+        report = ReportRecord(
+            report_id=report_id,
+            project_id=payload.project_id,
+            name=payload.name,
+            description=payload.description,
+            config=payload.config,
+            created_at=now,
+            updated_at=now,
+        )
+        revision = ReportRevisionRecord(
+            report_id=report_id,
+            config=payload.config,
+            created_at=now,
+        )
+        session.add(report)
+        session.add(revision)
+        await session.commit()
+    return await get_saved_report(report_id, request)
+
+
+@router.post("/reports/render", response_model=RenderedReportRead, status_code=201)
 async def render_standalone_report(
     payload: ReportRenderRequest, request: Request
-) -> ReportRead:
+) -> RenderedReportRead:
+    """Render and persist either a saved report or filesystem report output."""
+
     await _ensure_schema(request)
-    report_id = payload.report_id or _new_id("report")
-    html = render_report(payload.results, title=payload.title)
+    rendered_report_id = payload.rendered_report_id or _new_id("rendered_report")
     created_at = datetime.now(UTC)
-    values = ReportRecord(
-        report_id=report_id,
+    if payload.project_id is not None:
+        await _require_project(request, payload.project_id)
+    if payload.report_id is not None:
+        # Saved-report rendering executes the report model and stores the final
+        # offline HTML so it can be viewed/exported later.
+        async with _session(request) as session:
+            report = await session.get(ReportRecord, payload.report_id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="Report not found")
+            project_id = payload.project_id or report.project_id
+            insights = await _report_insights(session, report)
+            analytics_store = _analytics_store_for_project(request, project_id)
+            result = await execute_report(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                report=report,
+                insights=insights,
+                refresh=payload.refresh,
+            )
+            html = render_report_result(result)
+            title = report.name
+    else:
+        # Standalone rendering preserves the older CLI-style path where a report
+        # is rendered from a results directory instead of a saved report config.
+        project_id = payload.project_id
+        html = render_report(payload.results, title=payload.title)
+        title = payload.title
+    values = RenderedReportRecord(
+        rendered_report_id=rendered_report_id,
+        project_id=project_id,
         run_id=payload.run_id,
-        template_id=payload.template_id,
-        title=payload.title,
+        report_id=payload.report_id,
+        title=title,
         html=html,
         created_at=created_at,
     )
     async with _session(request) as session:
-        existing = await session.get(ReportRecord, report_id)
+        existing = await session.get(RenderedReportRecord, rendered_report_id)
         if existing is not None:
             await session.delete(existing)
         session.add(values)
         await session.commit()
-    return ReportRead(
-        report_id=report_id,
+    return RenderedReportRead(
+        rendered_report_id=rendered_report_id,
+        project_id=project_id,
         run_id=payload.run_id,
-        template_id=payload.template_id,
-        title=payload.title,
+        report_id=payload.report_id,
+        title=title,
         html=html,
         created_at=created_at,
     )
 
 
-@router.get("/reports/{report_id}", response_model=ReportRead)
-async def get_report(report_id: str, request: Request) -> ReportRead:
+@router.get("/reports/{report_id}", response_model=SavedReportRead)
+async def get_saved_report(report_id: str, request: Request) -> SavedReportRead:
+    """Return a saved report by ID."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await session.get(ReportRecord, report_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    return ReportRead.model_validate(row.model_dump())
+    return SavedReportRead.model_validate(row.model_dump())
 
 
-@router.get("/reports/{report_id}/export.html")
-async def export_report_html(report_id: str, request: Request) -> Response:
-    report = await get_report(report_id, request)
+@router.patch("/reports/{report_id}", response_model=SavedReportRead)
+async def patch_report(
+    report_id: str, payload: SavedReportPatch, request: Request
+) -> SavedReportRead:
+    """Patch a saved report and record a revision when config changes."""
+
+    await _ensure_schema(request)
+    values = payload.model_dump(exclude_unset=True)
+    if values:
+        async with _session(request) as session:
+            report = await session.get(ReportRecord, report_id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="Report not found")
+            updated_at = datetime.now(UTC)
+            for key, value in values.items():
+                setattr(report, key, value)
+            report.updated_at = updated_at
+            session.add(report)
+            if "config" in values:
+                session.add(
+                    ReportRevisionRecord(
+                        report_id=report_id,
+                        config=values["config"],
+                        created_at=updated_at,
+                    )
+                )
+            await session.commit()
+    return await get_saved_report(report_id, request)
+
+
+@router.get("/reports/{report_id}/export.yaml")
+async def export_report_yaml(report_id: str, request: Request) -> Response:
+    """Export a saved report as portable YAML."""
+
+    report = await get_saved_report(report_id, request)
+    body = yaml.safe_dump(_saved_report_export(report), sort_keys=False)
+    return Response(content=body, media_type="application/yaml")
+
+
+@router.get("/reports/{report_id}/export.json")
+async def export_report_json(report_id: str, request: Request) -> dict[str, Any]:
+    """Export a saved report as portable JSON."""
+
+    report = await get_saved_report(report_id, request)
+    return _saved_report_export(report)
+
+
+@router.post("/reports/{report_id}/execute", response_model=ReportResultRead)
+async def execute_saved_report(
+    report_id: str,
+    payload: ReportExecuteRequest,
+    request: Request,
+) -> ReportResultRead:
+    """Execute a saved report and return its structured result payload."""
+
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        report = await session.get(ReportRecord, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        project_id = payload.project_id or report.project_id
+        if project_id is not None:
+            await _require_project(request, project_id)
+        insights = await _report_insights(session, report)
+        analytics_store = _analytics_store_for_project(request, project_id)
+        try:
+            result = await execute_report(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                report=report,
+                insights=insights,
+                refresh=payload.refresh,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    return ReportResultRead(result=result)
+
+
+@router.get("/rendered-reports/{rendered_report_id}", response_model=RenderedReportRead)
+async def get_rendered_report(
+    rendered_report_id: str, request: Request
+) -> RenderedReportRead:
+    """Return a persisted rendered report."""
+
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        row = await session.get(RenderedReportRecord, rendered_report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Rendered report not found")
+    return RenderedReportRead.model_validate(row.model_dump())
+
+
+@router.get("/rendered-reports/{rendered_report_id}/export.html")
+async def export_rendered_report_html(
+    rendered_report_id: str, request: Request
+) -> Response:
+    """Export persisted report HTML."""
+
+    report = await get_rendered_report(rendered_report_id, request)
     return Response(content=report.html, media_type="text/html")
 
 
 @router.get("/cohorts", response_model=list[CohortRead])
 async def list_cohorts(request: Request) -> list[CohortRead]:
+    """List saved cohort definitions."""
+
     rows = await _list_table(request, CohortRecord)
     return [CohortRead.model_validate(row.model_dump()) for row in rows]
 
 
 @router.post("/cohorts", response_model=CohortRead, status_code=201)
 async def create_cohort(payload: CohortCreate, request: Request) -> CohortRead:
+    """Create a saved cohort definition."""
+
     now = datetime.now(UTC)
     values = payload.model_dump(exclude={"cohort_id"}) | {
         "cohort_id": payload.cohort_id or _new_id("cohort"),
@@ -1118,6 +1658,8 @@ async def create_cohort(payload: CohortCreate, request: Request) -> CohortRead:
 async def patch_cohort(
     cohort_id: str, payload: CohortPatch, request: Request
 ) -> CohortRead:
+    """Patch a saved cohort definition."""
+
     values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
     await _patch_values(request, CohortRecord, "cohort_id", cohort_id, values)
     row = await _get_row(request, CohortRecord, "cohort_id", cohort_id)
@@ -1126,12 +1668,16 @@ async def patch_cohort(
 
 @router.get("/qc-policies", response_model=list[QCPolicyRead])
 async def list_qc_policies(request: Request) -> list[QCPolicyRead]:
+    """List saved QC policy definitions."""
+
     rows = await _list_table(request, QCPolicyRecord)
     return [QCPolicyRead.model_validate(row.model_dump()) for row in rows]
 
 
 @router.post("/qc-policies", response_model=QCPolicyRead, status_code=201)
 async def create_qc_policy(payload: QCPolicyCreate, request: Request) -> QCPolicyRead:
+    """Create a saved QC policy definition."""
+
     now = datetime.now(UTC)
     values = payload.model_dump(exclude={"policy_id"}) | {
         "policy_id": payload.policy_id or _new_id("policy"),
@@ -1145,6 +1691,8 @@ async def create_qc_policy(payload: QCPolicyCreate, request: Request) -> QCPolic
 async def patch_qc_policy(
     policy_id: str, payload: QCPolicyPatch, request: Request
 ) -> QCPolicyRead:
+    """Patch a saved QC policy definition."""
+
     values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
     await _patch_values(request, QCPolicyRecord, "policy_id", policy_id, values)
     row = await _get_row(request, QCPolicyRecord, "policy_id", policy_id)
@@ -1156,6 +1704,8 @@ async def list_database_tables(
     request: Request,
     project_id: str | None = Query(default=None),
 ) -> list[DatabaseTableRead]:
+    """List catalog and analytics tables available to the database browser."""
+
     if project_id is not None:
         await _require_project(request, project_id)
     catalog_counts = await _control_table_counts(request, project_id=project_id)
@@ -1187,6 +1737,8 @@ async def get_database_summary(
     request: Request,
     project_id: str | None = Query(default=None),
 ) -> DatabaseSummaryRead:
+    """Return storage sizes and row counts for the local database."""
+
     if project_id is not None:
         await _require_project(request, project_id)
     control_counts = await _control_table_counts(request, project_id=project_id)
@@ -1198,8 +1750,7 @@ async def get_database_summary(
         file_size_bytes=_path_size(Path(request.app.state.settings.file_root)),
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
-        total_scalar_metrics=analytics_counts.get("sample_metric_numeric", 0)
-        + analytics_counts.get("sample_metric_string", 0),
+        total_scalar_metrics=analytics_counts.get("sample_metrics", 0),
         total_payloads=analytics_counts.get("profile_payloads", 0),
         control_tables=[
             TableCountRead(name=name, rows=count)
@@ -1214,6 +1765,8 @@ async def get_database_summary(
 
 @router.get("/database/tables/{table_name}/rows")
 async def list_database_rows(table_name: str, request: Request) -> list[dict[str, Any]]:
+    """List rows from an editable catalog table."""
+
     model, _, _ = _editable_table(table_name)
     rows = await _list_table(request, model)
     return [_jsonable_row(row) for row in rows]
@@ -1233,6 +1786,8 @@ async def preview_database_table(
     sort_by: str | None = Query(default=None),
     sort_direction: str = Query(default="asc", pattern="^(asc|desc)$"),
 ) -> DatabaseTablePageRead:
+    """Preview paginated rows from a catalog or analytics table."""
+
     if project_id is not None:
         await _require_project(request, project_id)
     if store == "catalog":
@@ -1279,6 +1834,8 @@ async def preview_database_table(
 async def patch_database_row(
     table_name: str, row_id: str, payload: DatabaseRowPatch, request: Request
 ) -> dict[str, Any]:
+    """Patch one row in a registry-approved editable catalog table."""
+
     model, primary_key, allowed = _editable_table(table_name)
     disallowed = set(payload.values) - allowed
     if disallowed:
@@ -1293,23 +1850,33 @@ async def patch_database_row(
 
 
 async def _ensure_schema(request: Request) -> None:
+    """Create SQL catalog tables before route code touches the database."""
+
     await request.app.state.store.ensure_schema()
 
 
 def _engine(request: Request):
+    """Return the async SQLAlchemy engine owned by the app store."""
+
     return request.app.state.store._get_engine()
 
 
 def _session(request: Request) -> AsyncSession:
+    """Create an AsyncSession bound to the app store's engine."""
+
     return AsyncSession(_engine(request))
 
 
 async def _ensure_default_project(request: Request) -> ProjectRead:
+    """Create and return the default project used by first-run dashboards."""
+
     project = await request.app.state.store.ensure_default_project()
     return await _get_project_read(request, project.project_id)
 
 
 async def _require_project(request: Request, project_id: str) -> ProjectRecord:
+    """Return a project row or raise a 404 HTTP error."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await get_record_by_field(
@@ -1321,6 +1888,8 @@ async def _require_project(request: Request, project_id: str) -> ProjectRecord:
 
 
 async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
+    """Return an enriched project response by public project ID."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await get_record_by_field(
@@ -1332,6 +1901,8 @@ async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
 
 
 async def _get_project_run(request: Request, project_id: str, run_id: str) -> Run:
+    """Return a public run model after checking project ownership."""
+
     await _require_project(request, project_id)
     run = await request.app.state.store.get_run(run_id)
     if run is None or run.project_id != project_id:
@@ -1340,6 +1911,8 @@ async def _get_project_run(request: Request, project_id: str, run_id: str) -> Ru
 
 
 async def _get_run_record(request: Request, run_id: str) -> RunRecord:
+    """Return the SQL catalog row for a run."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
@@ -1351,6 +1924,8 @@ async def _get_run_record(request: Request, run_id: str) -> RunRecord:
 async def _get_project_run_record(
     request: Request, project_id: str, run_id: str
 ) -> RunRecord:
+    """Return a run catalog row after checking project ownership."""
+
     project = await _require_project(request, project_id)
     row = await _get_run_record(request, run_id)
     if row.project_id != project.id:
@@ -1363,6 +1938,10 @@ async def _project_read(
     *,
     session: AsyncSession,
 ) -> ProjectRead:
+    """Build a project response with derived counts and latest activity."""
+
+    # Project cards need summary numbers, but those counts are not stored on the
+    # project row. Compute them in the same session to keep the response current.
     run_count = int(
         (
             await session.exec(
@@ -1378,6 +1957,15 @@ async def _project_read(
                 select(func.count())
                 .select_from(SampleRecord)
                 .where(SampleRecord.project_id == row.id)
+            )
+        ).one()
+    )
+    subject_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(SubjectRecord)
+                .where(SubjectRecord.project_id == row.id)
             )
         ).one()
     )
@@ -1404,6 +1992,7 @@ async def _project_read(
         **data,
         run_count=run_count,
         sample_count=sample_count,
+        subject_count=subject_count,
         file_count=file_count,
         file_size_bytes=file_size_bytes,
         latest_activity_at=latest_activity_at,
@@ -1417,9 +2006,13 @@ async def _list_samples(
     limit: int,
     offset: int,
 ) -> SamplePageRead:
+    """List samples with latest-run and run-count summary columns."""
+
     await _ensure_schema(request)
     project = await _require_project(request, project_id)
     project_pk = project.id
+    # These subqueries avoid returning every run_sample link just to show summary
+    # data in the sample table.
     latest_run_subquery = (
         select(
             cast(Any, RunSampleRecord.sample_id).label("sample_id"),
@@ -1495,6 +2088,8 @@ async def _require_project_sample(
     project_id: str,
     sample_id: str,
 ) -> SampleRecord:
+    """Return a sample row only when it belongs to the project."""
+
     project = await get_record_by_field(
         session, ProjectRecord, ProjectRecord.project_id, project_id
     )
@@ -1516,6 +2111,8 @@ async def _sample_run_rows(
     project_id: str,
     sample_id: str,
 ) -> list[tuple[RunRecord, RunSampleRecord]]:
+    """Return run/run_sample rows for a sample in reverse run order."""
+
     project = await get_record_by_field(
         session, ProjectRecord, ProjectRecord.project_id, project_id
     )
@@ -1550,6 +2147,8 @@ async def _latest_sample_run(
     project_id: str,
     sample_id: str,
 ) -> tuple[RunRecord, RunSampleRecord] | None:
+    """Return the latest run/run_sample pair for a project sample."""
+
     rows = await _sample_run_rows(session, project_id, sample_id)
     return rows[0] if rows else None
 
@@ -1560,6 +2159,8 @@ async def _get_sample_run_link(
     sample_id: str,
     run_id: str,
 ) -> tuple[RunRecord, RunSampleRecord]:
+    """Return the catalog link proving a sample belongs to a run."""
+
     project = await get_record_by_field(
         session, ProjectRecord, ProjectRecord.project_id, project_id
     )
@@ -1595,6 +2196,8 @@ async def _list_runs(
     limit: int,
     offset: int,
 ) -> RunPageRead:
+    """List runs with optional project scoping and pagination."""
+
     await _ensure_schema(request)
     project_pk: int | None = None
     if project_id is not None:
@@ -1620,6 +2223,8 @@ async def _list_runs(
 
 
 async def _run_from_row_public(session: AsyncSession, row: RunRecord) -> Run:
+    """Convert a run catalog row into the public SDK/API run model."""
+
     return Run(
         run_id=row.run_id,
         project_id=await _public_label(
@@ -1647,6 +2252,8 @@ async def _sample_from_row_public(
     session: AsyncSession,
     row: SampleRecord,
 ) -> Sample:
+    """Convert a sample catalog row into the public SDK/API sample model."""
+
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
     return Sample(
@@ -1670,6 +2277,8 @@ async def _sample_list_item_from_row_public(
     latest_run: RunRecord | None,
     latest_run_created_at: datetime | None,
 ) -> SampleListItemRead:
+    """Convert a sample row plus summary values into a list item."""
+
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
     return SampleListItemRead(
@@ -1694,6 +2303,8 @@ async def _sample_run_from_rows_public(
     run: RunRecord,
     run_sample: RunSampleRecord,
 ) -> SampleRunRead:
+    """Convert joined run/run_sample rows into a sample-run response."""
+
     return SampleRunRead(
         run_id=run.run_id,
         project_id=await _public_label(
@@ -1712,21 +2323,36 @@ async def _sample_run_from_rows_public(
 
 
 def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
+    """Convert DuckDB metric rows into API response models."""
+
     return [
         AnalyticsMetricRead(
             run_id=metric.run_id,
             data_profile_id=metric.data_profile_id,
             run_sample_id=metric.run_sample_id,
             sample_id=metric.sample_id,
-            metric_id=metric.metric_id,
-            value=metric.value,
+            field_id=metric.field_id,
+            value_type=metric.value_type,
+            value=_sample_metric_value(metric),
             source_file_id=metric.source_file_id,
         )
         for metric in metrics
     ]
 
 
+def _sample_metric_value(metric: Any) -> JsonValue:
+    """Pick the typed value column for a DuckDB metric row."""
+
+    if getattr(metric, "value_type", None) == "numeric":
+        return metric.value_numeric
+    if getattr(metric, "value_type", None) == "json":
+        return metric.value_json
+    return metric.value_string
+
+
 def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
+    """Convert DuckDB payload rows into API response models."""
+
     return [
         AnalyticsPayloadRead(
             run_id=payload.run_id,
@@ -1748,6 +2374,8 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
 def _analytics_store_for_project(
     request: Request, project_id: str | None
 ) -> DuckDBAnalyticsStore:
+    """Return the DuckDB store for a project or configured global path."""
+
     settings = request.app.state.settings
     if settings.analytics_path:
         return DuckDBAnalyticsStore(settings.analytics_path)
@@ -1759,6 +2387,8 @@ def _analytics_store_for_project(
 
 
 def _new_project_id() -> str:
+    """Generate and validate a public project ID."""
+
     project_id = new_project_id()
     if not is_project_id(project_id):
         raise RuntimeError("Generated invalid project id")
@@ -1766,15 +2396,21 @@ def _new_project_id() -> str:
 
 
 def _new_id(prefix: str) -> str:
+    """Generate a short stable-enough local API ID with a prefix."""
+
     return f"{prefix}-{uuid4().hex[:12]}"
 
 
 def _payload_columns(metadata_json: dict[str, Any]) -> list[str]:
+    """Extract tabular payload column names from stored metadata."""
+
     columns = metadata_json.get("columns")
     return [str(column) for column in columns] if isinstance(columns, list) else []
 
 
 def _payload_rows(metadata_json: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract tabular payload rows from stored metadata."""
+
     rows = metadata_json.get("rows")
     if not isinstance(rows, list):
         return []
@@ -1782,24 +2418,65 @@ def _payload_rows(metadata_json: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _payload_source_hash(metadata_json: dict[str, Any]) -> str | None:
+    """Extract the optional source hash from payload metadata."""
+
     source_hash = metadata_json.get("source_hash")
     return source_hash if isinstance(source_hash, str) else None
 
 
-def _template_from_row(row: ReportTemplateRecord) -> ReportTemplateRead:
-    return ReportTemplateRead.model_validate(row.model_dump())
+def _saved_insight_export(insight: SavedInsightRead) -> dict[str, Any]:
+    """Build the portable saved-insight export document."""
 
-
-def _template_export(template: ReportTemplateRead) -> dict[str, Any]:
     return {
-        "template_id": template.template_id,
-        "name": template.name,
-        "description": template.description,
-        "config": template.config,
+        "insight_id": insight.insight_id,
+        "project_id": insight.project_id,
+        "name": insight.name,
+        "description": insight.description,
+        "config": insight.config,
     }
 
 
+def _saved_report_export(report: SavedReportRead) -> dict[str, Any]:
+    """Build the portable saved-report export document."""
+
+    return {
+        "report_id": report.report_id,
+        "project_id": report.project_id,
+        "name": report.name,
+        "description": report.description,
+        "config": report.config,
+    }
+
+
+async def _report_insights(
+    session: AsyncSession, report: ReportRecord
+) -> list[InsightRecord]:
+    """Load report insight dependencies in template order."""
+
+    items = report.config.get("items") if isinstance(report.config, dict) else None
+    insight_ids: list[str] = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("insight_id"), str):
+                insight_ids.append(item["insight_id"])
+    if not insight_ids:
+        return []
+    rows = (
+        await session.exec(
+            select(InsightRecord).where(
+                cast(Any, InsightRecord.insight_id).in_(insight_ids)
+            )
+        )
+    ).all()
+    by_id = {row.insight_id: row for row in rows}
+    # Preserve the order in report.config["items"] so rendered reports match the
+    # builder/template order instead of database return order.
+    return [by_id[insight_id] for insight_id in insight_ids if insight_id in by_id]
+
+
 async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]:
+    """Return all rows from a registered SQLModel table."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         return list((await session.exec(select(model))).all())
@@ -1815,6 +2492,8 @@ async def _catalog_table_page(
     sort_by: str | None,
     sort_direction: str,
 ) -> DatabaseTablePageRead:
+    """Preview one catalog table with safe sorting and project scoping."""
+
     model, primary_key = _catalog_table(table_name)
     columns = _catalog_columns(model)
     order_column_name = sort_by or primary_key
@@ -1827,6 +2506,9 @@ async def _catalog_table_page(
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
+    # Most catalog tables scope directly by project_id. A few tables either
+    # include global rows or only reference runs, so each case is handled
+    # explicitly instead of assuming a universal schema.
     if (
         project_pk is not None
         and table_name == "data_profiles"
@@ -1868,6 +2550,8 @@ async def _catalog_table_page(
 async def _control_table_counts(
     request: Request, project_id: str | None = None
 ) -> dict[str, int]:
+    """Count rows in each registered catalog table."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         counts: dict[str, int] = {}
@@ -1876,6 +2560,8 @@ async def _control_table_counts(
         for name, (model, _) in CATALOG_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
+            # Count with the same scoping rules used by table previews so the
+            # database summary and browser rows agree.
             if (
                 project_pk is not None
                 and name == "data_profiles"
@@ -1901,6 +2587,8 @@ async def _project_run_ids(
     *,
     session: AsyncSession | None = None,
 ) -> list[int] | None:
+    """Return internal run primary keys for project-scoped joins."""
+
     if project_id is None:
         return None
     own_session = False
@@ -1929,6 +2617,8 @@ async def _project_pk(
     *,
     session: AsyncSession | None = None,
 ) -> int | None:
+    """Resolve a public project ID to its internal SQL primary key."""
+
     if project_id is None:
         return None
     own_session = False
@@ -1950,6 +2640,8 @@ async def _project_public_id_for_pk(
     request: Request,
     project_pk: int | None,
 ) -> str | None:
+    """Resolve an internal project primary key to its public project ID."""
+
     if project_pk is None:
         return None
     await _ensure_schema(request)
@@ -1963,6 +2655,8 @@ async def _project_public_id_for_pk(
 async def _insert_values(
     request: Request, model: type[SQLModel], values: dict[str, Any]
 ) -> None:
+    """Insert one SQLModel row after schema initialization."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         session.add(model.model_validate(values))
@@ -1976,6 +2670,8 @@ async def _patch_values(
     row_id: str,
     values: dict[str, Any],
 ) -> None:
+    """Patch one SQLModel row addressed by a registered primary key field."""
+
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await _get_row(request, model, primary_key, row_id, session=session)
@@ -1993,6 +2689,8 @@ async def _get_row(
     *,
     session: AsyncSession | None = None,
 ) -> SQLModel:
+    """Return a SQLModel row by public row ID, opening a session if needed."""
+
     await _ensure_schema(request)
     own_session = False
     if session is None:
@@ -2014,6 +2712,8 @@ async def _get_row(
 
 
 def _editable_table(table_name: str) -> tuple[type[SQLModel], str, set[str]]:
+    """Return edit policy for a table or raise a 404 HTTP error."""
+
     table_config = EDITABLE_TABLES.get(table_name)
     if table_config is None:
         raise HTTPException(status_code=404, detail="Editable table not found")
@@ -2021,6 +2721,8 @@ def _editable_table(table_name: str) -> tuple[type[SQLModel], str, set[str]]:
 
 
 def _catalog_table(table_name: str) -> tuple[type[SQLModel], str]:
+    """Return catalog browse policy for a table or raise a 404 HTTP error."""
+
     table_config = CATALOG_TABLES.get(table_name)
     if table_config is None:
         raise HTTPException(status_code=404, detail="Catalog table not found")
@@ -2028,12 +2730,16 @@ def _catalog_table(table_name: str) -> tuple[type[SQLModel], str]:
 
 
 def _catalog_columns(model: type[SQLModel]) -> list[str]:
+    """Return public column names for a SQLModel catalog model."""
+
     return list(model.model_fields)
 
 
 def _coerce_json_values(
     model: type[SQLModel], values: dict[str, JsonValue]
 ) -> dict[str, Any]:
+    """Coerce database-editor JSON values into SQLModel field names/values."""
+
     coerced: dict[str, Any] = {}
     for key, value in values.items():
         field_name = _model_field_name(model, key)
@@ -2045,10 +2751,157 @@ def _coerce_json_values(
 
 
 def _jsonable_row(row: SQLModel) -> dict[str, Any]:
+    """Convert a SQLModel row into a JSON-friendly database-browser row."""
+
     data = row.model_dump(mode="json")
     if isinstance(row, SampleRecord) and "metadata_json" in data:
         data["metadata"] = data.pop("metadata_json")
     return data
+
+
+async def _fields_by_profile(
+    session: AsyncSession,
+    profiles: list[DataProfileRecord],
+) -> dict[int | None, list[DataProfileFieldRecord]]:
+    """Load data-profile fields grouped by profile primary key."""
+
+    profile_ids = [profile.id for profile in profiles if profile.id is not None]
+    if not profile_ids:
+        return {}
+    rows = (
+        await session.exec(
+            select(DataProfileFieldRecord)
+            .where(cast(Any, DataProfileFieldRecord.data_profile_id).in_(profile_ids))
+            .order_by(
+                DataProfileFieldRecord.field_role, DataProfileFieldRecord.field_id
+            )
+        )
+    ).all()
+    grouped: dict[int | None, list[DataProfileFieldRecord]] = {}
+    for row in rows:
+        grouped.setdefault(row.data_profile_id, []).append(row)
+    return grouped
+
+
+def _data_profile_read(
+    profile: DataProfileRecord,
+    fields: list[DataProfileFieldRecord],
+) -> DataProfileRead:
+    """Convert a data profile catalog row into its API response model."""
+
+    field_reads = [_data_profile_field_read(field) for field in fields]
+    if not field_reads:
+        # Some analytics tables are queryable even when no field rows were
+        # materialized. Surface synthetic fields so the insight builder can
+        # still present usable metric/attribute choices.
+        field_reads = _synthetic_profile_fields(profile)
+    return DataProfileRead(
+        data_profile_id=profile.data_profile_id,
+        name=profile.name,
+        data_type=profile.data_type,
+        assay=profile.assay,
+        entity_grain=profile.entity_grain,
+        value_semantics=profile.value_semantics,
+        primary_table=profile.primary_table,
+        physical_tables=dict(profile.physical_tables_json),
+        summary=dict(profile.summary_json),
+        last_profiled_at=profile.last_profiled_at,
+        source_fingerprint=profile.source_fingerprint,
+        query_modes=dict(profile.query_modes_json),
+        mcp_description=profile.mcp_description,
+        metadata_json=dict(profile.metadata_json),
+        fields=field_reads,
+    )
+
+
+def _synthetic_profile_fields(profile: DataProfileRecord) -> list[DataProfileFieldRead]:
+    """Return field descriptors for profile tables without field rows."""
+
+    fields = {
+        "feature_value_numeric": [
+            ("value", "measure", "Value", "numeric", "value"),
+        ],
+        "feature_call": [
+            ("call_code", "attribute", "Call code", "string", "call_code"),
+            ("call_rank", "measure", "Call rank", "numeric", "call_rank"),
+        ],
+        "copy_number_segments": [
+            ("segment_mean", "measure", "Segment mean", "numeric", "segment_mean"),
+            ("num_probes", "measure", "Number of probes", "numeric", "num_probes"),
+        ],
+        "sample_variant_calls": [
+            (
+                "allele_fraction",
+                "measure",
+                "Allele fraction",
+                "numeric",
+                "allele_fraction",
+            ),
+            ("genotype", "attribute", "Genotype", "string", "genotype"),
+            ("filter", "attribute", "Filter", "string", "filter"),
+        ],
+        "sample_structural_variant_calls": [
+            ("call_status", "attribute", "Call status", "string", "call_status"),
+            (
+                "split_read_count",
+                "measure",
+                "Split read count",
+                "numeric",
+                "split_read_count",
+            ),
+            (
+                "paired_end_read_count",
+                "measure",
+                "Paired-end read count",
+                "numeric",
+                "paired_end_read_count",
+            ),
+        ],
+        "profile_payloads": [
+            ("payload_kind", "attribute", "Payload kind", "string", "payload_kind"),
+            ("payload_name", "attribute", "Payload name", "string", "payload_name"),
+        ],
+    }.get(profile.primary_table or "", [])
+    return [
+        DataProfileFieldRead(
+            field_id=field_id,
+            field_role=field_role,
+            entity_scope=profile.entity_grain,
+            display_name=display_name,
+            value_type=value_type,
+            unit=profile.unit if value_type == "numeric" else None,
+            direction=None,
+            description=profile.mcp_description,
+            priority=None,
+            query_ref={
+                "table": profile.primary_table,
+                "value_column": value_column,
+                "synthetic": True,
+            },
+            summary=dict(profile.summary_json),
+            metadata_json={"synthetic": True},
+        )
+        for field_id, field_role, display_name, value_type, value_column in fields
+    ]
+
+
+def _data_profile_field_read(field: DataProfileFieldRecord) -> DataProfileFieldRead:
+    """Convert a data profile field catalog row into its API response model."""
+
+    return DataProfileFieldRead(
+        field_id=field.field_id,
+        field_role=field.field_role,
+        entity_scope=field.entity_scope,
+        display_name=field.display_name,
+        value_type=field.value_type,
+        unit=field.unit,
+        direction=field.direction,
+        description=field.description,
+        priority=field.priority,
+        query_ref=dict(field.query_ref_json),
+        summary=dict(field.summary_json),
+        metadata_json=dict(field.metadata_json),
+    )
 
 
 async def _file_from_rows_public(
@@ -2059,6 +2912,8 @@ async def _file_from_rows_public(
     association_scope: str = "direct_run",
     association_reason: str | None = None,
 ) -> FileRead:
+    """Convert a file/link pair using public labels instead of SQL IDs."""
+
     if link is None:
         return _file_from_rows(
             file,
@@ -2080,6 +2935,8 @@ async def _file_from_rows_public(
     data_profile_id = await _public_label(
         session, DataProfileRecord, "data_profile_id", link.data_profile_id
     )
+    # source_path is parser/ingest provenance stored inside metadata_json; keep
+    # it as a first-class response field because the dashboard displays it often.
     metadata_value = file.metadata_json
     metadata = metadata_value if isinstance(metadata_value, dict) else {}
     source_path = metadata.get("source_path")
@@ -2109,6 +2966,8 @@ async def _public_label(
     label_name: str,
     identifier: int | None,
 ) -> str | None:
+    """Resolve an internal integer foreign key to a public string label."""
+
     if identifier is None:
         return None
     row = await get_record_by_field(session, model, cast(Any, model).id, identifier)
@@ -2125,6 +2984,8 @@ def _file_from_rows(
     association_scope: str = "direct_run",
     association_reason: str | None = None,
 ) -> FileRead:
+    """Convert file/link rows without resolving foreign keys to public labels."""
+
     metadata_value = file.metadata_json
     metadata = metadata_value if isinstance(metadata_value, dict) else {}
     source_path = metadata.get("source_path")
@@ -2167,6 +3028,8 @@ def _file_from_rows(
 
 
 def _dedupe_file_reads(files: list[FileRead]) -> list[FileRead]:
+    """Keep one file response per file ID, preferring the strongest link."""
+
     by_file_id: dict[str, FileRead] = {}
     for file in files:
         existing = by_file_id.get(file.file_id)
@@ -2176,6 +3039,8 @@ def _dedupe_file_reads(files: list[FileRead]) -> list[FileRead]:
 
 
 def _file_read_rank(file: FileRead) -> tuple[int, int]:
+    """Rank file associations so direct/profile-aware links win deduping."""
+
     scope_rank = {"direct_run": 3, "direct_sample": 3, "data_import": 2}.get(
         file.association_scope,
         1,
@@ -2185,6 +3050,8 @@ def _file_read_rank(file: FileRead) -> tuple[int, int]:
 
 
 def _model_field_name(model: type[SQLModel], requested_name: str) -> str:
+    """Map API-facing aliases to SQLModel field names."""
+
     if requested_name in model.model_fields:
         return requested_name
     if requested_name == "metadata" and "metadata_json" in model.model_fields:
@@ -2195,6 +3062,8 @@ def _model_field_name(model: type[SQLModel], requested_name: str) -> str:
 def _coerce_primary_key_value(
     model: type[SQLModel], primary_key: str, value: str
 ) -> Any:
+    """Coerce route path row IDs to the model primary-key type."""
+
     field_info = model.model_fields.get(primary_key)
     if field_info is None:
         return value
@@ -2207,6 +3076,8 @@ def _coerce_primary_key_value(
 
 
 def _sqlite_size_bytes(database_url: str) -> int:
+    """Return the SQLite database file size when the URL points at a file."""
+
     prefix = "sqlite+aiosqlite:///"
     if not database_url.startswith(prefix):
         return 0
@@ -2218,6 +3089,8 @@ def _sqlite_size_bytes(database_url: str) -> int:
 
 
 def _path_size(path: Path) -> int:
+    """Return recursive file size for a file or directory path."""
+
     if not path.exists():
         return 0
     if path.is_file():

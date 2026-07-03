@@ -51,6 +51,10 @@ def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int
             data_profile_id: index
             for index, data_profile_id in enumerate(data_profile_ids, start=1)
         },
+        "field_id": {
+            field.field_id: index
+            for index, field in enumerate(parsed.profile_fields, start=1)
+        },
         "run_id": {run_id: 1},
         "run_sample_id": {
             f"{run_id}:{sample_id}": index
@@ -99,7 +103,7 @@ def test_parse_multiqc_bundle_extracts_metrics_sources_versions_and_payloads(
 
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
 
-    metric_ids = {metric.metric_id for metric in parsed.metrics}
+    metric_ids = {metric.field_id for metric in parsed.metrics}
     assert "general_stats.salmon_percent_mapped" in metric_ids
     assert "multiqc_salmon.percent_mapped" in metric_ids
     assert parsed.data_sources[0].source_path == "/work/S1/libParams/flenDist.txt"
@@ -121,17 +125,11 @@ def test_duckdb_store_round_trips_metrics_and_payloads(tmp_path: Path) -> None:
 
     metrics = store.list_metric_values(1)
     payloads = store.list_table_payloads(1)
-    with store._connect() as connection:
-        percent_mapped_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'general_stats.salmon_percent_mapped'
-            """
-        ).fetchone()
-        percent_mapped_metric_id = _scalar(percent_mapped_metric_id)
+    percent_mapped_field_id = _direct_catalog_maps(parsed, run_id="run-1")["field_id"][
+        "general_stats.salmon_percent_mapped"
+    ]
 
-    assert any(metric.metric_id == percent_mapped_metric_id for metric in metrics)
+    assert any(metric.field_id == percent_mapped_field_id for metric in metrics)
     assert any(payload.payload_name == "salmon_plot" for payload in payloads)
     assert payloads[0].rows
 
@@ -144,22 +142,19 @@ def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
     store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
 
     parsed.sample_metric_string[0] = parsed.sample_metric_string[0].model_copy(
-        update={"value": "[330, 612, 1140, 1989, 4614]"}
+        update={"value_string": "[330, 612, 1140, 1989, 4614]"}
     )
     store.replace_run_data(1, _resolved_multiqc_batch(parsed, run_id="run-1"))
 
     metrics = store.list_metric_values(1)
-    with store._connect() as connection:
-        string_metric_id = connection.execute(
-            "SELECT metric_id FROM dim_metrics WHERE metric_label = ?",
-            [parsed.sample_metric_string[0].metric_id],
-        ).fetchone()
-        string_metric_id = _scalar(string_metric_id)
+    string_field_id = _direct_catalog_maps(parsed, run_id="run-1")["field_id"][
+        parsed.sample_metric_string[0].field_id
+    ]
 
     assert any(
-        metric.value == "[330, 612, 1140, 1989, 4614]"
+        metric.value_string == "[330, 612, 1140, 1989, 4614]"
         for metric in metrics
-        if metric.metric_id == string_metric_id
+        if metric.field_id == string_field_id
     )
 
 
@@ -168,49 +163,43 @@ def test_duckdb_store_inserts_non_integer_table_from_parquet(
 ) -> None:
     store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
     store.ensure_schema()
-    parquet_path = tmp_path / "metric_definitions.parquet"
+    parquet_path = tmp_path / "features.parquet"
 
     with store._connect() as connection:
         connection.execute(f"""
             COPY (
                 SELECT
-                    'metric.parquet' AS metric_id,
-                    'test' AS namespace,
-                    'metric.parquet' AS metric_name,
-                    'Metric Parquet' AS display_name,
-                    'numeric' AS value_type,
-                    NULL AS unit,
-                    NULL AS direction,
-                    NULL AS description,
-                    'pytest' AS producer_tool,
-                    NULL AS producer_module,
-                    NULL AS schema_version
+                    'gene:tp53' AS feature_id,
+                    'TP53' AS source_feature_id,
+                    'gene' AS feature_type,
+                    'TP53' AS symbol,
+                    NULL AS stable_id,
+                    NULL AS namespace,
+                    NULL AS genome_build,
+                    json_object() AS metadata_json
             ) TO {_sql_literal(parquet_path)} (FORMAT PARQUET)
             """)
         insert_public_parquet(
             connection,
-            "metric_definitions",
+            "features",
             (
-                "metric_id",
+                "feature_id",
+                "source_feature_id",
+                "feature_type",
+                "symbol",
+                "stable_id",
                 "namespace",
-                "metric_name",
-                "display_name",
-                "value_type",
-                "unit",
-                "direction",
-                "description",
-                "producer_tool",
-                "producer_module",
-                "schema_version",
+                "genome_build",
+                "metadata_json",
             ),
             parquet_path,
         )
         row = connection.execute(
-            "SELECT display_name FROM metric_definitions WHERE metric_id = ?",
-            ["metric.parquet"],
+            "SELECT symbol FROM features WHERE feature_id = ?",
+            ["gene:tp53"],
         ).fetchone()
 
-    assert _scalar(row) == "Metric Parquet"
+    assert _scalar(row) == "TP53"
 
 
 def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
@@ -223,10 +212,15 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
     columns = (
         "entity_scope",
         "entity_id",
-        "attribute_id",
+        "field_id",
         "data_profile_id",
         "source_file_id",
-        "value",
+        "value_type",
+        "value_numeric",
+        "value_string",
+        "value_boolean",
+        "value_datetime",
+        "value_json",
     )
 
     with store._connect() as connection:
@@ -236,29 +230,32 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
                     SELECT
                         'sample' AS entity_scope,
                         'sample-1' AS entity_id,
-                        'sample:status' AS attribute_id,
+                        'sample:status' AS field_id,
                         7::BIGINT AS data_profile_id,
                         NULL AS source_file_id,
-                        {value!r} AS value
+                        'string' AS value_type,
+                        NULL::DOUBLE AS value_numeric,
+                        {value!r} AS value_string,
+                        NULL::BOOLEAN AS value_boolean,
+                        NULL::TIMESTAMP AS value_datetime,
+                        NULL::JSON AS value_json
                 ) TO {_sql_literal(path)} (FORMAT PARQUET)
                 """)
-        insert_public_parquet(
-            connection, "entity_attribute_string", columns, first_path
-        )
+        insert_public_parquet(connection, "entity_attributes", columns, first_path)
         delete_public_parquet(
             connection,
-            "entity_attribute_string",
-            ("entity_scope", "entity_id", "attribute_id", "data_profile_id"),
+            "entity_attributes",
+            ("entity_scope", "entity_id", "field_id", "data_profile_id"),
             second_path,
         )
         insert_public_parquet(
             connection,
-            "entity_attribute_string",
+            "entity_attributes",
             columns,
             second_path,
         )
         rows = connection.execute(
-            "SELECT value FROM entity_attribute_string ORDER BY value"
+            "SELECT value_string FROM entity_attributes ORDER BY value_string"
         ).fetchall()
 
     assert rows == [("new",)]

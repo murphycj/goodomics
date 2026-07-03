@@ -15,6 +15,7 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 
+/** Button wrapper that opens the project creation dialog. */
 export function CreateProjectButton() {
   const [open, setOpen] = useState(false);
   return (
@@ -27,6 +28,7 @@ export function CreateProjectButton() {
   );
 }
 
+/** Modal form for creating a project and navigating into it. */
 export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");

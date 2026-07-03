@@ -13,6 +13,9 @@ The lightweight `goodomics-core` distribution should expose the same
 `goodomics` import package and command-line entry point for users who only need
 SDK, parser, report generation, and pipeline integration features.
 
+For constructor arguments, class attributes, and method details, see the
+[Python SDK API reference](sdk-api.md).
+
 ## Record run context
 
 ```python
