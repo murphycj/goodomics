@@ -39,6 +39,19 @@ extra_javascript:
 
 plugins:
   - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - packages/goodomics/src
+          options:
+            docstring_style: google
+            members_order: source
+            separate_signature: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            show_source: false
 
 markdown_extensions:
   - admonition
@@ -66,6 +79,7 @@ nav:
   - Interfaces:
       - CLI: interfaces/cli.md
       - Python SDK: interfaces/sdk.md
+      - Python SDK API: interfaces/sdk-api.md
       - Custom parsers: interfaces/custom-parsers.md
       - Server: interfaces/server.md
       - Dashboard: interfaces/dashboard.md
