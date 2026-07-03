@@ -23,6 +23,7 @@ from goodomics.projects import (
 from goodomics.schemas.models import (
     DataImport,
     DataProfile,
+    DataProfileField,
     FileAsset,
     FileLink,
     Project,
@@ -47,6 +48,7 @@ class CatalogWriteResult:
     samples: list[SampleRecord]
     run_samples: list[RunSampleRecord]
     data_profiles: list[DataProfileRecord]
+    data_profile_fields: list[DataProfileFieldRecord]
     files: list[FileRecord]
     file_links: list[FileLinkRecord]
     sample_sets: list[SampleSetRecord]
@@ -142,8 +144,34 @@ class DataProfileRecord(SQLModel, table=True):
     feature_type: str | None = Field(default=None, max_length=128)
     value_type: str | None = Field(default=None, max_length=128)
     unit: str | None = Field(default=None, max_length=64)
+    entity_grain: str | None = Field(default=None, max_length=128)
+    value_semantics: str | None = Field(default=None, max_length=128)
+    primary_table: str | None = Field(default=None, max_length=128)
+    physical_tables_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    last_profiled_at: datetime | None = None
+    source_fingerprint: str | None = Field(default=None, max_length=255)
     query_modes_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     mcp_description: str | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class DataProfileFieldRecord(SQLModel, table=True):
+    __tablename__ = "data_profile_fields"
+
+    id: int | None = Field(default=None, primary_key=True)
+    data_profile_id: int = Field(foreign_key="data_profiles.id", index=True)
+    field_id: str = Field(max_length=255, index=True)
+    field_role: str = Field(default="metric", max_length=64, index=True)
+    entity_scope: str | None = Field(default=None, max_length=128)
+    display_name: str = Field(max_length=255)
+    value_type: str = Field(default="numeric", max_length=64, index=True)
+    unit: str | None = Field(default=None, max_length=64)
+    direction: str | None = Field(default=None, max_length=64)
+    description: str | None = None
+    priority: str | None = Field(default=None, max_length=64)
+    query_ref_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
@@ -364,6 +392,7 @@ class SQLModelGoodomicsStore:
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
         data_profiles: list[DataProfile] | None = None,
+        data_profile_fields: list[DataProfileField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
@@ -382,6 +411,7 @@ class SQLModelGoodomicsStore:
             samples=samples or run.samples,
             run_samples=run_samples,
             data_profiles=data_profiles,
+            data_profile_fields=data_profile_fields,
             files=files,
             file_links=normalized_links,
             sample_sets=sample_sets,
@@ -397,6 +427,7 @@ class SQLModelGoodomicsStore:
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
         data_profiles: list[DataProfile] | None = None,
+        data_profile_fields: list[DataProfileField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
@@ -490,6 +521,11 @@ class SQLModelGoodomicsStore:
                 session, data_profiles or [], project_pk
             )
             profile_pk_by_label = _id_map(profile_rows, "data_profile_id")
+            profile_field_rows = await _upsert_data_profile_fields(
+                session,
+                data_profile_fields or [],
+                profile_pk_by_label,
+            )
 
             file_rows = await _upsert_files(session, files or [], project_pk)
             file_pk_by_label = _id_map(file_rows, "file_id")
@@ -575,6 +611,7 @@ class SQLModelGoodomicsStore:
                 samples=_snapshot_records(sample_rows),
                 run_samples=_snapshot_records(run_sample_rows),
                 data_profiles=_snapshot_records(profile_rows),
+                data_profile_fields=_snapshot_records(profile_field_rows),
                 files=_snapshot_records(file_rows),
                 file_links=_snapshot_records(file_link_rows),
                 sample_sets=_snapshot_records(sample_set_rows),
@@ -741,6 +778,7 @@ def catalog_id_maps_from_records(
     return {
         "project_id": _id_map([result.project], "project_id"),
         "data_profile_id": _id_map(result.data_profiles, "data_profile_id"),
+        "field_id": _id_map(result.data_profile_fields, "field_id"),
         "run_id": _id_map(result.runs, "run_id"),
         "run_sample_id": _id_map(result.run_samples, "run_sample_id"),
         "sample_id": _id_map(result.samples, "sample_id"),
@@ -903,6 +941,13 @@ async def _upsert_data_profiles(
                 feature_type=profile.feature_type,
                 value_type=profile.value_type,
                 unit=profile.unit,
+                entity_grain=profile.entity_grain,
+                value_semantics=profile.value_semantics,
+                primary_table=profile.primary_table,
+                physical_tables_json=dict(profile.physical_tables_json),
+                summary_json=dict(profile.summary_json),
+                last_profiled_at=profile.last_profiled_at,
+                source_fingerprint=profile.source_fingerprint,
                 query_modes_json=dict(profile.query_modes_json),
                 mcp_description=profile.mcp_description,
                 metadata_json=dict(profile.metadata_json),
@@ -919,10 +964,61 @@ async def _upsert_data_profiles(
             row.feature_type = profile.feature_type
             row.value_type = profile.value_type
             row.unit = profile.unit
+            row.entity_grain = profile.entity_grain
+            row.value_semantics = profile.value_semantics
+            row.primary_table = profile.primary_table
+            row.physical_tables_json = dict(profile.physical_tables_json)
+            row.summary_json = dict(profile.summary_json)
+            row.last_profiled_at = profile.last_profiled_at
+            row.source_fingerprint = profile.source_fingerprint
             row.query_modes_json = dict(profile.query_modes_json)
             row.mcp_description = profile.mcp_description
             row.metadata_json = dict(profile.metadata_json)
         rows.append(row)
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
+async def _upsert_data_profile_fields(
+    session: AsyncSession,
+    fields: list[DataProfileField],
+    profile_pk_by_label: dict[str, int],
+) -> list[DataProfileFieldRecord]:
+    if not fields:
+        return []
+    profile_pks = sorted(
+        {
+            profile_pk_by_label[field.data_profile_id]
+            for field in fields
+            if field.data_profile_id in profile_pk_by_label
+        }
+    )
+    if profile_pks:
+        await session.exec(
+            delete(DataProfileFieldRecord).where(
+                cast(Any, DataProfileFieldRecord.data_profile_id).in_(profile_pks)
+            )
+        )
+    rows = [
+        DataProfileFieldRecord(
+            data_profile_id=profile_pk_by_label[field.data_profile_id],
+            field_id=field.field_id,
+            field_role=field.field_role,
+            entity_scope=field.entity_scope,
+            display_name=field.display_name,
+            value_type=field.value_type,
+            unit=field.unit,
+            direction=field.direction,
+            description=field.description,
+            priority=field.priority,
+            query_ref_json=dict(field.query_ref_json),
+            summary_json=dict(field.summary_json),
+            metadata_json=dict(field.metadata_json),
+        )
+        for field in fields
+        if field.data_profile_id in profile_pk_by_label
+    ]
     session.add_all(rows)
     await session.flush()
     return rows
@@ -1220,17 +1316,22 @@ async def _delete_run_scoped_catalog(
         )
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_pk))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_pk))
-    await session.exec(
-        delete(DataProfileRecord).where(
-            DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
-        )
-    )
     if profile_ids:
+        await session.exec(
+            delete(DataProfileFieldRecord).where(
+                cast(Any, DataProfileFieldRecord.data_profile_id).in_(list(profile_ids))
+            )
+        )
         await session.exec(
             delete(FileLinkRecord).where(
                 cast(Any, FileLinkRecord.data_profile_id).in_(list(profile_ids))
             )
         )
+    await session.exec(
+        delete(DataProfileRecord).where(
+            DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
+        )
+    )
     if file_ids:
         await session.exec(
             delete(FileRecord).where(cast(Any, FileRecord.id).in_(file_ids))

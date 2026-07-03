@@ -109,6 +109,13 @@ should update docs, run `uv run mkdocs build` when feasible.
   storage boundaries, non-trivial transformations, trust boundaries, and
   important constraints; skip obvious one-line helpers and comments that merely
   restate the code.
+- For public Python APIs rendered in MkDocs or shown in editor hover, follow a
+  non-duplicative docstring pattern: module/class docstrings should explain
+  purpose, lifecycle, examples, and behavior; dataclass/model attribute
+  docstrings should describe individual fields. Avoid repeating the same field
+  descriptions in both a class-level `Attributes:` section and per-attribute
+  docstrings. If a class does not use per-attribute docstrings, a concise
+  class-level `Attributes:` section is fine.
 
 ## Documentation Guidelines
 

@@ -292,6 +292,9 @@ def _custom_profile(
         data_type="profile_payload",
         producer_tool="cbioportal",
         value_type="mixed",
+        entity_grain="run_sample",
+        primary_table="profile_payloads",
+        physical_tables_json={"tables": ["profile_payloads"]},
         query_modes_json={"modes": ["payload"]},
         mcp_description=values.get("profile_description") or values.get("description"),
         metadata_json={

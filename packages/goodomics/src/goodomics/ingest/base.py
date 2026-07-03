@@ -8,6 +8,7 @@ from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataImport,
     DataProfile,
+    DataProfileField,
     FileAsset,
     FileLink,
     Run,
@@ -61,6 +62,7 @@ class NormalizedIngestResult:
     samples: list[Sample] = field(default_factory=list)
     run_samples: list[RunSample] = field(default_factory=list)
     data_profiles: list[DataProfile] = field(default_factory=list)
+    data_profile_fields: list[DataProfileField] = field(default_factory=list)
     files: list[FileAsset] = field(default_factory=list)
     file_links: list[FileLink] = field(default_factory=list)
     sample_sets: list[SampleSet] = field(default_factory=list)

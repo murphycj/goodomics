@@ -45,6 +45,30 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
         )
 
     @mcp.tool()
+    async def list_data_profiles(
+        project: str | None = None,
+        query: str | None = None,
+        limit: int = 20,
+        field_limit: int = 25,
+    ) -> dict[str, Any]:
+        """List semantic data profiles and their queryable fields."""
+        return await _logged_tool_call(
+            "list_data_profiles",
+            {
+                "project": project,
+                "query": query,
+                "limit": limit,
+                "field_limit": field_limit,
+            },
+            tools.list_data_profiles(
+                project=project,
+                query=query,
+                limit=limit,
+                field_limit=field_limit,
+            ),
+        )
+
+    @mcp.tool()
     async def resolve_project(reference: str, limit: int = 5) -> dict[str, Any]:
         """Resolve a human-readable project reference to candidates or one match."""
         return await _logged_tool_call(

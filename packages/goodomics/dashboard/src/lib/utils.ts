@@ -36,9 +36,10 @@ export function formatBytes(value: number) {
 }
 
 export function formatMetricValue(metric: AnalyticsMetric) {
-  return typeof metric.value === "number"
-    ? metric.value.toLocaleString()
-    : metric.value;
+  if (typeof metric.value === "number") return metric.value.toLocaleString();
+  if (metric.value == null) return "—";
+  if (typeof metric.value === "object") return JSON.stringify(metric.value);
+  return String(metric.value);
 }
 
 export function shortPath(path: string) {

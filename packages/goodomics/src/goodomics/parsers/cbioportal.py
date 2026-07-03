@@ -20,9 +20,9 @@ from goodomics.profiles.cbioportal import (
 )
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    AttributeDefinition,
     DataImport,
     DataProfile,
+    DataProfileField,
     FeatureSet,
     FileAsset,
     FileLink,
@@ -88,6 +88,9 @@ class CbioPortalParseContext:
     subjects: dict[str, Subject] = field(default_factory=dict)
     samples: dict[str, Sample] = field(default_factory=dict)
     run_samples: dict[str, RunSample] = field(default_factory=dict)
+    data_profile_fields: dict[tuple[str, str], DataProfileField] = field(
+        default_factory=dict
+    )
     sample_sets: list[SampleSet] = field(default_factory=list)
     sample_set_members: list[SampleSetMember] = field(default_factory=list)
     batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
@@ -200,6 +203,10 @@ def parse_cbioportal_study(
             _data_profiles_from_context(context),
             key=lambda profile: profile.data_profile_id,
         ),
+        data_profile_fields=sorted(
+            context.data_profile_fields.values(),
+            key=lambda field: (field.data_profile_id, field.field_id),
+        ),
         files=sorted(
             context.source_files_by_path.values(), key=lambda file: file.file_id
         ),
@@ -249,7 +256,10 @@ def _profile_from_meta(
         meta.values,
         source_meta_file=meta.path.name,
     )
-    return profile.model_copy(update={"assay": assay or profile.assay})
+    updates: dict[str, Any] = {"assay": assay or profile.assay}
+    if profile.primary_table == "feature_value_numeric":
+        updates["value_semantics"] = _value_semantics_from_meta(meta.values, profile)
+    return profile.model_copy(update=updates)
 
 
 def _profile_shape(meta: CbioPortalMeta) -> tuple[str, str | None, str | None]:
@@ -422,6 +432,11 @@ def _read_cbioportal_table(path: Path) -> CbioPortalTable | None:
                 continue
             header = line.split("\t")
             break
+        rows = (
+            list(csv.DictReader(handle, delimiter="\t", fieldnames=header))
+            if header is not None
+            else []
+        )
     if header is None:
         return None
     descriptions = (
@@ -438,7 +453,7 @@ def _read_cbioportal_table(path: Path) -> CbioPortalTable | None:
         descriptions=descriptions,
         value_types=value_types,
         priorities=priorities,
-        rows=[],
+        rows=rows,
     )
 
 
@@ -452,16 +467,28 @@ def _add_attribute_definitions(
         if column in {"SAMPLE_ID", "PATIENT_ID"}:
             continue
         value_type = _attribute_value_type(table.value_types.get(column))
-        context.batch.attribute_definitions.append(
-            AttributeDefinition(
-                attribute_id=_normalize_id(column),
+        field_id = _attribute_id(entity_scope, column)
+        context.data_profile_fields[(profile.data_profile_id, field_id)] = (
+            DataProfileField(
+                data_profile_id=profile.data_profile_id,
+                field_id=field_id,
+                field_role="attribute",
                 entity_scope=entity_scope,
                 display_name=column.replace("_", " ").title(),
                 value_type=value_type,
                 description=table.descriptions.get(column),
                 priority=table.priorities.get(column),
+                query_ref_json={
+                    "table": "entity_attributes",
+                    "field_column": "field_id",
+                    "field_value": field_id,
+                    "value_column": _attribute_value_column(value_type),
+                },
+                summary_json=_attribute_summary(
+                    value_type,
+                    [row.get(column) for row in table.rows],
+                ),
                 metadata_json={
-                    "data_profile_id": profile.data_profile_id,
                     "source": "cbioportal_clinical",
                 },
             )
@@ -495,37 +522,22 @@ class ClinicalAttributeStagedLoad:
             root_path = Path(root)
             self._stage_and_load(
                 connection,
-                table_name="entity_attribute_numeric",
+                table_name="entity_attributes",
                 columns=(
                     "entity_scope",
                     "entity_id",
-                    "attribute_id",
+                    "field_id",
                     "data_profile_id",
                     "source_file_id",
-                    "value",
+                    "value_type",
+                    "value_numeric",
+                    "value_string",
+                    "value_boolean",
+                    "value_datetime",
+                    "value_json",
                 ),
-                path=root_path / "entity_attribute_numeric.parquet",
-                select_sql=self._attribute_select_sql(
-                    attribute_columns,
-                    numeric=True,
-                ),
-            )
-            self._stage_and_load(
-                connection,
-                table_name="entity_attribute_string",
-                columns=(
-                    "entity_scope",
-                    "entity_id",
-                    "attribute_id",
-                    "data_profile_id",
-                    "source_file_id",
-                    "value",
-                ),
-                path=root_path / "entity_attribute_string.parquet",
-                select_sql=self._attribute_select_sql(
-                    attribute_columns,
-                    numeric=False,
-                ),
+                path=root_path / "entity_attributes.parquet",
+                select_sql=self._attribute_select_sql(attribute_columns),
             )
 
     @property
@@ -552,31 +564,19 @@ class ClinicalAttributeStagedLoad:
         delete_public_parquet(
             connection,
             table_name,
-            ("entity_scope", "entity_id", "attribute_id", "data_profile_id"),
+            ("entity_scope", "entity_id", "field_id", "data_profile_id"),
             path,
         )
         insert_public_parquet(connection, table_name, columns, path)
 
-    def _attribute_select_sql(
-        self,
-        attribute_columns: list[str],
-        *,
-        numeric: bool,
-    ) -> str:
+    def _attribute_select_sql(self, attribute_columns: list[str]) -> str:
         raw_value = "trim(CAST(raw_value AS VARCHAR))"
         value_type = self._value_type_sql()
-        numeric_predicate = "try_cast(raw_value AS DOUBLE) IS NOT NULL"
-        if numeric:
-            value_expression = "try_cast(raw_value AS DOUBLE) AS value"
-            type_predicate = f"{value_type} = 'numeric' AND {numeric_predicate}"
-        else:
-            value_expression = f"{raw_value} AS value"
-            type_predicate = f"{value_type} <> 'numeric' OR NOT ({numeric_predicate})"
         return f"""
             SELECT
                 {_sql_literal(self.entity_scope)} AS entity_scope,
                 entity_id,
-                {self._attribute_id_sql()} AS attribute_id,
+                {self._attribute_id_sql()} AS field_id,
                 {
             resolve_catalog_id(
                 "data_profile_id",
@@ -585,7 +585,21 @@ class ClinicalAttributeStagedLoad:
             )
         } AS data_profile_id,
                 {_sql_nullable_literal(self.source_file_id)} AS source_file_id,
-                {value_expression}
+                {value_type} AS value_type,
+                CASE
+                    WHEN {value_type} = 'numeric' THEN try_cast(raw_value AS DOUBLE)
+                    ELSE NULL
+                END AS value_numeric,
+                CASE
+                    WHEN {value_type} = 'string' THEN {raw_value}
+                    ELSE NULL
+                END AS value_string,
+                CASE
+                    WHEN {value_type} = 'boolean' THEN try_cast(raw_value AS BOOLEAN)
+                    ELSE NULL
+                END AS value_boolean,
+                NULL AS value_datetime,
+                NULL AS value_json
             FROM (
                 SELECT
                     {self._entity_id_sql()} AS entity_id,
@@ -605,7 +619,6 @@ class ClinicalAttributeStagedLoad:
             )
             WHERE entity_id IS NOT NULL
             AND raw_value IS NOT NULL
-            AND ({type_predicate})
             """
 
     def _entity_id_sql(self) -> str:
@@ -737,7 +750,6 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
                     profile,
                     path,
                     source_file_id,
-                    value_semantics=_value_semantics_from_meta(meta, profile),
                 )
             )
         else:
@@ -779,7 +791,6 @@ class FeatureMatrixBulkLoad:
     profile: DataProfile
     path: Path
     source_file_id: str | None
-    value_semantics: str
     catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
@@ -795,7 +806,6 @@ class FeatureMatrixBulkLoad:
 
     def load(self, connection: Any) -> None:
         feature_type = self.profile.feature_type or "generic_entity"
-        value_semantics = self.value_semantics
         source = _feature_matrix_source_sql(
             self.path,
             feature_type=feature_type,
@@ -856,13 +866,11 @@ class FeatureMatrixBulkLoad:
                     mapped_sample_id AS sample_id,
                     feature_id,
                     value,
-                    ? AS value_semantics,
                     ? AS source_file_id
                 FROM ({mapped})
                 WHERE value IS NOT NULL
                 """,
                 [
-                    value_semantics,
                     self.source_file_id,
                     str(self.path),
                 ],
@@ -881,7 +889,6 @@ class FeatureMatrixBulkLoad:
                     self.run_id,
                     self.profile.data_profile_id,
                     feature_type=feature_type,
-                    value_semantics=value_semantics,
                     source_file_id=self.source_file_id,
                     catalog_id_maps=self.catalog_id_maps,
                 )
@@ -1364,7 +1371,6 @@ def _iter_feature_matrix_batches(
     profile_id: str,
     *,
     feature_type: str,
-    value_semantics: str,
     source_file_id: str | None,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
@@ -1413,7 +1419,6 @@ def _iter_feature_matrix_batches(
                         sample_ids[2],
                         feature_id,
                         value,
-                        value_semantics,
                         source_file_id,
                     )
                 )
@@ -2135,6 +2140,68 @@ def _attribute_value_type(
     return "string"
 
 
+def _attribute_value_column(value_type: str) -> str:
+    return {
+        "numeric": "value_numeric",
+        "boolean": "value_boolean",
+        "date": "value_datetime",
+        "json": "value_json",
+    }.get(value_type, "value_string")
+
+
+def _attribute_summary(
+    value_type: str,
+    values: list[Any],
+    *,
+    cap: int = 100,
+) -> dict[str, Any]:
+    present = [_clean(value) for value in values]
+    present = [value for value in present if value is not None]
+    summary: dict[str, Any] = {
+        "count": len(values),
+        "non_null_count": len(present),
+        "null_count": len(values) - len(present),
+    }
+    if value_type == "numeric":
+        numeric = sorted(
+            number for value in present if (number := _to_float(value)) is not None
+        )
+        if numeric:
+            summary.update(
+                {
+                    "min": numeric[0],
+                    "max": numeric[-1],
+                    "mean": sum(numeric) / len(numeric),
+                    "median": _quantile(numeric, 0.5),
+                    "q05": _quantile(numeric, 0.05),
+                    "q95": _quantile(numeric, 0.95),
+                }
+            )
+        return summary
+    counts: dict[str, int] = {}
+    for value in present:
+        counts[value] = counts.get(value, 0) + 1
+    summary["distinct_count"] = len(counts)
+    summary["top_values"] = [
+        {"value": value, "count": count}
+        for value, count in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0])
+        )[:cap]
+    ]
+    summary["examples"] = list(dict.fromkeys(present))[:cap]
+    return summary
+
+
+def _quantile(values: list[float], q: float) -> float:
+    if len(values) == 1:
+        return values[0]
+    position = (len(values) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    weight = position - lower
+    return values[lower] * (1 - weight) + values[upper] * weight
+
+
 def _attribute_id(entity_scope: str, column: str) -> str:
     return f"{entity_scope}:{_normalize_id(column).lower()}"
 
@@ -2538,7 +2605,6 @@ _FEATURE_VALUE_COLUMNS = (
     "sample_id",
     "feature_id",
     "value",
-    "value_semantics",
     "source_file_id",
 )
 _FEATURE_CALL_COLUMNS = (

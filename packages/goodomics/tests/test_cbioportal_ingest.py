@@ -22,7 +22,7 @@ from goodomics.profiles.cbioportal import (
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.schemas.models import (
     CopyNumberSegment,
-    EntityAttributeNumeric,
+    EntityAttribute,
     FeatureCall,
     FeatureValueNumeric,
     ProfilePayload,
@@ -138,6 +138,10 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
     assert CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS in profile_ids
     assert CBIOPORTAL_COPY_NUMBER_SEGMENTS in profile_ids
     assert CBIOPORTAL_MUTATIONS_MAF in profile_ids
+    assert any(
+        field.field_role == "attribute" and field.field_id == "sample:tmb"
+        for field in parsed.data_profile_fields
+    )
     assert CBIOPORTAL_STRUCTURAL_VARIANTS in profile_ids
     assert CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE in profile_ids
     assert CBIOPORTAL_GENE_PANEL_MATRIX in profile_ids
@@ -265,7 +269,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
 
     analytics = DuckDBAnalyticsStore(analytics_path)
     counts = analytics.row_counts()
-    assert counts["entity_attribute_numeric"] >= 2
+    assert counts["entity_attributes"] >= 2
     assert counts["feature_value_numeric"] >= 6
     assert counts["feature_call"] == 4
     assert counts["copy_number_segments"] == 1
@@ -281,6 +285,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
                 ).fetchall()
             }
             for table_name in (
+                "entity_attributes",
                 "feature_value_numeric",
                 "feature_call",
                 "copy_number_segments",
@@ -291,9 +296,14 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         }
     for table_columns in physical_columns_by_table.values():
         assert table_columns["data_profile_id"] == "BIGINT"
+        assert table_columns["source_file_id"] == "BIGINT"
+    for table_name, table_columns in physical_columns_by_table.items():
+        if table_name == "entity_attributes":
+            assert table_columns["entity_id"] == "VARCHAR"
+            assert table_columns["field_id"] == "BIGINT"
+            continue
         assert table_columns["run_id"] == "BIGINT"
         assert table_columns["run_sample_id"] == "BIGINT"
-        assert table_columns["source_file_id"] == "BIGINT"
     assert physical_columns_by_table["feature_value_numeric"]["sample_id"] == ("BIGINT")
     assert physical_columns_by_table["feature_value_numeric"]["feature_id"] == (
         "BIGINT"
@@ -348,20 +358,21 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     )
     assert payloads[0].payload_kind == "gene_panel_matrix"
     numeric_attributes = analytics.fetch_records(
-        "entity_attribute_numeric",
-        EntityAttributeNumeric,
+        "entity_attributes",
+        EntityAttribute,
     )
     with analytics._connect() as connection:
-        tmb_attribute_id = connection.execute(
+        tmb_field_id = connection.execute(
             """
-            SELECT attribute_id
-            FROM dim_attributes
-            WHERE attribute_label = 'sample:tmb'
+            SELECT field_id
+            FROM dim_fields
+            WHERE field_label = 'sample:tmb'
             """
         ).fetchone()
-        tmb_attribute_id = _scalar(tmb_attribute_id)
+        tmb_field_id = _scalar(tmb_field_id)
     assert any(
-        attribute.attribute_id == tmb_attribute_id for attribute in numeric_attributes
+        attribute.field_id == tmb_field_id and attribute.value_type == "numeric"
+        for attribute in numeric_attributes
     )
 
 
@@ -548,8 +559,7 @@ def test_ingest_cbioportal_chol_fixture_handles_crlf_clinical_headers(
     )
 
     counts = DuckDBAnalyticsStore(analytics_path).row_counts()
-    assert counts["entity_attribute_numeric"] > 0
-    assert counts["entity_attribute_string"] > 0
+    assert counts["entity_attributes"] > 0
     assert counts["feature_value_numeric"] > 0
 
 
@@ -584,8 +594,7 @@ def test_ingest_cbioportal_msk_impact_50k_uses_staged_loads_idempotently(
     second_counts = analytics.row_counts()
 
     assert second_counts == first_counts
-    assert second_counts["entity_attribute_numeric"] > 0
-    assert second_counts["entity_attribute_string"] > 0
+    assert second_counts["entity_attributes"] > 0
     assert second_counts["features"] > 0
     assert second_counts["feature_call"] > 0
     assert second_counts["copy_number_segments"] > 0

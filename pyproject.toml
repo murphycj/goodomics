@@ -20,6 +20,7 @@ dev = [
   "ruff",
   "mkdocs",
   "mkdocs-material",
+  "mkdocstrings[python]",
   "twine",
 ]
 

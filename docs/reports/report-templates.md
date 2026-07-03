@@ -42,11 +42,13 @@ insights:
     visualization: stacked_bar
     query:
       source:
-        store: analytics
-        table: sample_metric_numeric
+        kind: data_profile
+        data_profile_id: multiqc:qc_metrics
+      fields: [general_stats.salmon_percent_mapped]
+      entity: run_sample
       dimensions: [sample_id]
       measures:
-        - field: value
+        - field: general_stats.salmon_percent_mapped
           aggregation: sum
           label: Reads
 
@@ -82,10 +84,10 @@ name: Insert size distribution
 visualization: histogram
 query:
   source:
-    store: analytics
-    table: sample_metric_numeric
-  columns: [value]
-  y: value
+    kind: data_profile
+    data_profile_id: multiqc:qc_metrics
+  fields: [multiqc_picard.insert_size]
+  y: multiqc_picard.insert_size
   bins: 30
 ```
 

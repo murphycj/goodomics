@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const idSchema = z.union([z.string(), z.number()]);
+
 const runSchema = z.object({
   run_id: z.string(),
   project_id: z.string().nullable(),
@@ -94,13 +96,14 @@ const fileSchema = z.object({
 });
 
 const analyticsMetricSchema = z.object({
-  run_id: z.string(),
-  data_profile_id: z.string(),
-  run_sample_id: z.string().nullable(),
-  sample_id: z.string().nullable(),
-  metric_id: z.string(),
-  value: z.union([z.number(), z.string()]),
-  source_file_id: z.string().nullable(),
+  run_id: idSchema,
+  data_profile_id: idSchema,
+  run_sample_id: idSchema.nullable(),
+  sample_id: idSchema.nullable(),
+  field_id: idSchema,
+  value_type: z.string(),
+  value: z.unknown().nullable(),
+  source_file_id: idSchema.nullable(),
 });
 
 const analyticsPayloadSchema = z.object({
@@ -152,6 +155,39 @@ const databaseTablePageSchema = z.object({
   offset: z.number(),
   sort_by: z.string().nullable(),
   sort_direction: z.enum(['asc', 'desc']).nullable(),
+});
+
+const dataProfileFieldSchema = z.object({
+  field_id: z.string(),
+  field_role: z.string(),
+  entity_scope: z.string().nullable(),
+  display_name: z.string(),
+  value_type: z.string(),
+  unit: z.string().nullable(),
+  direction: z.string().nullable(),
+  description: z.string().nullable(),
+  priority: z.string().nullable(),
+  query_ref: z.record(z.string(), z.unknown()).default({}),
+  summary: z.record(z.string(), z.unknown()).default({}),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+});
+
+const dataProfileSchema = z.object({
+  data_profile_id: z.string(),
+  name: z.string(),
+  data_type: z.string(),
+  assay: z.string().nullable(),
+  entity_grain: z.string().nullable(),
+  value_semantics: z.string().nullable(),
+  primary_table: z.string().nullable(),
+  physical_tables: z.record(z.string(), z.unknown()).default({}),
+  summary: z.record(z.string(), z.unknown()).default({}),
+  last_profiled_at: z.string().nullable(),
+  source_fingerprint: z.string().nullable(),
+  query_modes: z.record(z.string(), z.unknown()).default({}),
+  mcp_description: z.string().nullable(),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+  fields: z.array(dataProfileFieldSchema).default([]),
 });
 
 const insightSchema = z.object({
@@ -213,6 +249,8 @@ export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
 export type DatabaseSummary = z.infer<typeof databaseSummarySchema>;
 export type DatabaseTable = z.infer<typeof databaseTableSchema>;
 export type DatabaseTablePage = z.infer<typeof databaseTablePageSchema>;
+export type DataProfile = z.infer<typeof dataProfileSchema>;
+export type DataProfileField = z.infer<typeof dataProfileFieldSchema>;
 export type SavedInsight = z.infer<typeof insightSchema>;
 export type SavedReport = z.infer<typeof reportSchema>;
 export type InsightResult = z.infer<typeof insightResultSchema>['result'];
@@ -410,6 +448,19 @@ export function getProjectDatabaseSummary(projectId: string) {
 export function listProjectDatabaseTables(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
   return getJson(`/api/v1/database/tables?${params.toString()}`, z.array(databaseTableSchema));
+}
+
+export function listProjectDataProfiles(projectId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(`/api/v1/profiles?${params.toString()}`, z.array(dataProfileSchema));
+}
+
+export function getProjectDataProfile(projectId: string, dataProfileId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(
+    `/api/v1/profiles/${encodeURIComponent(dataProfileId)}?${params.toString()}`,
+    dataProfileSchema,
+  );
 }
 
 export function previewProjectDatabaseTable({

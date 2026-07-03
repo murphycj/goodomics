@@ -24,6 +24,7 @@ from goodomics.schemas.models import DataImport, QCDecision, Run, Sample
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataProfileFieldRecord,
     RunRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
@@ -44,6 +45,23 @@ def _run_pk(run_id: str) -> int:
         async with AsyncSession(catalog_store._get_engine()) as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
+            ).one()
+        assert row.id is not None
+        return row.id
+
+    return asyncio.run(load())
+
+
+def _field_pk(field_id: str) -> int:
+    async def load() -> int:
+        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(DataProfileFieldRecord).where(
+                        DataProfileFieldRecord.field_id == field_id
+                    )
+                )
             ).one()
         assert row.id is not None
         return row.id
@@ -100,35 +118,20 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
     analytics_path = analytics_path_for_project(".goodomics", saved_run.project_id)
     analytics = DuckDBAnalyticsStore(analytics_path)
     values = analytics.list_metric_values(_run_pk("rnaseq-batch-042"))
-    with analytics._connect() as connection:
-        pct_mapped_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'goodomics:sdk_metrics:pct_mapped'
-            """
-        ).fetchone()
-        pct_mapped_metric_id = _scalar(pct_mapped_metric_id)
-        status_metric_id = connection.execute(
-            """
-            SELECT metric_id
-            FROM dim_metrics
-            WHERE metric_label = 'goodomics:sdk_metrics:status'
-            """
-        ).fetchone()
-        status_metric_id = _scalar(status_metric_id)
-        s1_sample_id = _sample_pk("S1")
+    pct_mapped_field_id = _field_pk("goodomics:sdk_metrics:pct_mapped")
+    status_field_id = _field_pk("goodomics:sdk_metrics:status")
+    s1_sample_id = _sample_pk("S1")
 
     assert any(
-        value.metric_id == pct_mapped_metric_id
+        value.field_id == pct_mapped_field_id
         and value.sample_id == s1_sample_id
-        and value.value == 91.2
+        and value.value_numeric == 91.2
         for value in values
     )
     assert any(
-        value.metric_id == status_metric_id
+        value.field_id == status_field_id
         and value.sample_id == s1_sample_id
-        and value.value == "pass"
+        and value.value_string == "pass"
         for value in values
     )
 
