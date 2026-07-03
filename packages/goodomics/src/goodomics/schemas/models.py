@@ -108,8 +108,33 @@ class DataProfile(GoodomicsModel):
     feature_type: str | None = None
     value_type: str | None = None
     unit: str | None = None
+    entity_grain: str | None = None
+    value_semantics: str | None = None
+    primary_table: str | None = None
+    physical_tables_json: JsonObject = Field(default_factory=dict)
+    summary_json: JsonObject = Field(default_factory=dict)
+    last_profiled_at: datetime | None = None
+    source_fingerprint: str | None = None
     query_modes_json: JsonObject = Field(default_factory=dict)
     mcp_description: str | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
+class DataProfileField(GoodomicsModel):
+    """Queryable field exposed by a semantic data profile."""
+
+    data_profile_id: str
+    field_id: str
+    field_role: str = "metric"
+    entity_scope: str | None = None
+    display_name: str
+    value_type: Literal["numeric", "string", "boolean", "date", "json"] = "numeric"
+    unit: str | None = None
+    direction: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    query_ref_json: JsonObject = Field(default_factory=dict)
+    summary_json: JsonObject = Field(default_factory=dict)
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -230,113 +255,35 @@ class UnresolvedAnalyticalRecord(BaseModel):
         return [row for row in rows if isinstance(row, dict)]
 
 
-class DuckDBMetadata(AnalyticalRecord):
-    """Project-level metadata stored in the analytical database."""
-
-    project_id: str | None = None
-    project_name: str | None = None
-    schema_version: str = "analytics-v1"
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    metadata_json: JsonObject = Field(default_factory=dict)
-
-
-class MetricDefinition(AnalyticalRecord):
-    """Catalog entry describing metric identity, display, and value semantics."""
-
-    metric_id: str
-    namespace: str | None = None
-    metric_name: str
-    display_name: str
-    value_type: Literal["numeric", "string", "json"] = "numeric"
-    unit: str | None = None
-    direction: str | None = None
-    description: str | None = None
-    producer_tool: str | None = None
-    producer_module: str | None = None
-    schema_version: str | None = None
-
-
-class AttributeDefinition(AnalyticalRecord):
-    """Catalog entry describing flexible attributes on analytical entities."""
-
-    attribute_id: str
-    entity_scope: str
-    display_name: str
-    value_type: Literal["numeric", "string", "boolean", "date", "json"]
-    unit: str | None = None
-    description: str | None = None
-    priority: str | None = None
-    metadata_json: JsonObject = Field(default_factory=dict)
-
-
-class EntityAttributeBase(AnalyticalRecord):
-    """Shared keys for typed entity-attribute value records."""
+class EntityAttribute(AnalyticalRecord):
+    """Unified typed attribute value for a project, subject, sample, or run entity."""
 
     entity_scope: str
     entity_id: str
-    attribute_id: int
+    field_id: int
     data_profile_id: int | None = None
     source_file_id: int | None = None
+    value_type: Literal["numeric", "string", "boolean", "date", "json"]
+    value_numeric: float | None = None
+    value_string: str | None = None
+    value_boolean: bool | None = None
+    value_datetime: datetime | None = None
+    value_json: JsonValue = None
 
 
-class EntityAttributeNumeric(EntityAttributeBase):
-    """Numeric attribute value for a project, subject, sample, or run entity."""
-
-    value: float
-
-
-class EntityAttributeString(EntityAttributeBase):
-    """String attribute value for a project, subject, sample, or run entity."""
-
-    value: str
-
-
-class EntityAttributeBoolean(EntityAttributeBase):
-    """Boolean attribute value for a project, subject, sample, or run entity."""
-
-    value: bool
-
-
-class EntityAttributeDate(EntityAttributeBase):
-    """Datetime attribute value for a project, subject, sample, or run entity."""
-
-    value: datetime
-
-
-class EntityAttributeJson(EntityAttributeBase):
-    """JSON attribute value for a project, subject, sample, or run entity."""
-
-    value_json: JsonValue
-
-
-class SampleMetricBase(AnalyticalRecord):
-    """Shared keys for typed metrics measured at sample or run-sample grain."""
+class SampleMetric(AnalyticalRecord):
+    """Unified metric value measured for a sample or processed sample."""
 
     data_profile_id: int
     run_id: int
     run_sample_id: int | None = None
     sample_id: int | None = None
-    metric_id: int
+    field_id: int
     source_file_id: int | None = None
-
-
-class SampleMetricNumeric(SampleMetricBase):
-    """Numeric metric value measured for a sample or processed sample."""
-
-    value: float
-
-
-class SampleMetricString(SampleMetricBase):
-    """String metric value measured for a sample or processed sample."""
-
-    value: str
-
-
-class SampleMetricJson(SampleMetricBase):
-    """JSON metric value measured for a sample or processed sample."""
-
-    value_json: JsonValue
+    value_type: Literal["numeric", "string", "json"]
+    value_numeric: float | None = None
+    value_string: str | None = None
+    value_json: JsonValue = None
 
 
 class Feature(AnalyticalRecord):
@@ -388,7 +335,6 @@ class FeatureValueNumeric(AnalyticalRecord):
     sample_id: int | None = None
     feature_id: int
     value: float
-    value_semantics: str
     source_file_id: int | None = None
 
 
@@ -432,7 +378,6 @@ class SampleIntervalValue(AnalyticalRecord):
     sample_id: int | None = None
     interval_id: int
     value: float
-    value_semantics: str
     source_file_id: int | None = None
 
 
@@ -646,7 +591,7 @@ class CohortSummary(AnalyticalRecord):
 
     sample_set_id: int
     data_profile_id: int
-    metric_id: int | None = None
+    field_id: int | None = None
     feature_id: int | None = None
     n: int
     mean: float | None = None
@@ -683,17 +628,8 @@ class DataSource(AnalyticalRecord):
 class AnalyticsIngestBatch(MutableGoodomicsModel):
     """Container for analytical records staged for DuckDB ingestion."""
 
-    duckdb_metadata: list[DuckDBMetadata] = Field(default_factory=list)
-    metric_definitions: list[MetricDefinition] = Field(default_factory=list)
-    attribute_definitions: list[AttributeDefinition] = Field(default_factory=list)
-    entity_attribute_numeric: list[Any] = Field(default_factory=list)
-    entity_attribute_string: list[Any] = Field(default_factory=list)
-    entity_attribute_boolean: list[Any] = Field(default_factory=list)
-    entity_attribute_date: list[Any] = Field(default_factory=list)
-    entity_attribute_json: list[Any] = Field(default_factory=list)
-    sample_metric_numeric: list[Any] = Field(default_factory=list)
-    sample_metric_string: list[Any] = Field(default_factory=list)
-    sample_metric_json: list[Any] = Field(default_factory=list)
+    entity_attributes: list[Any] = Field(default_factory=list)
+    sample_metrics: list[Any] = Field(default_factory=list)
     features: list[Feature] = Field(default_factory=list)
     feature_aliases: list[FeatureAlias] = Field(default_factory=list)
     feature_sets: list[FeatureSet] = Field(default_factory=list)
