@@ -1,3 +1,16 @@
+"""Execute saved Goodomics insights and reports.
+
+This module is the server-side bridge between declarative insight/report
+configuration and rendered dashboard/report payloads. It normalizes saved JSON
+configs, compiles safe SQL against either the SQL catalog or DuckDB analytics
+store, caches computed results, and translates rows into chart/table/metric
+payloads.
+
+The public functions are used by API routes. Private helpers keep the query
+grammar small and Goodomics-specific instead of exposing raw chart-library or
+database details as the primary user interface.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +26,7 @@ from sqlalchemy.sql import func
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.server.db.catalog import CATALOG_MODELS
 from goodomics.server.db.models import (
     InsightRecord,
     InsightResultCacheRecord,
@@ -21,40 +35,17 @@ from goodomics.server.db.models import (
 )
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    DataImportRecord,
+    DataProfileFieldRecord,
     DataProfileRecord,
-    FileLinkRecord,
-    FileRecord,
     ProjectRecord,
-    QCDecisionRecord,
-    RunRecord,
-    RunSampleRecord,
-    SampleRecord,
-    SampleSetMemberRecord,
-    SampleSetRecord,
-    SubjectRecord,
 )
 
 JsonObject = dict[str, Any]
 StoreName = Literal["catalog", "analytics"]
 
-CATALOG_MODELS: dict[str, type[SQLModel]] = {
-    "projects": ProjectRecord,
-    "subjects": SubjectRecord,
-    "samples": SampleRecord,
-    "runs": RunRecord,
-    "run_samples": RunSampleRecord,
-    "data_imports": DataImportRecord,
-    "data_profiles": DataProfileRecord,
-    "files": FileRecord,
-    "file_links": FileLinkRecord,
-    "sample_sets": SampleSetRecord,
-    "sample_set_members": SampleSetMemberRecord,
-    "qc_decisions": QCDecisionRecord,
-    "insights": InsightRecord,
-    "reports": ReportRecord,
-}
-
+# Builder queries intentionally support a tiny aggregation/operator vocabulary.
+# Advanced SQL exists as an escape hatch, but the default UI/API path stays
+# constrained and easy to validate.
 AGGREGATIONS = {"count", "sum", "avg", "min", "max"}
 OPERATORS = {
     "eq": "=",
@@ -75,14 +66,50 @@ BLOCKED_SQL = re.compile(
     r"\b(insert|update|delete|drop|alter|create|attach|detach|copy|pragma|set|vacuum)\b",
     re.IGNORECASE,
 )
+CHART_COLORS = [
+    "#38BDF8",
+    "#636EFA",
+    "#EF553B",
+    "#00CC96",
+    "#AB63FA",
+    "#FFA15A",
+    "#19D3F3",
+    "#FF6692",
+    "#B6E880",
+    "#FF97FF",
+    "#FECB52",
+    "#2E91E5",
+    "#E15F99",
+    "#1CA71C",
+    "#FB0D0D",
+    "#DA16FF",
+    "#222A2A",
+    "#B68100",
+    "#750D86",
+    "#EB663B",
+    "#511CFB",
+    "#00A08B",
+    "#FB00D1",
+    "#FC0080",
+    "#B2828D",
+    "#6C7C32",
+    "#778AAE",
+    "#862A16",
+    "#A777F1",
+    "#AF0038",
+]
 
 
 def canonical_hash(value: Mapping[str, Any]) -> str:
+    """Return a stable SHA-256 hash for JSON-like config/cache inputs."""
+
     body = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
+    """Fill in default keys expected by insight execution."""
+
     normalized = dict(config)
     normalized.setdefault("version", 1)
     normalized.setdefault("visualization", "table")
@@ -94,6 +121,8 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
 
 
 def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
+    """Fill in default keys expected by report execution."""
+
     normalized = dict(config)
     normalized.setdefault("version", 1)
     normalized.setdefault("items", [])
@@ -112,6 +141,12 @@ async def execute_insight(
     config: Mapping[str, Any] | None = None,
     refresh: bool = False,
 ) -> JsonObject:
+    """Execute an insight config or saved insight record.
+
+    The result is a JSON-ready payload for the dashboard/report renderer. Cached
+    results are reused unless ``refresh`` is true.
+    """
+
     if insight is None and config is None:
         raise ValueError("An insight record or config is required.")
     source_config = (
@@ -119,6 +154,9 @@ async def execute_insight(
     )
     insight_config = normalize_insight_config(source_config)
     source = _query_source(insight_config)
+    # Cache identity is split into the normalized spec and a source fingerprint
+    # so a config can be reused until either the config or the underlying data
+    # changes.
     source_fingerprint = await fingerprint_source(
         session=session,
         analytics_store=analytics_store,
@@ -179,6 +217,8 @@ async def execute_report(
     insights: Sequence[InsightRecord],
     refresh: bool = False,
 ) -> JsonObject:
+    """Execute a saved report by executing its referenced insights."""
+
     report_config = normalize_report_config(report.config)
     report_id = report.report_id
     report_name = report.name
@@ -192,6 +232,9 @@ async def execute_report(
     )
     source_fingerprint = canonical_hash(
         {
+            # A report depends on all referenced insight sources. Hashing the
+            # per-insight fingerprints keeps report cache invalidation aligned
+            # with insight cache invalidation.
             "insights": [
                 await fingerprint_source(
                     session=session,
@@ -257,9 +300,29 @@ async def execute_data_query(
     project_id: str | None,
     config: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]]:
+    """Run the data query described by an insight config.
+
+    Profile-first queries are preferred because they use Goodomics semantic data
+    profiles. Generic table queries and read-only SQL are supported as escape
+    hatches.
+    """
+
     query_config = _query_config(config)
+    profile_query = await _compile_profile_query(
+        session=session,
+        project_id=project_id,
+        query_config=query_config,
+        config=config,
+    )
+    if profile_query is not None:
+        sql, parameters, columns = profile_query
+        return analytics_store.query_rows(
+            sql, parameters=parameters, limit=_query_limit(query_config)
+        )
     store, table = _parse_source(query_config.get("source"))
     if query_config.get("sql") is not None:
+        # Advanced SQL is still wrapped and limited by the storage adapters, but
+        # it must pass a simple read-only validation gate first.
         sql = _validate_read_only_sql(str(query_config["sql"]))
         limit = _query_limit(query_config)
         if store == "analytics":
@@ -281,6 +344,258 @@ async def execute_data_query(
     return await _execute_catalog_sql(session, sql, parameters=parameters, limit=limit)
 
 
+async def _compile_profile_query(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    query_config: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> tuple[str, list[Any], list[str]] | None:
+    # Profile queries start from a stable semantic data_profile_id rather than a
+    # physical table name. That keeps insight configs portable across projects
+    # and lets the profile decide which analytical table is authoritative.
+
+    source = query_config.get("source")
+    if not isinstance(source, Mapping) or source.get("kind") != "data_profile":
+        return None
+
+    profile_public_id = str(
+        source.get("data_profile_id")
+        or source.get("id")
+        or query_config.get("data_profile_id")
+        or ""
+    )
+
+    if not profile_public_id:
+        raise ValueError("Profile queries require source.data_profile_id.")
+
+    profile = await _get_profile_record(session, project_id, profile_public_id)
+
+    if profile is None:
+        raise ValueError(f"Unknown data profile: {profile_public_id}")
+
+    table = profile.primary_table
+
+    if table not in {
+        "sample_metrics",
+        "entity_attributes",
+        "feature_value_numeric",
+        "feature_call",
+        "copy_number_segments",
+        "sample_variant_calls",
+        "sample_structural_variant_calls",
+        "profile_payloads",
+    }:
+        raise ValueError(
+            f"Profile-first queries are not available for table: {table or 'unknown'}"
+        )
+
+    requested_fields = _profile_requested_fields(query_config, config)
+    synthetic_fields = _synthetic_profile_fields(table)
+
+    # Some analytical tables expose meaningful columns directly instead of
+    # catalog-backed data_profile_fields rows. Treat those as synthetic fields so
+    # users can still query them through the same profile-first grammar.
+    if table in {"feature_value_numeric", *synthetic_fields} and not requested_fields:
+        requested_fields = [next(iter(synthetic_fields.get(table, {"value": "value"})))]
+
+    if not requested_fields:
+        raise ValueError("Profile queries require at least one field or measure.")
+
+    if table == "feature_value_numeric":
+        # Feature matrices store the measured value in a single canonical value
+        # column; the feature dimension carries the biological identity.
+        field = None
+        field_id = "value"
+        value_column = "value"
+    elif table in synthetic_fields:
+        requested_fields = _normalize_synthetic_requested_fields(
+            requested_fields,
+            synthetic_fields[table],
+        )
+        field = None
+        field_id = requested_fields[0]
+        value_column = synthetic_fields[table][field_id]
+    else:
+        field_rows = await _get_profile_field_records(
+            session,
+            profile_id=_record_pk(profile),
+            field_ids=requested_fields,
+        )
+        if any(field_id not in field_rows for field_id in requested_fields):
+            # The dashboard often sends safe aliases for fields with punctuation.
+            # If direct lookup misses, load all fields and map aliases back to
+            # canonical field IDs.
+            field_rows = await _get_all_profile_field_records(
+                session,
+                profile_id=_record_pk(profile),
+            )
+        field_aliases = {
+            _safe_alias(row.field_id, fallback="value"): field_id
+            for field_id, row in field_rows.items()
+        }
+        requested_fields = list(
+            dict.fromkeys(
+                field_aliases.get(field_id, field_id) for field_id in requested_fields
+            )
+        )
+        missing = [field for field in requested_fields if field not in field_rows]
+        if missing:
+            raise ValueError(f"Unknown profile field(s): {', '.join(missing)}")
+        field = field_rows[requested_fields[0]]
+        field_id = field.field_id
+        value_column = _profile_value_column(field)
+
+    field_alias = _safe_alias(field_id, fallback="value")
+    dimensions = _string_list(
+        query_config.get("dimensions") or query_config.get("group_by")
+    )
+    if not dimensions and isinstance(query_config.get("entity"), str):
+        # Entity grain provides sensible default dimensions. A run_sample insight
+        # should naturally group by processed sample unless the config says
+        # otherwise.
+        entity = str(query_config["entity"])
+        if entity in {"run_sample", "sample"} and table == "sample_metrics":
+            dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
+        elif table == "entity_attributes":
+            dimensions = ["entity_id"]
+        elif table != "profile_payloads":
+            dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
+
+    columns = _columns_for_source("analytics", table)
+    measures = _measures(query_config, config)
+    if (
+        table in {"sample_metrics", "entity_attributes"}
+        and len(requested_fields) > 1
+        and not measures
+    ):
+        # Multi-field metric/attribute requests should return one row per entity
+        # with a column per field. This is the shape most chart/table previews
+        # expect for MultiQC-like "several metrics per sample" payloads.
+        entity = str(query_config.get("entity") or "")
+        dimension = (
+            "run_sample_id"
+            if table == "sample_metrics" and entity != "sample"
+            else "sample_id" if table == "sample_metrics" else "entity_id"
+        )
+        parameters: list[Any] = []
+        select_parts = [
+            f"{_quote_identifier(dimension)} AS {_quote_identifier(dimension)}"
+        ]
+        for requested_field in requested_fields:
+            row = field_rows[requested_field]
+            value_column = _profile_value_column(row)
+            alias = _safe_alias(row.field_id, fallback="value")
+            # Each field is stored as its own row in sample_metrics. CASE/MAX
+            # pivots those sparse rows into a compact entity-wide row.
+            select_parts.append(
+                "MAX(CASE WHEN "
+                f"{_field_id_match_sql(parameters, row)} "
+                f"THEN {_quote_identifier(value_column)} END) "
+                f"AS {_quote_identifier(alias)}"
+            )
+        parameters.append(_record_pk(profile))
+        field_predicates = [
+            _field_id_match_sql(parameters, field_rows[field_id])
+            for field_id in requested_fields
+        ]
+        sql = (
+            f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)} "
+            f"WHERE data_profile_id = ? AND ({' OR '.join(field_predicates)}) "
+            f"GROUP BY {_quote_identifier(dimension)}"
+        )
+        output_columns = [
+            dimension,
+            *[
+                _safe_alias(field_rows[field_id].field_id, fallback="value")
+                for field_id in requested_fields
+            ],
+        ]
+        return sql, parameters, output_columns
+
+    select_parts: list[str] = []
+    group_parts: list[str] = []
+    exposed_columns = set(columns) | {field_id, "value", field_alias}
+    for dimension in dimensions:
+        if dimension in {field_id, field_alias, "value"}:
+            # Allow the selected value field itself to be used as a grouping
+            # dimension, for example counting categorical values in a profile.
+            expression = _quote_identifier(value_column)
+            alias = field_alias
+        else:
+            _require_column(columns, dimension)
+            expression = _quote_identifier(dimension)
+            alias = dimension
+        select_parts.append(f"{expression} AS {_quote_identifier(alias)}")
+        group_parts.append(expression)
+        exposed_columns.add(alias)
+
+    for measure in measures:
+        aggregation = measure["aggregation"]
+        if aggregation not in AGGREGATIONS:
+            raise ValueError(f"Unsupported aggregation: {aggregation}")
+        measure_field = measure["field"]
+        if measure_field in {field_id, field_alias, "value"}:
+            expression = _quote_identifier(value_column)
+        elif measure_field == "*":
+            expression = "*"
+        else:
+            _require_column(columns, measure_field)
+            expression = _quote_identifier(measure_field)
+        alias = measure["alias"]
+        select_parts.append(
+            f"{aggregation.upper()}({expression}) AS {_quote_identifier(alias)}"
+        )
+        exposed_columns.add(alias)
+
+    if not select_parts:
+        # Without explicit dimensions or measures, return raw values with the
+        # profile's natural entity dimensions.
+        default_dimensions = _default_profile_dimensions(table)
+        for column in default_dimensions:
+            if column in columns:
+                select_parts.append(
+                    f"{_quote_identifier(column)} AS {_quote_identifier(column)}"
+                )
+        select_parts.append(
+            f"{_quote_identifier(value_column)} AS {_quote_identifier(field_alias)}"
+        )
+        exposed_columns.add(field_alias)
+
+    parameters: list[Any] = [_record_pk(profile)]
+    where_parts = ["data_profile_id = ?"]
+    if field is not None:
+        where_parts.append(_field_id_match_sql(parameters, field))
+    for filter_config in [
+        *cast(Sequence[Any], query_config.get("filters") or []),
+        *cast(Sequence[Any], config.get("filters") or []),
+    ]:
+        # Filters can live either inside query or at top-level config. Supporting
+        # both keeps saved JSON compatible with dashboard and template shapes.
+        where_parts.append(
+            _profile_filter_sql(
+                columns=columns,
+                value_column=value_column,
+                field_aliases={field_id, field_alias, "value"},
+                filter_config=filter_config,
+                parameters=parameters,
+            )
+        )
+
+    sql = f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)}"
+    sql += " WHERE " + " AND ".join(where_parts)
+    if group_parts:
+        sql += " GROUP BY " + ", ".join(group_parts)
+    order_sql = _order_sql(
+        columns=exposed_columns,
+        value=query_config.get("order_by"),
+    )
+    if order_sql:
+        sql += f" ORDER BY {order_sql}"
+    output_columns = [part.split(" AS ")[-1].strip('"') for part in select_parts]
+    return sql, parameters, output_columns
+
+
 def compile_insight_result(
     *,
     config: Mapping[str, Any],
@@ -290,6 +605,8 @@ def compile_insight_result(
     computed_at: datetime,
     cached: bool,
 ) -> JsonObject:
+    """Compile query rows into a dashboard/report insight payload."""
+
     visualization = str(config.get("visualization") or "table")
     row_dicts = [dict(row) for row in rows]
     result: JsonObject = {
@@ -298,6 +615,9 @@ def compile_insight_result(
         "title": config.get("title") or config.get("name") or "Untitled insight",
         "description": config.get("description"),
         "visualization": visualization,
+        "display": (
+            config.get("display") if isinstance(config.get("display"), dict) else {}
+        ),
         "columns": list(columns),
         "rows": row_dicts,
         "computed_at": computed_at.isoformat(),
@@ -306,6 +626,8 @@ def compile_insight_result(
     if visualization == "table":
         return result
     if visualization in {"metric", "stat", "number"}:
+        # Metric cards are a special compact payload. Other non-table
+        # visualizations are expressed as ECharts options.
         result["metric"] = _metric_payload(row_dicts, columns)
         return result
     result["echarts_options"] = _echarts_options(config, list(columns), row_dicts)
@@ -319,9 +641,45 @@ async def fingerprint_source(
     project_id: str | None,
     source: Mapping[str, Any],
 ) -> str:
+    """Return a cache fingerprint for an insight/report data source."""
+
+    if source.get("kind") == "data_profile":
+        profile_id = str(source.get("data_profile_id") or "")
+        profile = await _get_profile_record(session, project_id, profile_id)
+        field_count = 0
+        if profile is not None:
+            # Profile summaries/fingerprints capture data updates, while field
+            # count captures schema changes that affect available measures.
+            field_count = int(
+                (
+                    await session.exec(
+                        select(func.count())
+                        .select_from(DataProfileFieldRecord)
+                        .where(DataProfileFieldRecord.data_profile_id == profile.id)
+                    )
+                ).one()
+            )
+        return canonical_hash(
+            {
+                "kind": "data_profile",
+                "data_profile_id": profile_id,
+                "source_fingerprint": (
+                    profile.source_fingerprint if profile is not None else None
+                ),
+                "last_profiled_at": (
+                    profile.last_profiled_at.isoformat()
+                    if profile is not None and profile.last_profiled_at is not None
+                    else None
+                ),
+                "fields": field_count,
+            }
+        )
     store = source.get("store")
     table = source.get("table")
     if store == "analytics":
+        # For raw analytics table sources, row counts and file size are a cheap
+        # invalidation signal. They are not a cryptographic data snapshot, but
+        # they are enough for dashboard cache freshness in local workflows.
         counts = analytics_store.row_counts()
         return canonical_hash(
             {
@@ -335,6 +693,8 @@ async def fingerprint_source(
         model = CATALOG_MODELS[str(table)]
         statement = select(func.count()).select_from(model)
         if project_id is not None and "project_id" in model.model_fields:
+            # Catalog project columns are mixed: most core tables use integer
+            # project foreign keys, while server tables store public project IDs.
             project_pk = await _project_pk(session, project_id)
             model_any = cast(Any, model)
             statement = statement.where(
@@ -356,11 +716,16 @@ async def _compile_builder_query(
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]]:
+    # Generic builder queries target a physical catalog/analytics table. They
+    # are less semantic than profile-first queries but useful for database
+    # previews and advanced dashboard workflows.
     columns = _columns_for_source(store, table)
     dimensions = _string_list(
         query_config.get("dimensions") or query_config.get("group_by")
     )
     if not dimensions and isinstance(query_config.get("x"), str):
+        # Chart configs commonly use x/y language. Treat x as the grouping
+        # dimension when dimensions/group_by are omitted.
         dimensions = [str(query_config["x"])]
     measures = _measures(query_config, config)
     requested_columns = _string_list(query_config.get("columns"))
@@ -389,6 +754,8 @@ async def _compile_builder_query(
         )
 
     if not select_parts:
+        # No dimensions/measures means "show rows". Limit to the first handful
+        # of columns unless the config requested specific columns.
         selected = requested_columns or columns[: min(len(columns), 12)]
         for column in selected:
             _require_column(columns, column)
@@ -434,11 +801,15 @@ async def _project_scope_where(
     columns: Sequence[str],
     parameters: list[Any],
 ) -> str | None:
+    # Project scoping only applies to tables that expose a project_id column.
+    # Analytics tables already store public project labels when they have one.
     if project_id is None or "project_id" not in columns:
         return None
     if store == "catalog":
         model = CATALOG_MODELS.get(table)
         if model is not None and _project_field_is_integer(model):
+            # Core catalog tables use integer project FKs, so resolve the public
+            # project_id to its SQL primary key before filtering.
             parameters.append(await _project_pk(session, project_id))
         else:
             parameters.append(project_id)
@@ -450,6 +821,8 @@ async def _project_scope_where(
 def _filter_sql(
     columns: Sequence[str], filter_config: Any, parameters: list[Any]
 ) -> str:
+    # Convert a small JSON filter grammar into parameterized SQL. Column and
+    # operator validation happen before any SQL fragment is returned.
     if not isinstance(filter_config, Mapping):
         raise ValueError("Filters must be objects.")
     field = str(filter_config.get("field") or "")
@@ -477,6 +850,8 @@ def _filter_sql(
 
 
 def _order_sql(columns: set[str], value: Any) -> str | None:
+    # ORDER BY accepts either "column" or {"field": "column", "direction":
+    # "desc"}. The chosen column must already be exposed by the query.
     if value is None:
         return None
     if isinstance(value, str):
@@ -498,6 +873,9 @@ async def _execute_catalog_sql(
     parameters: Sequence[Any] = (),
     limit: int,
 ) -> tuple[list[str], list[JsonObject]]:
+    # SQLAlchemy text queries use named parameters, while the shared query
+    # compiler emits positional question marks for both stores. Rewrite them
+    # just before execution.
     bounded_sql, named_parameters = _named_sql_parameters(sql, parameters)
     result = await cast(Any, session).exec(
         text(
@@ -513,6 +891,8 @@ async def _execute_catalog_sql(
 def _named_sql_parameters(
     sql: str, parameters: Sequence[Any]
 ) -> tuple[str, dict[str, Any]]:
+    # Replace ? placeholders with SQLAlchemy named parameters. This keeps the
+    # compiler simple while still using safe bound values for catalog SQL.
     named: dict[str, Any] = {}
     parts = sql.split("?")
     if len(parts) == 1:
@@ -536,6 +916,8 @@ async def _get_cached_insight(
     spec_hash: str,
     source_fingerprint: str,
 ) -> JsonObject | None:
+    # Cache rows are append-only. Pick the newest matching row so a refresh can
+    # write a new result without mutating older history.
     statement = (
         select(InsightResultCacheRecord)
         .where(InsightResultCacheRecord.project_id == project_id)
@@ -560,6 +942,7 @@ async def _get_cached_report(
     spec_hash: str,
     source_fingerprint: str,
 ) -> JsonObject | None:
+    # Report cache lookup mirrors insight cache lookup but keys by report_id.
     statement = (
         select(ReportResultCacheRecord)
         .where(ReportResultCacheRecord.project_id == project_id)
@@ -577,17 +960,29 @@ async def _get_cached_report(
 
 
 def _query_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    # Missing or malformed query blocks are treated as empty query config so
+    # callers get a clear "source required" error downstream.
     query = config.get("query")
     return query if isinstance(query, Mapping) else {}
 
 
 def _query_source(config: Mapping[str, Any]) -> JsonObject:
+    # Extract only the source identity used for fingerprinting. Query shape,
+    # filters, and visualization are already part of the config hash.
     query = _query_config(config)
+    source = query.get("source")
+    if isinstance(source, Mapping) and source.get("kind") == "data_profile":
+        return {
+            "kind": "data_profile",
+            "data_profile_id": source.get("data_profile_id") or source.get("id"),
+        }
     store, table = _parse_source(query.get("source"))
     return {"store": store, "table": table}
 
 
 def _parse_source(value: Any) -> tuple[StoreName, str | None]:
+    # Sources can be explicit objects, "store.table" strings, or bare analytics
+    # table names. Normalize all variants into (store, table).
     if isinstance(value, Mapping):
         store = str(value.get("store") or "analytics")
         table = value.get("table")
@@ -605,7 +1000,206 @@ def _parse_source(value: Any) -> tuple[StoreName, str | None]:
     return cast(StoreName, store), str(table) if table else None
 
 
+async def _get_profile_record(
+    session: AsyncSession,
+    project_id: str | None,
+    data_profile_id: str,
+) -> DataProfileRecord | None:
+    # Built-in profiles have project_id=None and are visible everywhere. Project
+    # profiles are visible only within their owning project.
+    statement = select(DataProfileRecord).where(
+        DataProfileRecord.data_profile_id == data_profile_id
+    )
+    row = (await session.exec(statement)).first()
+    if row is None or project_id is None or row.project_id is None:
+        return row
+    return row if row.project_id == await _project_pk(session, project_id) else None
+
+
+async def _get_profile_field_records(
+    session: AsyncSession,
+    *,
+    profile_id: int,
+    field_ids: Sequence[str],
+) -> dict[str, DataProfileFieldRecord]:
+    rows = (
+        await session.exec(
+            select(DataProfileFieldRecord)
+            .where(DataProfileFieldRecord.data_profile_id == profile_id)
+            .where(cast(Any, DataProfileFieldRecord.field_id).in_(list(field_ids)))
+        )
+    ).all()
+    return {row.field_id: row for row in rows}
+
+
+async def _get_all_profile_field_records(
+    session: AsyncSession,
+    *,
+    profile_id: int,
+) -> dict[str, DataProfileFieldRecord]:
+    rows = (
+        await session.exec(
+            select(DataProfileFieldRecord).where(
+                DataProfileFieldRecord.data_profile_id == profile_id
+            )
+        )
+    ).all()
+    return {row.field_id: row for row in rows}
+
+
+def _profile_requested_fields(
+    query_config: Mapping[str, Any], config: Mapping[str, Any]
+) -> list[str]:
+    # Fields can be declared explicitly, implied by measures, or used as
+    # dimensions. Collect all field-like references before validating them.
+    fields = _string_list(query_config.get("fields"))
+    for measure in _measures(query_config, config):
+        field = measure["field"]
+        if field not in {"*", "value"}:
+            fields.append(field)
+    for value in _string_list(
+        query_config.get("dimensions") or query_config.get("group_by")
+    ):
+        if value not in {"run_id", "run_sample_id", "sample_id", "entity_id"}:
+            fields.append(value)
+    return list(dict.fromkeys(fields))
+
+
+def _profile_value_column(field: DataProfileFieldRecord) -> str:
+    # Field definitions can override the physical value column. Otherwise choose
+    # the column from the declared value_type.
+    query_ref = field.query_ref_json if isinstance(field.query_ref_json, dict) else {}
+    value_column = query_ref.get("value_column")
+    if isinstance(value_column, str) and value_column in {
+        "value_numeric",
+        "value_string",
+        "value_boolean",
+        "value_datetime",
+        "value_json",
+    }:
+        return value_column
+    return {
+        "numeric": "value_numeric",
+        "string": "value_string",
+        "boolean": "value_boolean",
+        "date": "value_datetime",
+        "json": "value_json",
+    }.get(field.value_type, "value_string")
+
+
+def _field_id_match_sql(parameters: list[Any], field: DataProfileFieldRecord) -> str:
+    # DuckDB may store field_id as the SQL integer ID, while readable views can
+    # expose field labels through dim_fields. Match both forms.
+    parameters.extend([_record_pk(field), field.field_id])
+    return (
+        "(field_id = ? OR field_id IN ("
+        "SELECT field_id FROM dim_fields WHERE field_label = ?"
+        "))"
+    )
+
+
+def _synthetic_profile_fields(table: str | None) -> dict[str, dict[str, str]]:
+    # Tables without data_profile_fields rows still expose important queryable
+    # columns. These synthetic fields let the profile grammar address them by
+    # stable names.
+    fields = {
+        "feature_call": {
+            "call_code": "call_code",
+            "call_rank": "call_rank",
+        },
+        "copy_number_segments": {
+            "segment_mean": "segment_mean",
+            "num_probes": "num_probes",
+        },
+        "sample_variant_calls": {
+            "allele_fraction": "allele_fraction",
+            "genotype": "genotype",
+            "filter": "filter",
+        },
+        "sample_structural_variant_calls": {
+            "call_status": "call_status",
+            "split_read_count": "split_read_count",
+            "paired_end_read_count": "paired_end_read_count",
+        },
+        "profile_payloads": {
+            "payload_kind": "payload_kind",
+            "payload_name": "payload_name",
+        },
+    }
+    if table == "feature_value_numeric":
+        return {"feature_value_numeric": {"value": "value"}}
+    return fields
+
+
+def _normalize_synthetic_requested_fields(
+    requested_fields: Sequence[str],
+    field_map: Mapping[str, str],
+) -> list[str]:
+    # Accept both canonical synthetic names and their safe aliases.
+    aliases = {
+        _safe_alias(field_id, fallback="value"): field_id for field_id in field_map
+    }
+    normalized = [
+        aliases.get(field_id, field_id)
+        for field_id in requested_fields
+        if field_id in field_map or field_id in aliases
+    ]
+    if not normalized:
+        unknown = ", ".join(requested_fields)
+        raise ValueError(f"Unknown profile field(s): {unknown}")
+    return list(dict.fromkeys(normalized))
+
+
+def _default_profile_dimensions(table: str | None) -> list[str]:
+    # Raw profile previews should include the natural entity columns users need
+    # to understand what each value belongs to.
+    if table in {"sample_metrics", "feature_value_numeric", "feature_call"}:
+        return ["run_sample_id", "sample_id"]
+    if table == "entity_attributes":
+        return ["entity_id"]
+    if table in {
+        "copy_number_segments",
+        "sample_variant_calls",
+        "sample_structural_variant_calls",
+    }:
+        return ["run_sample_id", "sample_id"]
+    if table == "profile_payloads":
+        return ["run_id", "payload_name"]
+    return []
+
+
+def _profile_filter_sql(
+    *,
+    columns: Sequence[str],
+    value_column: str,
+    field_aliases: set[str],
+    filter_config: Any,
+    parameters: list[Any],
+) -> str:
+    # Filters may use the profile field alias ("value", field_id, safe alias) or
+    # a physical table column. Rewrite field-value filters to the value column.
+    if not isinstance(filter_config, Mapping):
+        raise ValueError("Filters must be objects.")
+    field = str(filter_config.get("field") or "")
+    if field in field_aliases:
+        rewritten = dict(filter_config)
+        rewritten["field"] = value_column
+        return _filter_sql(columns, rewritten, parameters)
+    return _filter_sql(columns, filter_config, parameters)
+
+
+def _record_pk(row: Any) -> int:
+    # Query compilation depends on catalog primary keys; fail loudly if a caller
+    # passes an unflushed SQLModel row.
+    row_id = getattr(row, "id", None)
+    if row_id is None:
+        raise ValueError("Catalog record has not been flushed.")
+    return int(row_id)
+
+
 def _columns_for_source(store: StoreName, table: str) -> list[str]:
+    # Column validation is based on registered serializers/models rather than
+    # trusting table names from client-provided config.
     if store == "analytics":
         serializer = SERIALIZERS_BY_TABLE.get(table)
         if serializer is None:
@@ -620,6 +1214,8 @@ def _columns_for_source(store: StoreName, table: str) -> list[str]:
 def _measures(
     query_config: Mapping[str, Any], config: Mapping[str, Any]
 ) -> list[JsonObject]:
+    # Measures can come from query.measures or top-level series. Normalize both
+    # shapes into field/aggregation/alias records used by query compilers.
     raw = query_config.get("measures") or config.get("series") or []
     if isinstance(raw, Mapping):
         raw = [raw]
@@ -638,6 +1234,7 @@ def _measures(
 
 
 def _query_limit(query_config: Mapping[str, Any]) -> int:
+    # Bound every query to keep previews/report execution responsive.
     value = query_config.get("limit", 1000)
     try:
         return min(max(int(value), 1), 5000)
@@ -646,6 +1243,8 @@ def _query_limit(query_config: Mapping[str, Any]) -> int:
 
 
 def _validate_read_only_sql(sql: str) -> str:
+    # Advanced SQL is intentionally SELECT/WITH-only and single-statement. This
+    # avoids mutating local databases through dashboard-authored SQL.
     stripped = sql.strip().rstrip(";")
     if (
         ";" in stripped
@@ -659,8 +1258,11 @@ def _validate_read_only_sql(sql: str) -> str:
 def _echarts_options(
     config: Mapping[str, Any], columns: list[str], rows: list[JsonObject]
 ) -> JsonObject:
+    # ECharts is an implementation detail: configs describe chart intent, and
+    # this helper compiles rows into the option shape the dashboard can render.
     visualization = str(config.get("visualization") or "bar")
     query = _query_config(config)
+    colors = _display_colors(config)
     dimensions = _string_list(query.get("dimensions") or query.get("group_by"))
     x_field = str(query.get("x") or (dimensions[0] if dimensions else columns[0]))
     y_field = str(
@@ -670,14 +1272,24 @@ def _echarts_options(
     if visualization in {"pie", "donut"}:
         return {
             "title": {"text": title, "left": "center"},
+            "color": CHART_COLORS,
             "tooltip": {"trigger": "item"},
             "series": [
                 {
+                    "name": x_field,
                     "type": "pie",
                     "radius": ["42%", "70%"] if visualization == "donut" else "65%",
                     "data": [
-                        {"name": str(row.get(x_field)), "value": row.get(y_field)}
-                        for row in rows
+                        {
+                            "name": str(row.get(x_field)),
+                            "value": row.get(y_field),
+                            "itemStyle": {
+                                "color": _category_color(
+                                    colors, str(row.get(x_field)), index
+                                )
+                            },
+                        }
+                        for index, row in enumerate(rows)
                     ],
                 }
             ],
@@ -685,12 +1297,30 @@ def _echarts_options(
     if visualization == "scatter":
         return {
             "tooltip": {"trigger": "item"},
-            "xAxis": {"type": "value", "name": x_field},
-            "yAxis": {"type": "value", "name": y_field},
+            "grid": {
+                "left": 64,
+                "right": 32,
+                "top": 40,
+                "bottom": 72,
+                "containLabel": True,
+            },
+            "xAxis": {
+                "type": "value",
+                "name": x_field,
+                "nameLocation": "middle",
+                "nameGap": 48,
+            },
+            "yAxis": {
+                "type": "value",
+                "name": y_field,
+                "nameLocation": "middle",
+                "nameGap": 44,
+            },
             "series": [
                 {
                     "type": "scatter",
                     "data": [[row.get(x_field), row.get(y_field)] for row in rows],
+                    "itemStyle": {"color": _series_color(colors, x_field, 0)},
                 }
             ],
         }
@@ -737,30 +1367,54 @@ def _echarts_options(
             ],
         }
     if visualization == "histogram":
-        value_field = str(query.get("value") or query.get("y") or y_field)
-        bins = _histogram_bins(
-            rows,
-            value_field=value_field,
-            bin_count=_histogram_bin_count(config),
+        # Histograms are computed server-side from raw numeric values so the
+        # dashboard receives a compact binned series.
+        value_fields = _histogram_value_fields(query, columns, y_field) or (
+            [y_field] if y_field in columns else columns[:1]
         )
+        bin_count = _histogram_bin_count(config)
         return {
             "tooltip": {"trigger": "axis"},
-            "grid": {"left": 48, "right": 24, "top": 32, "bottom": 56},
-            "xAxis": {
-                "type": "category",
-                "name": value_field,
-                "data": [bin_["label"] for bin_ in bins],
-                "axisLabel": {"rotate": 30},
+            "grid": {
+                "left": 64,
+                "right": 32,
+                "top": 40,
+                "bottom": 72,
+                "containLabel": True,
             },
-            "yAxis": {"type": "value", "name": "Count"},
+            "xAxis": {
+                "type": "value",
+                "name": value_fields[0] if len(value_fields) == 1 else "Value",
+                "nameLocation": "middle",
+                "nameGap": 48,
+                "scale": True,
+                "axisLabel": {"formatter": "{value}"},
+            },
+            "yAxis": {
+                "type": "value",
+                "name": "Count",
+                "nameLocation": "middle",
+                "nameGap": 44,
+            },
             "series": [
                 {
-                    "name": "Count",
+                    "name": value_field,
                     "type": "bar",
                     "barGap": "0%",
-                    "data": [bin_["count"] for bin_ in bins],
-                    "itemStyle": {"color": "#16784a"},
+                    "data": [
+                        {
+                            "name": bin_["label"],
+                            "value": [bin_["center"], bin_["count"]],
+                        }
+                        for bin_ in _histogram_bins(
+                            rows,
+                            value_field=value_field,
+                            bin_count=bin_count,
+                        )
+                    ],
+                    "itemStyle": {"color": _series_color(colors, value_field, index)},
                 }
+                for index, value_field in enumerate(value_fields)
             ],
         }
     chart_type = {
@@ -772,15 +1426,34 @@ def _echarts_options(
         "box_plot": "boxplot",
     }.get(visualization, "bar")
     first_row = rows[0] if rows else {}
-    series_fields = [
-        column for column in columns if column != x_field and column in first_row
-    ] or ([y_field] if y_field else [])
+    series_fields = (
+        [y_field]
+        if query.get("y") is not None and y_field and y_field in first_row
+        else [column for column in columns if column != x_field and column in first_row]
+    ) or ([y_field] if y_field else [])
     return {
         "tooltip": {"trigger": "axis"},
         "legend": {"type": "scroll"},
-        "grid": {"left": 48, "right": 24, "top": 40, "bottom": 42},
-        "xAxis": {"type": "category", "data": [row.get(x_field) for row in rows]},
-        "yAxis": {"type": "value"},
+        "grid": {
+            "left": 64,
+            "right": 32,
+            "top": 40,
+            "bottom": 72,
+            "containLabel": True,
+        },
+        "xAxis": {
+            "type": "category",
+            "name": x_field,
+            "nameLocation": "middle",
+            "nameGap": 48,
+            "data": [row.get(x_field) for row in rows],
+        },
+        "yAxis": {
+            "type": "value",
+            "name": y_field,
+            "nameLocation": "middle",
+            "nameGap": 44,
+        },
         "series": [
             {
                 "name": field,
@@ -788,10 +1461,50 @@ def _echarts_options(
                 "stack": "total" if visualization == "stacked_bar" else None,
                 "areaStyle": {} if visualization == "area" else None,
                 "data": [row.get(field) for row in rows],
+                "itemStyle": {"color": _series_color(colors, field, index)},
+                "lineStyle": {"color": _series_color(colors, field, index)},
             }
-            for field in series_fields
+            for index, field in enumerate(series_fields)
         ],
     }
+
+
+def _display_colors(config: Mapping[str, Any]) -> dict[str, str]:
+    display = config.get("display")
+    if not isinstance(display, Mapping):
+        return {}
+    colors = display.get("colors")
+    if not isinstance(colors, Mapping):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in colors.items()
+        if isinstance(value, str) and value.startswith("#")
+    }
+
+
+def _series_color(
+    colors: Mapping[str, str],
+    field: str,
+    index: int,
+    fallback: str | None = None,
+) -> str:
+    configured = list(dict.fromkeys(colors.values()))
+    return (
+        colors.get(field)
+        or colors.get(_safe_alias(field, fallback="series"))
+        or (configured[index] if index < len(configured) else None)
+        or fallback
+        or CHART_COLORS[index % len(CHART_COLORS)]
+    )
+
+
+def _category_color(colors: Mapping[str, str], category: str, index: int) -> str:
+    return (
+        colors.get(category)
+        or colors.get(_safe_alias(category, fallback="category"))
+        or CHART_COLORS[index % len(CHART_COLORS)]
+    )
 
 
 def _metric_payload(
@@ -833,6 +1546,25 @@ def _histogram_bin_count(config: Mapping[str, Any]) -> int:
         return 20
 
 
+def _histogram_value_fields(
+    query: Mapping[str, Any], columns: Sequence[str], fallback: str
+) -> list[str]:
+    fields: list[str] = []
+    for field in _string_list(query.get("fields")):
+        if field in columns:
+            fields.append(field)
+            continue
+        alias = _safe_alias(field, fallback="value")
+        if alias in columns:
+            fields.append(alias)
+    value = query.get("value") or query.get("y")
+    if isinstance(value, str):
+        fields.append(value)
+    if fallback:
+        fields.append(fallback)
+    return list(dict.fromkeys(field for field in fields if field in columns))
+
+
 def _histogram_bins(
     rows: Sequence[Mapping[str, Any]], *, value_field: str, bin_count: int
 ) -> list[JsonObject]:
@@ -846,7 +1578,15 @@ def _histogram_bins(
     minimum = min(values)
     maximum = max(values)
     if minimum == maximum:
-        return [{"label": _format_bin_edge(minimum), "count": len(values)}]
+        return [
+            {
+                "label": _format_bin_edge(minimum),
+                "start": minimum,
+                "end": maximum,
+                "center": minimum,
+                "count": len(values),
+            }
+        ]
     width = (maximum - minimum) / bin_count
     counts = [0] * bin_count
     for value in values:
@@ -854,6 +1594,9 @@ def _histogram_bins(
         counts[index] += 1
     return [
         {
+            "start": minimum + index * width,
+            "end": minimum + (index + 1) * width,
+            "center": minimum + (index + 0.5) * width,
             "label": (
                 f"{_format_bin_edge(minimum + index * width)}-"
                 f"{_format_bin_edge(minimum + (index + 1) * width)}"
