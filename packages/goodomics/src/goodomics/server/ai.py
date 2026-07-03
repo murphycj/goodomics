@@ -295,6 +295,8 @@ class GoodomicsChatService:
         arguments = call.arguments
         if call.name == "list_projects":
             return await self.query_tools.list_projects(**arguments)
+        if call.name == "list_data_profiles":
+            return await self.query_tools.list_data_profiles(**arguments)
         if call.name == "resolve_project":
             return await self.query_tools.resolve_project(**arguments)
         if call.name == "get_project_summary":
@@ -323,6 +325,16 @@ def tool_schemas() -> list[dict[str, Any]]:
             "list_projects",
             "List Goodomics projects.",
             {"query": _string(), "limit": _int()},
+        ),
+        _tool(
+            "list_data_profiles",
+            "List semantic data profiles and queryable fields before using raw tables.",
+            {
+                "project": _string(),
+                "query": _string(),
+                "limit": _int(),
+                "field_limit": _int(),
+            },
         ),
         _tool(
             "resolve_project",
