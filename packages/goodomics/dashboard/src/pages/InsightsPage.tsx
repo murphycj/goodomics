@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { HexColorInput, HexColorPicker } from "react-colorful";
 import {
   AreaChart,
   ArrowLeft,
@@ -6,18 +7,18 @@ import {
   BarChart3,
   Box,
   ChevronDown,
+  Check,
+  Copy,
   Hash,
   LineChart,
-  Palette,
+  MoreHorizontal,
   PieChart,
   Plus,
-  RefreshCw,
   Save,
   Search,
   ScatterChart,
   Settings2,
   Table2,
-  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -26,6 +27,7 @@ import {
   listInsights,
   listProjectDatabaseTables,
   listProjectDataProfiles,
+  listReports,
   patchInsight,
   type DataProfile,
   type DataProfileField,
@@ -34,7 +36,7 @@ import {
 } from "../api";
 import { InsightListTable } from "../components/reports/InsightListTable";
 import { InsightPreview } from "../components/reports/InsightPreview";
-import { isRecord } from "../components/reports/reportUtils";
+import { isRecord, readReportItems } from "../components/reports/reportUtils";
 import {
   AsyncBlock,
   Button,
@@ -156,6 +158,19 @@ const SERIES_COLORS = CHART_COLORS;
 type Store = DatabaseTable["store"];
 type InsightMode = "list" | "detail";
 type QueryMode = "profile" | "table";
+type DisplayOptions = {
+  showValues: boolean;
+  showTrendLines: boolean;
+  showLegend: boolean;
+  showAnnotations: boolean;
+};
+
+const DEFAULT_DISPLAY_OPTIONS: DisplayOptions = {
+  showValues: false,
+  showTrendLines: false,
+  showLegend: true,
+  showAnnotations: false,
+};
 
 // BuilderSeries is UI state, not the saved insight schema. buildConfig() below
 // compiles these editable series cards into query.fields, query.measures, and
@@ -185,6 +200,10 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     queryKey: ["data-profiles", projectId],
     queryFn: () => listProjectDataProfiles(projectId),
   });
+  const reports = useQuery({
+    queryKey: ["reports", projectId],
+    queryFn: () => listReports(projectId),
+  });
   const [mode, setMode] = useState<InsightMode>("list");
   const [search, setSearch] = useState("");
   const [selectedInsightId, setSelectedInsightId] = useState<string | null>(
@@ -204,6 +223,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const [store, setStore] = useState<Store>("analytics");
   const [table, setTable] = useState("");
   const [visualization, setVisualization] = useState("bar");
+  const [displayOptions, setDisplayOptions] = useState<DisplayOptions>(
+    DEFAULT_DISPLAY_OPTIONS,
+  );
   const [xField, setXField] = useState("");
   const [yField, setYField] = useState("");
   const [aggregation, setAggregation] = useState("count");
@@ -216,6 +238,18 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const selectedTable = availableTables.find(
     (candidate) => candidate.store === store && candidate.name === table,
   );
+  const reportCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const report of reports.data ?? []) {
+      const insightIds = new Set(
+        readReportItems(report.config).map((item) => item.insight_id),
+      );
+      for (const insightId of insightIds) {
+        counts.set(insightId, (counts.get(insightId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [reports.data]);
 
   useEffect(() => {
     // URL parameters are only an entry affordance from other dashboard pages.
@@ -227,6 +261,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       setTitle("New insight");
       setDescription("");
       setVisualization("bar");
+      setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
       setAdvancedSql("");
       setQueryMode("profile");
       setSeries([blankSeries(0, "", "")]);
@@ -343,6 +378,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setTitle(selectedInsight.name);
     setDescription(selectedInsight.description ?? "");
     setVisualization(String(config.visualization ?? "bar"));
+    setDisplayOptions(readDisplayOptions(config));
     setQueryMode(source.kind);
     if (source.kind === "profile") {
       setProfileId(source.dataProfileId);
@@ -378,6 +414,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
         store,
         table,
         visualization,
+        displayOptions,
         xField,
         yField,
         aggregation,
@@ -387,6 +424,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       advancedSql,
       aggregation,
       description,
+      displayOptions,
       fieldId,
       profileId,
       queryMode,
@@ -427,7 +465,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const save = useMutation({
     // Saved insights keep the same config shape that report templates consume,
     // so the dashboard builder and portable YAML/JSON exports stay aligned.
-    mutationFn: () =>
+    mutationFn: (continueEditing: boolean) =>
       selectedInsightId
         ? patchInsight(selectedInsightId, { name: title, description, config })
         : createInsight({
@@ -436,10 +474,11 @@ export function InsightsPage({ projectId }: { projectId: string }) {
             description,
             config,
           }),
-    onSuccess: (saved) => {
+    onSuccess: (saved, continueEditing) => {
       setSelectedInsightId(saved.insight_id);
-      setMode("detail");
+      setMode(continueEditing ? "detail" : "list");
       void queryClient.invalidateQueries({ queryKey: ["insights", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
       void queryClient.invalidateQueries({
         queryKey: ["insight-preview", projectId, saved.insight_id],
       });
@@ -453,6 +492,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setTitle("New insight");
     setDescription("");
     setVisualization("bar");
+    setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
     setAdvancedSql("");
     setQueryMode("profile");
     setSeries([blankSeries(0, profileId, fieldId)]);
@@ -483,6 +523,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
           {(data) => (
             <InsightListTable
               insights={filterInsights(data, search)}
+              reportCounts={reportCounts}
               onOpen={(insight) => {
                 setSelectedInsightId(insight.insight_id);
                 setMode("detail");
@@ -507,9 +548,31 @@ export function InsightsPage({ projectId }: { projectId: string }) {
             value={title}
             onChange={(event) => setTitle(event.target.value)}
           />
-          <Button disabled={save.isPending} onClick={() => save.mutate()}>
-            <Save className="h-4 w-4" /> Save
-          </Button>
+          <div className="flex overflow-hidden rounded-lg shadow-sm">
+            <Button
+              className="rounded-r-none"
+              disabled={save.isPending}
+              onClick={() => save.mutate(false)}
+            >
+              <Save className="h-4 w-4" /> Save
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label="Save options"
+                  className="rounded-l-none border-l border-[#16864f] px-2.5"
+                  disabled={save.isPending}
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[240px]">
+                <DropdownMenuItem onClick={() => save.mutate(true)}>
+                  <Save className="h-4 w-4" /> Save & continue editing
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         <Input
           className="mt-3"
@@ -627,26 +690,6 @@ export function InsightsPage({ projectId }: { projectId: string }) {
                 />
               </Field>
             ) : null}
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => void preview.refetch()}>
-                <RefreshCw className="h-4 w-4" /> Refresh
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setVisualization("table");
-                  setQueryMode("table");
-                  setStore("catalog");
-                  setTable("samples");
-                  setXField("sample_id");
-                  setYField("sample_name");
-                  setAggregation("count");
-                  setAdvancedSql("");
-                }}
-              >
-                <Table2 className="h-4 w-4" /> Clinical table
-              </Button>
-            </div>
           </CardContent>
         </Card>
 
@@ -662,7 +705,10 @@ export function InsightsPage({ projectId }: { projectId: string }) {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <OptionsMenu />
+                <OptionsMenu
+                  options={displayOptions}
+                  onChange={setDisplayOptions}
+                />
                 <ChartTypeSelect
                   value={visualization}
                   onChange={setVisualization}
@@ -909,30 +955,104 @@ function SeriesEditor({
             className="rounded-md border border-[#d6dee8] bg-white p-3 shadow-sm"
             key={item.id}
           >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 font-semibold">
-                <span
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-xs text-white"
-                  style={{ backgroundColor: item.color }}
-                >
-                  {String.fromCharCode(65 + index)}
-                </span>
-                <span>
-                  {item.name || field?.display_name || `Series ${index + 1}`}
-                </span>
-              </div>
-              <Button
-                disabled={series.length === 1}
-                size="icon"
-                variant="ghost"
-                onClick={() =>
-                  setSeries((current) =>
-                    current.filter((candidate) => candidate.id !== item.id),
-                  )
+            <div className="mb-3 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    aria-label={`Choose color for ${seriesDisplayName(
+                      profiles,
+                      item,
+                    )}`}
+                    className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border border-black/10 text-xs font-semibold text-white shadow-sm outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-[#21a66a]"
+                    style={{ backgroundColor: item.color }}
+                    type="button"
+                  >
+                    {String.fromCharCode(65 + index)}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[244px]">
+                  <div className="space-y-3 p-2">
+                    <HexColorPicker
+                      color={item.color}
+                      onChange={(color) =>
+                        updateSeries(setSeries, item.id, { color })
+                      }
+                    />
+                    <div className="space-y-1.5">
+                      <Label>Hex</Label>
+                      <HexColorInput
+                        className="flex min-h-[38px] w-full rounded-lg border border-[#cfd8e3] bg-white px-3 py-1 font-mono text-sm uppercase outline-none transition-colors focus:ring-2 focus:ring-[#21a66a]"
+                        color={item.color}
+                        prefixed
+                        onChange={(color) =>
+                          updateSeries(setSeries, item.id, { color })
+                        }
+                      />
+                    </div>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Input
+                aria-label="Series name"
+                className="h-9 min-w-0 border-transparent bg-transparent px-2 font-semibold shadow-none hover:border-[#cfd8e3] focus:border-[#cfd8e3]"
+                placeholder={field?.display_name || `Series ${index + 1}`}
+                value={item.name}
+                onChange={(event) =>
+                  updateSeries(setSeries, item.id, { name: event.target.value })
                 }
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button aria-label="Series actions" size="icon" variant="ghost">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[180px]">
+                  <DropdownMenuItem
+                    onClick={() =>
+                      setSeries((current) => {
+                        const source = current.find(
+                          (candidate) => candidate.id === item.id,
+                        );
+                        if (!source) return current;
+                        const copyName =
+                          source.name ||
+                          field?.display_name ||
+                          `Series ${index + 1}`;
+                        const duplicate = {
+                          ...source,
+                          id: `series-${Date.now()}-${current.length}-${Math.random()
+                            .toString(16)
+                            .slice(2)}`,
+                          name: `${copyName} copy`,
+                          color: SERIES_COLORS[current.length % SERIES_COLORS.length],
+                        };
+                        const sourceIndex = current.findIndex(
+                          (candidate) => candidate.id === item.id,
+                        );
+                        return [
+                          ...current.slice(0, sourceIndex + 1),
+                          duplicate,
+                          ...current.slice(sourceIndex + 1),
+                        ];
+                      })
+                    }
+                  >
+                    <Copy className="h-4 w-4" /> Duplicate series
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={index === 0}
+                    onClick={() =>
+                      setSeries((current) =>
+                        current.filter((candidate) => candidate.id !== item.id),
+                      )
+                    }
+                  >
+                    Delete series
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             <div className="space-y-2">
               <Select
@@ -971,8 +1091,10 @@ function SeriesEditor({
                             ...candidate,
                             fieldId: value,
                             name:
+                              candidate.name ||
                               fields.find((field) => field.field_id === value)
-                                ?.display_name ?? candidate.name,
+                                ?.display_name ||
+                              candidate.name,
                           }
                         : candidate,
                     ),
@@ -990,61 +1112,23 @@ function SeriesEditor({
                   ))}
                 </SelectContent>
               </Select>
-              <div className="grid grid-cols-[1fr_80px] gap-2">
-                <Select
-                  value={item.aggregation}
-                  onValueChange={(value) =>
-                    setSeries((current) =>
-                      current.map((candidate) =>
-                        candidate.id === item.id
-                          ? { ...candidate, aggregation: value }
-                          : candidate,
-                      ),
-                    )
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {["count", "sum", "avg", "min", "max"].map(
-                      (aggregation) => (
-                        <SelectItem key={aggregation} value={aggregation}>
-                          {aggregation}
-                        </SelectItem>
-                      ),
-                    )}
-                  </SelectContent>
-                </Select>
-                <Input
-                  aria-label="Series color"
-                  className="h-10 p-1"
-                  type="color"
-                  value={item.color}
-                  onChange={(event) =>
-                    setSeries((current) =>
-                      current.map((candidate) =>
-                        candidate.id === item.id
-                          ? { ...candidate, color: event.target.value }
-                          : candidate,
-                      ),
-                    )
-                  }
-                />
-              </div>
-              <Input
-                placeholder="Series name"
-                value={item.name}
-                onChange={(event) =>
-                  setSeries((current) =>
-                    current.map((candidate) =>
-                      candidate.id === item.id
-                        ? { ...candidate, name: event.target.value }
-                        : candidate,
-                    ),
-                  )
+              <Select
+                value={item.aggregation}
+                onValueChange={(value) =>
+                  updateSeries(setSeries, item.id, { aggregation: value })
                 }
-              />
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["count", "sum", "avg", "min", "max"].map((aggregation) => (
+                    <SelectItem key={aggregation} value={aggregation}>
+                      {aggregation}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <FieldSummary field={field} />
             </div>
           </div>
@@ -1054,7 +1138,31 @@ function SeriesEditor({
   );
 }
 
-function OptionsMenu() {
+function updateSeries(
+  setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>,
+  id: string,
+  patch: Partial<BuilderSeries>,
+) {
+  setSeries((current) =>
+    current.map((candidate) =>
+      candidate.id === id ? { ...candidate, ...patch } : candidate,
+    ),
+  );
+}
+
+function OptionsMenu({
+  options,
+  onChange,
+}: {
+  options: DisplayOptions;
+  onChange: React.Dispatch<React.SetStateAction<DisplayOptions>>;
+}) {
+  const items: { key: keyof DisplayOptions; label: string }[] = [
+    { key: "showValues", label: "Show values on series" },
+    { key: "showTrendLines", label: "Show trend lines" },
+    { key: "showLegend", label: "Show legend" },
+    { key: "showAnnotations", label: "Show annotations" },
+  ];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1065,22 +1173,23 @@ function OptionsMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel>Display</DropdownMenuLabel>
-        {[
-          "Show values on series",
-          "Show trend lines",
-          "Show legend",
-          "Show annotations",
-        ].map((item) => (
-          <DropdownMenuItem key={item}>
-            <span className="mr-2 h-4 w-4 rounded border border-[#c7d0dd]" />
-            {item}
+        {items.map((item) => (
+          <DropdownMenuItem
+            key={item.key}
+            onSelect={(event) => {
+              event.preventDefault();
+              onChange((current) => ({
+                ...current,
+                [item.key]: !current[item.key],
+              }));
+            }}
+          >
+            <span className="flex h-4 w-4 items-center justify-center rounded border border-[#c7d0dd]">
+              {options[item.key] ? <Check className="h-3 w-3" /> : null}
+            </span>
+            {item.label}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>Color customization</DropdownMenuLabel>
-        <DropdownMenuItem>
-          <Palette className="mr-2 h-4 w-4" /> By series
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1218,6 +1327,7 @@ function buildConfig({
   store,
   table,
   visualization,
+  displayOptions,
   xField,
   yField,
   aggregation,
@@ -1231,6 +1341,7 @@ function buildConfig({
   store: Store;
   table: string;
   visualization: string;
+  displayOptions: DisplayOptions;
   xField: string;
   yField: string;
   aggregation: string;
@@ -1304,6 +1415,19 @@ function buildConfig({
       query.y = safeFieldAlias(activeSeries[1].fieldId);
       query.measures = [];
     }
+    if (
+      ["line", "area"].includes(visualization) &&
+      activeSeries.length === 1 &&
+      selectedProfile?.fields.find((field) => field.field_id === firstFieldId)
+        ?.value_type === "numeric"
+    ) {
+      // A lone numeric series should plot the raw observations in their natural
+      // row order instead of collapsing into one aggregate value.
+      query.y = safeFieldAlias(firstFieldId);
+      query.columns = [safeFieldAlias(firstFieldId)].filter(Boolean);
+      query.dimensions = [];
+      query.measures = [];
+    }
     return {
       version: 1,
       title,
@@ -1312,7 +1436,10 @@ function buildConfig({
       query,
       series: query.measures,
       filters: [],
-      display: { colors: seriesColorMap(activeSeries) },
+      display: {
+        colors: seriesColorMap(activeSeries),
+        ...displayOptionsConfig(displayOptions),
+      },
     };
   }
   const query: Record<string, unknown> = {
@@ -1357,7 +1484,34 @@ function buildConfig({
     query,
     series: query.measures,
     filters: [],
-    display: {},
+    display: displayOptionsConfig(displayOptions),
+  };
+}
+
+function displayOptionsConfig(options: DisplayOptions) {
+  return {
+    show_values: options.showValues,
+    show_trend_lines: options.showTrendLines,
+    show_legend: options.showLegend,
+    show_annotations: options.showAnnotations,
+  };
+}
+
+function readDisplayOptions(config: Record<string, unknown>): DisplayOptions {
+  if (!isRecord(config.display)) return DEFAULT_DISPLAY_OPTIONS;
+  return {
+    showValues: Boolean(
+      config.display.show_values ?? DEFAULT_DISPLAY_OPTIONS.showValues,
+    ),
+    showTrendLines: Boolean(
+      config.display.show_trend_lines ?? DEFAULT_DISPLAY_OPTIONS.showTrendLines,
+    ),
+    showLegend: Boolean(
+      config.display.show_legend ?? DEFAULT_DISPLAY_OPTIONS.showLegend,
+    ),
+    showAnnotations: Boolean(
+      config.display.show_annotations ?? DEFAULT_DISPLAY_OPTIONS.showAnnotations,
+    ),
   };
 }
 

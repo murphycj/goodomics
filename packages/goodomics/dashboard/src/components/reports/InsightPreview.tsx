@@ -6,6 +6,19 @@ import { CHART_COLORS } from "../../lib/chartColors";
 
 type InsightResult = Record<string, unknown>;
 type GridRow = Record<string, unknown> & { __rowId: string };
+type DisplayOptions = {
+  showValues: boolean;
+  showTrendLines: boolean;
+  showLegend: boolean;
+  showAnnotations: boolean;
+};
+
+const DEFAULT_DISPLAY_OPTIONS: DisplayOptions = {
+  showValues: false,
+  showTrendLines: false,
+  showLegend: true,
+  showAnnotations: false,
+};
 
 /** Renders an executed insight as an ECharts chart, metric tile, or data grid. */
 export function InsightPreview({
@@ -92,23 +105,42 @@ function normalizeEChartsOption({
   // final presentation details such as stable colors, axis label placement, and
   // grid padding that must work inside the resizable preview panel.
   const colors = readColorMap(config) ?? readColorMap(result) ?? {};
+  const displayOptions =
+    readDisplayOptions(config) ?? readDisplayOptions(result) ?? DEFAULT_DISPLAY_OPTIONS;
   const normalized: Record<string, unknown> =
     visualization === "histogram"
       ? normalizeHistogramOption(option, result, colors)
       : { ...option };
-  normalized.xAxis = normalizeAxis(normalized.xAxis, 48);
+  normalized.xAxis = normalizeAxis(normalized.xAxis, 56);
   normalized.yAxis = normalizeAxis(normalized.yAxis, 44);
+  normalized.title = normalizeTitle(normalized.title);
   normalized.grid = {
+    ...(isRecord(normalized.grid) ? normalized.grid : {}),
     left: 64,
     right: 32,
-    top: 40,
-    bottom: 72,
+    top: displayOptions.showLegend ? 72 : 40,
+    bottom: 96,
     containLabel: true,
-    ...(isRecord(normalized.grid) ? normalized.grid : {}),
   };
+  normalized.legend = normalizeLegend(normalized.legend, displayOptions.showLegend);
   normalized.color = Array.isArray(normalized.color) ? normalized.color : CHART_COLORS;
-  normalized.series = applySeriesColors(normalized.series, colors);
+  normalized.series = applySeriesOptions(
+    applySeriesColors(normalized.series, colors),
+    displayOptions,
+    visualization,
+  );
   return normalized;
+}
+
+function normalizeTitle(title: unknown) {
+  // The dashboard cards already render insight titles above the chart. Hide
+  // ECharts titles so legends and chart content do not collide with duplicate
+  // headings inside the plot area.
+  if (Array.isArray(title)) {
+    return title.map((item) => (isRecord(item) ? { ...item, show: false } : item));
+  }
+  if (isRecord(title)) return { ...title, show: false };
+  return title;
 }
 
 function normalizeAxis(axis: unknown, nameGap: number): unknown {
@@ -124,6 +156,56 @@ function normalizeAxis(axis: unknown, nameGap: number): unknown {
     nameLocation: "middle",
     nameGap,
   };
+}
+
+function normalizeLegend(legend: unknown, show: boolean) {
+  const base = isRecord(legend) ? legend : {};
+  return {
+    ...base,
+    show,
+    type: base.type ?? "scroll",
+    top: base.top ?? 8,
+    left: base.left ?? "center",
+    right: base.right ?? 24,
+  };
+}
+
+function applySeriesOptions(
+  series: unknown,
+  options: DisplayOptions,
+  visualization: string,
+) {
+  if (!Array.isArray(series)) return series;
+  return series.map((item) => {
+    if (!isRecord(item)) return item;
+    const supportsMarks = !["pie", "donut", "heatmap", "boxplot"].includes(
+      visualization,
+    );
+    return {
+      ...item,
+      label: {
+        ...(isRecord(item.label) ? item.label : {}),
+        show: options.showValues,
+      },
+      markLine:
+        options.showTrendLines && supportsMarks
+          ? {
+              ...(isRecord(item.markLine) ? item.markLine : {}),
+              data: [{ type: "average", name: "Average" }],
+            }
+          : item.markLine,
+      markPoint:
+        options.showAnnotations && supportsMarks
+          ? {
+              ...(isRecord(item.markPoint) ? item.markPoint : {}),
+              data: [
+                { type: "max", name: "Max" },
+                { type: "min", name: "Min" },
+              ],
+            }
+          : item.markPoint,
+    };
+  });
 }
 
 function normalizeHistogramOption(
@@ -245,6 +327,24 @@ function readColorMap(value: unknown) {
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")
       .map(([key, color]) => [key, color]),
   );
+}
+
+function readDisplayOptions(value: unknown): DisplayOptions | null {
+  if (!isRecord(value) || !isRecord(value.display)) return null;
+  return {
+    showValues: Boolean(
+      value.display.show_values ?? DEFAULT_DISPLAY_OPTIONS.showValues,
+    ),
+    showTrendLines: Boolean(
+      value.display.show_trend_lines ?? DEFAULT_DISPLAY_OPTIONS.showTrendLines,
+    ),
+    showLegend: Boolean(
+      value.display.show_legend ?? DEFAULT_DISPLAY_OPTIONS.showLegend,
+    ),
+    showAnnotations: Boolean(
+      value.display.show_annotations ?? DEFAULT_DISPLAY_OPTIONS.showAnnotations,
+    ),
+  };
 }
 
 function firstSeries(series: unknown) {
