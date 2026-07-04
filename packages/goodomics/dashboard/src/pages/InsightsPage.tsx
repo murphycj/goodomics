@@ -1,25 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { HexColorInput, HexColorPicker } from "react-colorful";
-import {
-  AreaChart,
-  ArrowLeft,
-  BarChart2,
-  BarChart3,
-  Box,
-  ChevronDown,
-  Check,
-  Copy,
-  Hash,
-  LineChart,
-  MoreHorizontal,
-  PieChart,
-  Plus,
-  Save,
-  Search,
-  ScatterChart,
-  Settings2,
-  Table2,
-} from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   createInsight,
@@ -30,24 +10,26 @@ import {
   listReports,
   patchInsight,
   type DataProfile,
-  type DataProfileField,
   type DatabaseTable,
   type SavedInsight,
 } from "../api";
+import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
+import { InsightPreviewPanel } from "../components/insights/InsightPreviewPanel";
+import {
+  InsightSeriesEditor,
+  blankSeries,
+  fieldForSeries,
+  profileSeries,
+  seriesDisplayName,
+  type BuilderSeries,
+} from "../components/insights/InsightSeriesEditor";
 import { InsightListTable } from "../components/reports/InsightListTable";
-import { InsightPreview } from "../components/reports/InsightPreview";
 import { isRecord, readReportItems } from "../components/reports/reportUtils";
 import {
   AsyncBlock,
   Button,
   Card,
   CardContent,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Input,
   Label,
   Page,
@@ -57,132 +39,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui";
-import { CHART_COLORS } from "../lib/chartColors";
+import {
+  DEFAULT_DISPLAY_OPTIONS,
+  displayOptionsConfig,
+  readDisplayOptions,
+  type DisplayOptions,
+} from "../lib/insightDisplayOptions";
 import { queryClient } from "../lib/queryClient";
-
-type ChartOption = {
-  value: string;
-  label: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-};
-
-// Chart options are grouped for the selector UI, but the `value` strings are the
-// persisted visualization identifiers understood by the server-side renderer.
-const CHART_OPTIONS: { group: string; items: ChartOption[] }[] = [
-  {
-    group: "Time Series",
-    items: [
-      {
-        value: "line",
-        label: "Line chart",
-        description: "Trends over time as a continuous line.",
-        icon: LineChart,
-      },
-      {
-        value: "area",
-        label: "Area chart",
-        description: "Trends over time as a shaded area.",
-        icon: AreaChart,
-      },
-      {
-        value: "bar",
-        label: "Bar chart",
-        description: "Values as vertical bars.",
-        icon: BarChart3,
-      },
-      {
-        value: "stacked_bar",
-        label: "Stacked bar chart",
-        description: "Series stacked into vertical bars.",
-        icon: BarChart2,
-      },
-    ],
-  },
-  {
-    group: "Total Value",
-    items: [
-      {
-        value: "metric",
-        label: "Metric",
-        description: "A headline value.",
-        icon: Hash,
-      },
-      {
-        value: "pie",
-        label: "Pie chart",
-        description: "Proportions of a whole.",
-        icon: PieChart,
-      },
-      {
-        value: "table",
-        label: "Table",
-        description: "Rows and columns.",
-        icon: Table2,
-      },
-    ],
-  },
-  {
-    group: "Distributions",
-    items: [
-      {
-        value: "histogram",
-        label: "Histogram",
-        description: "Distribution of one or more numeric fields.",
-        icon: BarChart2,
-      },
-      {
-        value: "boxplot",
-        label: "Box plot",
-        description: "Quartiles and outliers.",
-        icon: Box,
-      },
-      {
-        value: "scatter",
-        label: "Scatter plot",
-        description: "Two aligned measures plotted together.",
-        icon: ScatterChart,
-      },
-      {
-        value: "heatmap",
-        label: "Heatmap",
-        description: "Intensity across two dimensions.",
-        icon: GridIcon,
-      },
-    ],
-  },
-];
-
-const SERIES_COLORS = CHART_COLORS;
 
 type Store = DatabaseTable["store"];
 type InsightMode = "list" | "detail";
 type QueryMode = "profile" | "table";
-type DisplayOptions = {
-  showValues: boolean;
-  showTrendLines: boolean;
-  showLegend: boolean;
-  showAnnotations: boolean;
-};
-
-const DEFAULT_DISPLAY_OPTIONS: DisplayOptions = {
-  showValues: false,
-  showTrendLines: false,
-  showLegend: true,
-  showAnnotations: false,
-};
-
-// BuilderSeries is UI state, not the saved insight schema. buildConfig() below
-// compiles these editable series cards into query.fields, query.measures, and
-// display.colors for execution.
-type BuilderSeries = {
-  id: string;
-  profileId: string;
-  fieldId: string;
-  aggregation: string;
-  name: string;
-  color: string;
-};
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
 export function InsightsPage({ projectId }: { projectId: string }) {
@@ -537,50 +404,16 @@ export function InsightsPage({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-4">
-      <section className="shrink-0 border-b border-[#dce3eb] pb-4">
-        <div className="flex items-center gap-3">
-          <Button size="icon" variant="ghost" onClick={() => setMode("list")}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <BarChart3 className="h-5 w-5 text-[#16784a]" />
-          <Input
-            className="h-10 flex-1 text-lg font-semibold"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-          />
-          <div className="flex overflow-hidden rounded-lg shadow-sm">
-            <Button
-              className="rounded-r-none"
-              disabled={save.isPending}
-              onClick={() => save.mutate(false)}
-            >
-              <Save className="h-4 w-4" /> Save
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  aria-label="Save options"
-                  className="rounded-l-none border-l border-[#16864f] px-2.5"
-                  disabled={save.isPending}
-                >
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[240px]">
-                <DropdownMenuItem onClick={() => save.mutate(true)}>
-                  <Save className="h-4 w-4" /> Save & continue editing
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-        <Input
-          className="mt-3"
-          placeholder="Enter description (optional)"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-        />
-      </section>
+      <InsightBuilderHeader
+        description={description}
+        isSaving={save.isPending}
+        title={title}
+        onBack={() => setMode("list")}
+        onDescriptionChange={setDescription}
+        onSave={() => save.mutate(false)}
+        onSaveContinue={() => save.mutate(true)}
+        onTitleChange={setTitle}
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
         <Card className="mt-0 min-h-0 overflow-y-auto">
@@ -600,11 +433,10 @@ export function InsightsPage({ projectId }: { projectId: string }) {
               </Select>
             </Field>
             {queryMode === "profile" ? (
-              <SeriesEditor
+              <InsightSeriesEditor
                 profiles={availableProfiles}
                 series={series}
                 setSeries={setSeries}
-                visualization={visualization}
               />
             ) : (
               <>
@@ -693,92 +525,20 @@ export function InsightsPage({ projectId }: { projectId: string }) {
           </CardContent>
         </Card>
 
-        <Card className="mt-0 min-h-0 overflow-hidden p-0">
-          <CardContent className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center justify-between border-b border-[#dce3eb] px-4 py-3">
-              <div>
-                <h2 className="m-0 text-base font-semibold">{title}</h2>
-                <p className="m-0 text-xs text-[#657082]">
-                  {preview.data?.cached
-                    ? "Using cached result"
-                    : "Preview result"}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <OptionsMenu
-                  options={displayOptions}
-                  onChange={setDisplayOptions}
-                />
-                <ChartTypeSelect
-                  value={visualization}
-                  onChange={setVisualization}
-                />
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 p-4">
-              {preview.error ? (
-                <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
-                  {(preview.error as Error).message}
-                </div>
-              ) : (
-                <InsightPreview
-                  config={previewConfig}
-                  result={preview.data}
-                  setupWarning={setupWarning}
-                />
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <InsightPreviewPanel
+          config={previewConfig}
+          displayOptions={displayOptions}
+          error={preview.error instanceof Error ? preview.error : null}
+          isCached={Boolean(preview.data?.cached)}
+          result={preview.data}
+          setupWarning={setupWarning}
+          title={title}
+          visualization={visualization}
+          onDisplayOptionsChange={setDisplayOptions}
+          onVisualizationChange={setVisualization}
+        />
       </div>
     </div>
-  );
-}
-
-function blankSeries(
-  index: number,
-  profileId: string,
-  fieldId: string,
-): BuilderSeries {
-  // IDs only need to be stable within this editing session so React can track
-  // added/removed series cards.
-  return {
-    id: `series-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
-    profileId,
-    fieldId,
-    aggregation: "avg",
-    name: "",
-    color: SERIES_COLORS[index % SERIES_COLORS.length],
-  };
-}
-
-function profileSeries(
-  profileId: string,
-  profiles: DataProfile[],
-  current: BuilderSeries,
-): BuilderSeries {
-  // Prefer numeric fields because most chart types need a numeric measure. If a
-  // profile exposes only one field, use that field even when it is categorical.
-  const profile = profiles.find(
-    (candidate) => candidate.data_profile_id === profileId,
-  );
-  const field =
-    profile?.fields.length === 1
-      ? profile.fields[0]
-      : profile?.fields.find((candidate) => candidate.value_type === "numeric");
-  return {
-    ...current,
-    profileId,
-    fieldId: field?.field_id ?? "",
-    name: field?.display_name ?? "",
-  };
-}
-
-function chartOption(value: string) {
-  return (
-    CHART_OPTIONS.flatMap((group) => group.items).find(
-      (item) => item.value === value,
-    ) ?? CHART_OPTIONS[0].items[0]
   );
 }
 
@@ -841,23 +601,6 @@ function chartSetupWarning({
   return null;
 }
 
-function fieldForSeries(profiles: DataProfile[], series: BuilderSeries) {
-  // Resolve the selected profile field so chart-specific validation can use its
-  // declared value type.
-  return profiles
-    .find((profile) => profile.data_profile_id === series.profileId)
-    ?.fields.find((field) => field.field_id === series.fieldId);
-}
-
-function seriesDisplayName(profiles: DataProfile[], series: BuilderSeries) {
-  return (
-    series.name ||
-    fieldForSeries(profiles, series)?.display_name ||
-    series.fieldId ||
-    "This field"
-  );
-}
-
 function seriesColorMap(series: BuilderSeries[]) {
   // Store colors under every label the renderer might see: raw field IDs, safe
   // field aliases, display labels, and the generated Count series.
@@ -876,26 +619,6 @@ function seriesColorMap(series: BuilderSeries[]) {
   return Object.fromEntries(entries);
 }
 
-function GridIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="2"
-      viewBox="0 0 24 24"
-    >
-      <rect height="7" width="7" x="3" y="3" />
-      <rect height="7" width="7" x="14" y="3" />
-      <rect height="7" width="7" x="3" y="14" />
-      <rect height="7" width="7" x="14" y="14" />
-    </svg>
-  );
-}
-
 /** Label-and-control wrapper used by the insight builder sidebar. */
 function Field({
   label,
@@ -909,335 +632,6 @@ function Field({
       <Label>{label}</Label>
       {children}
     </div>
-  );
-}
-
-function SeriesEditor({
-  profiles,
-  series,
-  setSeries,
-  visualization,
-}: {
-  profiles: DataProfile[];
-  series: BuilderSeries[];
-  setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
-  visualization: string;
-}) {
-  // Series cards are intentionally profile-first. The table/SQL escape hatch is
-  // handled separately so semantic profile queries stay visually distinct.
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Label>Series</Label>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            setSeries((current) => [
-              ...current,
-              blankSeries(current.length, current[0]?.profileId ?? "", ""),
-            ])
-          }
-        >
-          <Plus className="h-4 w-4" /> Series
-        </Button>
-      </div>
-      {series.map((item, index) => {
-        const profile = profiles.find(
-          (candidate) => candidate.data_profile_id === item.profileId,
-        );
-        const fields = profile?.fields ?? [];
-        const field = fields.find(
-          (candidate) => candidate.field_id === item.fieldId,
-        );
-        return (
-          <div
-            className="rounded-md border border-[#d6dee8] bg-white p-3 shadow-sm"
-            key={item.id}
-          >
-            <div className="mb-3 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    aria-label={`Choose color for ${seriesDisplayName(
-                      profiles,
-                      item,
-                    )}`}
-                    className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border border-black/10 text-xs font-semibold text-white shadow-sm outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-[#21a66a]"
-                    style={{ backgroundColor: item.color }}
-                    type="button"
-                  >
-                    {String.fromCharCode(65 + index)}
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-[244px]">
-                  <div className="space-y-3 p-2">
-                    <HexColorPicker
-                      color={item.color}
-                      onChange={(color) =>
-                        updateSeries(setSeries, item.id, { color })
-                      }
-                    />
-                    <div className="space-y-1.5">
-                      <Label>Hex</Label>
-                      <HexColorInput
-                        className="flex min-h-[38px] w-full rounded-lg border border-[#cfd8e3] bg-white px-3 py-1 font-mono text-sm uppercase outline-none transition-colors focus:ring-2 focus:ring-[#21a66a]"
-                        color={item.color}
-                        prefixed
-                        onChange={(color) =>
-                          updateSeries(setSeries, item.id, { color })
-                        }
-                      />
-                    </div>
-                  </div>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Input
-                aria-label="Series name"
-                className="h-9 min-w-0 border-transparent bg-transparent px-2 font-semibold shadow-none hover:border-[#cfd8e3] focus:border-[#cfd8e3]"
-                placeholder={field?.display_name || `Series ${index + 1}`}
-                value={item.name}
-                onChange={(event) =>
-                  updateSeries(setSeries, item.id, { name: event.target.value })
-                }
-              />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button aria-label="Series actions" size="icon" variant="ghost">
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[180px]">
-                  <DropdownMenuItem
-                    onClick={() =>
-                      setSeries((current) => {
-                        const source = current.find(
-                          (candidate) => candidate.id === item.id,
-                        );
-                        if (!source) return current;
-                        const copyName =
-                          source.name ||
-                          field?.display_name ||
-                          `Series ${index + 1}`;
-                        const duplicate = {
-                          ...source,
-                          id: `series-${Date.now()}-${current.length}-${Math.random()
-                            .toString(16)
-                            .slice(2)}`,
-                          name: `${copyName} copy`,
-                          color: SERIES_COLORS[current.length % SERIES_COLORS.length],
-                        };
-                        const sourceIndex = current.findIndex(
-                          (candidate) => candidate.id === item.id,
-                        );
-                        return [
-                          ...current.slice(0, sourceIndex + 1),
-                          duplicate,
-                          ...current.slice(sourceIndex + 1),
-                        ];
-                      })
-                    }
-                  >
-                    <Copy className="h-4 w-4" /> Duplicate series
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={index === 0}
-                    onClick={() =>
-                      setSeries((current) =>
-                        current.filter((candidate) => candidate.id !== item.id),
-                      )
-                    }
-                  >
-                    Delete series
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <div className="space-y-2">
-              <Select
-                value={item.profileId}
-                onValueChange={(value) =>
-                  setSeries((current) =>
-                    current.map((candidate) =>
-                      candidate.id === item.id
-                        ? profileSeries(value, profiles, candidate)
-                        : candidate,
-                    ),
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Data profile" />
-                </SelectTrigger>
-                <SelectContent>
-                  {profiles.map((profile) => (
-                    <SelectItem
-                      key={profile.data_profile_id}
-                      value={profile.data_profile_id}
-                    >
-                      {profile.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={item.fieldId}
-                onValueChange={(value) =>
-                  setSeries((current) =>
-                    current.map((candidate) =>
-                      candidate.id === item.id
-                        ? {
-                            ...candidate,
-                            fieldId: value,
-                            name:
-                              candidate.name ||
-                              fields.find((field) => field.field_id === value)
-                                ?.display_name ||
-                              candidate.name,
-                          }
-                        : candidate,
-                    ),
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Field / measure" />
-                </SelectTrigger>
-                <SelectContent>
-                  {fields.map((field) => (
-                    <SelectItem key={field.field_id} value={field.field_id}>
-                      {field.display_name || field.field_id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={item.aggregation}
-                onValueChange={(value) =>
-                  updateSeries(setSeries, item.id, { aggregation: value })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["count", "sum", "avg", "min", "max"].map((aggregation) => (
-                    <SelectItem key={aggregation} value={aggregation}>
-                      {aggregation}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldSummary field={field} />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function updateSeries(
-  setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>,
-  id: string,
-  patch: Partial<BuilderSeries>,
-) {
-  setSeries((current) =>
-    current.map((candidate) =>
-      candidate.id === id ? { ...candidate, ...patch } : candidate,
-    ),
-  );
-}
-
-function OptionsMenu({
-  options,
-  onChange,
-}: {
-  options: DisplayOptions;
-  onChange: React.Dispatch<React.SetStateAction<DisplayOptions>>;
-}) {
-  const items: { key: keyof DisplayOptions; label: string }[] = [
-    { key: "showValues", label: "Show values on series" },
-    { key: "showTrendLines", label: "Show trend lines" },
-    { key: "showLegend", label: "Show legend" },
-    { key: "showAnnotations", label: "Show annotations" },
-  ];
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost">
-          <Settings2 className="h-4 w-4" /> Options{" "}
-          <ChevronDown className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Display</DropdownMenuLabel>
-        {items.map((item) => (
-          <DropdownMenuItem
-            key={item.key}
-            onSelect={(event) => {
-              event.preventDefault();
-              onChange((current) => ({
-                ...current,
-                [item.key]: !current[item.key],
-              }));
-            }}
-          >
-            <span className="flex h-4 w-4 items-center justify-center rounded border border-[#c7d0dd]">
-              {options[item.key] ? <Check className="h-3 w-3" /> : null}
-            </span>
-            {item.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ChartTypeSelect({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const selected = chartOption(value);
-  const Icon = selected.icon;
-  return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-[190px]">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon className="h-4 w-4 shrink-0" />
-          <span className="truncate">{selected.label}</span>
-        </div>
-      </SelectTrigger>
-      <SelectContent className="max-h-[560px] w-[380px]">
-        {CHART_OPTIONS.map((group) => (
-          <div key={group.group}>
-            <div className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#8b95a5]">
-              {group.group}
-            </div>
-            {group.items.map((item) => {
-              const ItemIcon = item.icon;
-              return (
-                <SelectItem key={item.value} value={item.value}>
-                  <span className="flex items-start gap-3">
-                    <ItemIcon className="mt-0.5 h-4 w-4" />
-                    <span>
-                      <span className="block font-semibold">{item.label}</span>
-                      <span className="block text-xs text-[#657082]">
-                        {item.description}
-                      </span>
-                    </span>
-                  </span>
-                </SelectItem>
-              );
-            })}
-          </div>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 
@@ -1265,47 +659,6 @@ function ColumnSelect({
       </SelectContent>
     </Select>
   );
-}
-
-function FieldSummary({ field }: { field: DataProfileField | undefined }) {
-  // Profile summaries are compact hints from the catalog, not live query
-  // results. They help the user choose fields before running a preview.
-  if (!field) return null;
-  const parts = [
-    field.value_type,
-    field.unit,
-    summaryRange(field.summary),
-    topValues(field.summary),
-  ].filter(Boolean);
-  return (
-    <div className="mt-2 space-y-1 text-xs text-[#657082]">
-      <div>{parts.join(" · ")}</div>
-      {field.description ? <div>{field.description}</div> : null}
-    </div>
-  );
-}
-
-function summaryRange(summary: Record<string, unknown>) {
-  // Numeric summaries come from profile metadata and may be absent for fields
-  // whose values are strings, booleans, or free-form payloads.
-  const min = summary.min;
-  const max = summary.max;
-  if (typeof min === "number" && typeof max === "number") {
-    return `${min.toLocaleString()} to ${max.toLocaleString()}`;
-  }
-  return null;
-}
-
-function topValues(summary: Record<string, unknown>) {
-  // Show only the first few categorical examples so field cards stay compact.
-  const values = summary.top_values;
-  if (!Array.isArray(values) || values.length === 0) return null;
-  return values
-    .slice(0, 3)
-    .map((item) =>
-      isRecord(item) && "value" in item ? String(item.value) : String(item),
-    )
-    .join(", ");
 }
 
 function executionConfig(config: Record<string, unknown>) {
@@ -1485,33 +838,6 @@ function buildConfig({
     series: query.measures,
     filters: [],
     display: displayOptionsConfig(displayOptions),
-  };
-}
-
-function displayOptionsConfig(options: DisplayOptions) {
-  return {
-    show_values: options.showValues,
-    show_trend_lines: options.showTrendLines,
-    show_legend: options.showLegend,
-    show_annotations: options.showAnnotations,
-  };
-}
-
-function readDisplayOptions(config: Record<string, unknown>): DisplayOptions {
-  if (!isRecord(config.display)) return DEFAULT_DISPLAY_OPTIONS;
-  return {
-    showValues: Boolean(
-      config.display.show_values ?? DEFAULT_DISPLAY_OPTIONS.showValues,
-    ),
-    showTrendLines: Boolean(
-      config.display.show_trend_lines ?? DEFAULT_DISPLAY_OPTIONS.showTrendLines,
-    ),
-    showLegend: Boolean(
-      config.display.show_legend ?? DEFAULT_DISPLAY_OPTIONS.showLegend,
-    ),
-    showAnnotations: Boolean(
-      config.display.show_annotations ?? DEFAULT_DISPLAY_OPTIONS.showAnnotations,
-    ),
   };
 }
 

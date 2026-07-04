@@ -3,22 +3,13 @@ import { useMemo } from "react";
 import { DataGrid, type Column } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { CHART_COLORS } from "../../lib/chartColors";
+import {
+  readDisplayOptions,
+  type DisplayOptions,
+} from "../../lib/insightDisplayOptions";
 
 type InsightResult = Record<string, unknown>;
 type GridRow = Record<string, unknown> & { __rowId: string };
-type DisplayOptions = {
-  showValues: boolean;
-  showTrendLines: boolean;
-  showLegend: boolean;
-  showAnnotations: boolean;
-};
-
-const DEFAULT_DISPLAY_OPTIONS: DisplayOptions = {
-  showValues: false,
-  showTrendLines: false,
-  showLegend: true,
-  showAnnotations: false,
-};
 
 /** Renders an executed insight as an ECharts chart, metric tile, or data grid. */
 export function InsightPreview({
@@ -105,8 +96,7 @@ function normalizeEChartsOption({
   // final presentation details such as stable colors, axis label placement, and
   // grid padding that must work inside the resizable preview panel.
   const colors = readColorMap(config) ?? readColorMap(result) ?? {};
-  const displayOptions =
-    readDisplayOptions(config) ?? readDisplayOptions(result) ?? DEFAULT_DISPLAY_OPTIONS;
+  const displayOptions = readDisplayOptions(config, readDisplayOptions(result));
   const normalized: Record<string, unknown> =
     visualization === "histogram"
       ? normalizeHistogramOption(option, result, colors)
@@ -327,24 +317,6 @@ function readColorMap(value: unknown) {
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")
       .map(([key, color]) => [key, color]),
   );
-}
-
-function readDisplayOptions(value: unknown): DisplayOptions | null {
-  if (!isRecord(value) || !isRecord(value.display)) return null;
-  return {
-    showValues: Boolean(
-      value.display.show_values ?? DEFAULT_DISPLAY_OPTIONS.showValues,
-    ),
-    showTrendLines: Boolean(
-      value.display.show_trend_lines ?? DEFAULT_DISPLAY_OPTIONS.showTrendLines,
-    ),
-    showLegend: Boolean(
-      value.display.show_legend ?? DEFAULT_DISPLAY_OPTIONS.showLegend,
-    ),
-    showAnnotations: Boolean(
-      value.display.show_annotations ?? DEFAULT_DISPLAY_OPTIONS.showAnnotations,
-    ),
-  };
 }
 
 function firstSeries(series: unknown) {
