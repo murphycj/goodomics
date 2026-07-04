@@ -21,11 +21,13 @@ export function InsightListTable({
   insights,
   onAdd,
   onOpen,
+  reportCounts,
   selectedInsightIds,
 }: {
   insights: SavedInsight[];
   onAdd?: (insight: SavedInsight) => void;
   onOpen?: (insight: SavedInsight) => void;
+  reportCounts?: Map<string, number>;
   selectedInsightIds?: Set<string>;
 }) {
   return (
@@ -36,7 +38,7 @@ export function InsightListTable({
             <TableHead>Name</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>Store</TableHead>
-            <TableHead>Created</TableHead>
+            <TableHead>Reports</TableHead>
             <TableHead>Last modified</TableHead>
             {onAdd ? (
               <TableHead className="w-[56px] text-right">
@@ -78,7 +80,7 @@ export function InsightListTable({
                   {source.store}.{source.table || "query"}
                 </TableCell>
                 <TableCell className="text-[#657082]">
-                  {formatDate(insight.created_at, { style: "date" })}
+                  {(reportCounts?.get(insight.insight_id) ?? 0).toLocaleString()}
                 </TableCell>
                 <TableCell className="text-[#657082]">
                   {formatDate(insight.updated_at, { style: "date" })}
