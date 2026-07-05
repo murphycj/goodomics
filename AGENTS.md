@@ -63,3 +63,14 @@ docker build -f docker/Dockerfile.server -t goodomics/server:local .
 
 For dashboard or Docker changes, run the relevant npm or Docker build when
 feasible.
+
+## Pull request expectations
+
+When creating or finalizing a pull request:
+
+- Open it as ready for review unless the task is explicitly incomplete.
+- Do not leave `[WIP]` in the title once implementation and tests are done.
+- Add a PR description with:
+  - Summary
+  - Tests run
+  - Notes or risks
