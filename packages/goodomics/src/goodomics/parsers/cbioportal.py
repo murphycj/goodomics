@@ -410,8 +410,8 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
                 subject_id = _clean(
                     row.get("PATIENT_ID") or row.get("Patient Identifier")
                 )
-                if subject_id is not None:
-                    _ensure_subject(context, subject_id, {})
+                if subject_id is None:
+                    subject_id = _subject_id_from_sample(sample_id)
                 _ensure_sample(context, sample_id, subject_id=subject_id, row=row)
 
 
@@ -678,7 +678,12 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
         )
         context.sample_sets.append(sample_set)
         for sample_id in _split_case_ids(values.get("case_list_ids")):
-            _ensure_sample(context, sample_id, subject_id=sample_id, row={})
+            _ensure_sample(
+                context,
+                sample_id,
+                subject_id=_subject_id_from_sample(sample_id),
+                row={},
+            )
         context.sample_set_members.append(
             SampleSetMember(
                 sample_set_id=sample_set.sample_set_id,
@@ -772,7 +777,12 @@ def _parse_gene_panel_matrix(
         sample_id = _clean(row.get("SAMPLE_ID"))
         if sample_id is None:
             continue
-        _ensure_sample(context, sample_id, subject_id=sample_id, row={})
+        _ensure_sample(
+            context,
+            sample_id,
+            subject_id=_subject_id_from_sample(sample_id),
+            row={},
+        )
         for column, panel in row.items():
             if column == "SAMPLE_ID" or _clean(panel) is None:
                 continue
@@ -1560,14 +1570,20 @@ def _ensure_sample(
     subject_id: str | None,
     row: dict[str, Any],
 ) -> Sample:
-    if subject_id is not None:
-        _ensure_subject(context, subject_id, {})
     sample = context.samples.get(sample_id)
+    candidate_subject_id = (
+        _subject_id_from_sample(sample_id) if subject_id == sample_id else subject_id
+    )
+    sample_subject_id = (
+        sample.subject_id if sample is not None else candidate_subject_id
+    )
+    if sample_subject_id is not None:
+        _ensure_subject(context, sample_subject_id, {})
     if sample is None:
         sample = Sample(
             sample_id=sample_id,
             project_id=context.project_id,
-            subject_id=subject_id,
+            subject_id=sample_subject_id,
             sample_name=_clean(row.get("NAME")) or sample_id,
             metadata_json={"cbioportal": _compact_row(row)},
         )
@@ -2257,6 +2273,13 @@ def _compact_row(row: dict[str, Any]) -> dict[str, Any]:
 def _split_case_ids(value: str | None) -> list[str]:
     clean = _clean(value)
     return [] if clean is None else [part for part in re.split(r"\s+", clean) if part]
+
+
+def _subject_id_from_sample(sample_id: str) -> str:
+    parts = sample_id.split("-")
+    if len(parts) >= 4 and parts[0].upper() == "TCGA":
+        return "-".join(parts[:3])
+    return sample_id
 
 
 def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[Run]:
