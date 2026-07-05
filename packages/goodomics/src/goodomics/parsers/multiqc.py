@@ -1,3 +1,5 @@
+"""Parsing utilities for turning MultiQC exports into Goodomics ingest records."""
+
 from __future__ import annotations
 
 import csv
@@ -20,6 +22,8 @@ MULTIQC_PAYLOAD_PROFILE = MULTIQC_PAYLOADS
 
 @dataclass(frozen=True)
 class MultiQCOutput:
+    """One discovered MultiQC output directory with optional HTML report."""
+
     root_dir: Path
     data_dir: Path
     report_html: Path | None
@@ -27,6 +31,8 @@ class MultiQCOutput:
 
 @dataclass
 class MultiQCParseResult:
+    """Accumulated analytical records and discovered outputs from MultiQC parsing."""
+
     sample_metric_numeric: list[Any] = field(default_factory=list)
     sample_metric_string: list[Any] = field(default_factory=list)
     fields: list[DataProfileField] = field(default_factory=list)
@@ -75,6 +81,8 @@ class MultiQCParseResult:
 
 
 def parse_multiqc_bundle(path: Path, *, run_id: str) -> MultiQCParseResult:
+    """Parse all MultiQC outputs discoverable beneath the given path."""
+
     return parse_multiqc_outputs(discover_multiqc_outputs(path), run_id=run_id)
 
 
@@ -83,6 +91,8 @@ def parse_multiqc_outputs(
     *,
     run_id: str,
 ) -> MultiQCParseResult:
+    """Parse a specific set of MultiQC outputs into a normalized ingest payload."""
+
     result = MultiQCParseResult()
     for output in outputs:
         result.outputs.append(output)
@@ -95,6 +105,8 @@ def parse_multiqc_outputs(
 
 
 def discover_multiqc_outputs(path: Path) -> list[MultiQCOutput]:
+    """Discover MultiQC output folders from a file, run folder, or directory tree."""
+
     if not path.exists():
         return []
 
@@ -123,6 +135,8 @@ def discover_multiqc_outputs(path: Path) -> list[MultiQCOutput]:
 
 
 def sha256_file(path: Path) -> str:
+    """Return the SHA-256 digest for a file using streaming reads."""
+
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):

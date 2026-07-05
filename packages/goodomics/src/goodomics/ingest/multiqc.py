@@ -1,3 +1,5 @@
+"""Ingest orchestration for MultiQC outputs into catalog and analytics stores."""
+
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +47,8 @@ from goodomics.storage.sqlalchemy import (
 
 @dataclass(frozen=True)
 class MultiQCIngestResult:
+    """Summary of a persisted MultiQC ingest run and storage targets."""
+
     run_id: str
     data_import_id: str
     outputs_found: int
@@ -57,11 +61,15 @@ class MultiQCIngestResult:
 
 
 def default_run_id(results: Path) -> str:
+    """Infer a stable default run id from the results path."""
+
     name = results.resolve().name if results.name else "run"
     return name or f"run-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
 
 
 def default_run_id_for_output(output: MultiQCOutput) -> str:
+    """Infer a run id for one discovered MultiQC output bundle."""
+
     if output.root_dir.name == "multiqc" and output.root_dir.parent.name:
         return output.root_dir.parent.name
     if output.report_html is not None:
@@ -85,6 +93,8 @@ def ingest_multiqc_runs(
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
 ) -> list[MultiQCIngestResult]:
+    """Ingest one or more MultiQC outputs, grouping by inferred run id when needed."""
+
     outputs = discover_multiqc_outputs(results)
     if not outputs:
         raise ValueError(f"No MultiQC output found under {results}")
@@ -129,6 +139,8 @@ def ingest_multiqc(
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
 ) -> MultiQCIngestResult:
+    """Ingest a single MultiQC bundle path as one run."""
+
     resolved_run_id = run_id or default_run_id(results)
     parsed = parse_multiqc_bundle(results, run_id=resolved_run_id)
     if not parsed.outputs:

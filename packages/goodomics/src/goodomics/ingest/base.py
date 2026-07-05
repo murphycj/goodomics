@@ -1,3 +1,5 @@
+"""Shared ingest contracts and normalized result container types."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -55,6 +57,8 @@ class AnalyticsStagedLoad(Protocol):
 
 @dataclass
 class NormalizedIngestResult:
+    """Canonical parsed ingest payload spanning catalog and analytical records."""
+
     run: Run
     runs: list[Run] = field(default_factory=list)
     data_import: DataImport | None = None
@@ -86,6 +90,8 @@ class NormalizedIngestResult:
 
 
 def merge_batches(batches: Iterable[AnalyticsIngestBatch]) -> AnalyticsIngestBatch:
+    """Merge analytics batch collections by concatenating each modeled row list."""
+
     merged = AnalyticsIngestBatch()
     for batch in batches:
         for field_name in merged.model_fields:
