@@ -181,6 +181,7 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
         json={
             "run_id": "rna-run",
             "project": "rnaseq-core",
+            "assay": "RNA-seq",
             "samples": [{"sample_id": "S1", "sample_name": "Tumor RNA"}],
         },
     )
@@ -195,6 +196,13 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     scoped_runs = client.get(f"/api/v1/projects/{project['project_id']}/runs")
     assert scoped_runs.status_code == 200
     assert [run["run_id"] for run in scoped_runs.json()["items"]] == ["rna-run"]
+    searched_runs = client.get(
+        f"/api/v1/projects/{project['project_id']}/runs",
+        params={"search": "rna-seq"},
+    )
+    assert searched_runs.status_code == 200
+    assert searched_runs.json()["total"] == 1
+    assert searched_runs.json()["items"][0]["run_id"] == "rna-run"
 
     scoped_run = client.get(f"/api/v1/projects/{project['project_id']}/runs/rna-run")
     assert scoped_run.status_code == 200
@@ -221,6 +229,14 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     sample = client.get(f"/api/v1/projects/{project['project_id']}/samples/S1")
     assert sample.status_code == 200
     assert sample.json()["sample_name"] == "Tumor RNA"
+
+    sample_search = client.get(
+        f"/api/v1/projects/{project['project_id']}/samples",
+        params={"search": "tumor"},
+    )
+    assert sample_search.status_code == 200
+    assert sample_search.json()["total"] == 1
+    assert sample_search.json()["items"][0]["sample_id"] == "S1"
 
     renamed = client.patch(
         f"/api/v1/projects/{project['project_id']}",
@@ -1792,6 +1808,108 @@ def test_sample_set_context_endpoint_uses_canonical_model(
     assert sample_sets
     assert sample_sets[0]["sample_set_id"].startswith("run-cbio:")
     assert sample_sets[0]["member_count"] > 0
+    assert sample_sets[0]["updated_at"]
+
+
+def test_project_sample_group_lifecycle(client: TestClient) -> None:
+    created = client.post(
+        "/api/v1/projects",
+        json={"name": "Sample Group Project", "slug": "sample-groups"},
+    )
+    assert created.status_code == 201
+    project_id = created.json()["project_id"]
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "run-old",
+            "project": "sample-groups",
+            "samples": [
+                {"sample_id": "S1", "sample_name": "Tumor A"},
+                {"sample_id": "S2", "sample_name": "Normal B"},
+            ],
+        },
+    )
+    client.post(
+        "/api/v1/runs",
+        json={
+            "run_id": "run-new",
+            "project": "sample-groups",
+            "samples": [{"sample_id": "S1", "sample_name": "Tumor A"}],
+        },
+    )
+
+    created_group = client.post(
+        f"/api/v1/projects/{project_id}/sample-groups",
+        json={
+            "name": "Responders",
+            "description": "Samples with response",
+            "sample_ids": ["S1", "S2"],
+        },
+    )
+    assert created_group.status_code == 201
+    group = created_group.json()
+    assert group["sample_set_id"].startswith("sample-set-")
+    assert group["kind"] == "cohort"
+    assert group["member_count"] == 2
+    assert group["updated_at"]
+
+    listed = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups",
+        params={"search": "responders"},
+    )
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["total"] == 1
+    assert listed_body["items"][0]["sample_set_id"] == group["sample_set_id"]
+
+    members = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members"
+    )
+    assert members.status_code == 200
+    member_body = members.json()
+    assert member_body["total"] == 2
+    members_by_sample = {item["sample_id"]: item for item in member_body["items"]}
+    assert members_by_sample["S1"]["run_sample_id"] == "run-new:S1"
+    assert members_by_sample["S1"]["run_id"] == "run-new"
+    assert members_by_sample["S2"]["run_sample_id"] == "run-old:S2"
+
+    duplicate_add = client.post(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members",
+        json={"sample_ids": ["S1"]},
+    )
+    assert duplicate_add.status_code == 200
+    assert duplicate_add.json()["member_count"] == 2
+
+    renamed = client.patch(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}",
+        json={"name": "Clinical responders", "kind": "reference_set"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Clinical responders"
+    assert renamed.json()["kind"] == "reference_set"
+
+    removed = client.request(
+        "DELETE",
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members",
+        json={"run_sample_ids": ["run-new:S1"]},
+    )
+    assert removed.status_code == 200
+    assert removed.json()["member_count"] == 1
+
+    remaining = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members"
+    )
+    assert remaining.status_code == 200
+    assert remaining.json()["total"] == 1
+    assert remaining.json()["items"][0]["sample_id"] == "S2"
+
+    deleted = client.delete(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+    )
+    assert deleted.status_code == 204
+    empty = client.get(f"/api/v1/projects/{project_id}/sample-groups")
+    assert empty.status_code == 200
+    assert empty.json()["total"] == 0
 
 
 def test_report_render_exports_standalone_html(client: TestClient) -> None:

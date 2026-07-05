@@ -1,5 +1,4 @@
 export type ProjectRecentKind =
-  | "cohorts"
   | "database"
   | "insight"
   | "policies"
@@ -7,6 +6,7 @@ export type ProjectRecentKind =
   | "run"
   | "runs"
   | "sample"
+  | "sample-groups"
   | "samples"
   | "settings";
 
@@ -60,8 +60,14 @@ function viewFromPath(projectId: string, pathname: string): ProjectRecentView | 
   if (suffix === "/insights") {
     return recent("Insights", "Saved insights", "insight", pathname, now);
   }
-  if (suffix === "/cohorts") {
-    return recent("Cohorts", "Project cohorts", "cohorts", pathname, now);
+  if (suffix === "/sample-groups") {
+    return recent(
+      "Sample groups",
+      "Saved sample groups",
+      "sample-groups",
+      pathname,
+      now,
+    );
   }
   if (suffix === "/qc-policies") {
     return recent("QC policies", "Quality rules", "policies", pathname, now);

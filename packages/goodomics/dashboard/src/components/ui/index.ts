@@ -4,6 +4,7 @@ export { Button, buttonVariants } from "./button";
 export { Card, CardContent, CardHeader, CardTitle } from "./card";
 export { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 export { CopyButton } from "./CopyButton";
+export { DataGridShell, type GridColumnOption } from "./DataGridShell";
 export { DelayedHoverPopover } from "./DelayedHoverPopover";
 export { Detail } from "./Detail";
 export {

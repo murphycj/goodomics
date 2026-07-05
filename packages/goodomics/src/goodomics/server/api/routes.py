@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
-from sqlmodel import SQLModel, select
+from sqlmodel import SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.projects import (
@@ -359,7 +359,68 @@ class SampleSetRead(BaseModel):
     definition_json: dict[str, JsonValue] = Field(default_factory=dict)
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
+    updated_at: datetime
     member_count: int = 0
+
+
+class SampleSetPageRead(BaseModel):
+    """Paginated sample-group list response."""
+
+    items: list[SampleSetRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class SampleGroupCreate(BaseModel):
+    """Payload for creating a project-scoped sample group."""
+
+    name: str
+    description: str | None = None
+    kind: str = "cohort"
+    sample_ids: list[str] = Field(default_factory=list)
+
+
+class SampleGroupPatch(BaseModel):
+    """Fields that can be patched on a sample group."""
+
+    name: str | None = None
+    description: str | None = None
+    kind: str | None = None
+    metadata_json: dict[str, JsonValue] | None = None
+
+
+class SampleGroupMemberRead(BaseModel):
+    """Processed-sample member displayed in a sample group."""
+
+    run_sample_id: str
+    sample_id: str
+    sample_name: str | None = None
+    subject_id: str | None = None
+    run_id: str
+    run_name: str | None = None
+    status: str
+
+
+class SampleGroupMemberPageRead(BaseModel):
+    """Paginated sample-group member response."""
+
+    items: list[SampleGroupMemberRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class SampleGroupMembersAdd(BaseModel):
+    """Payload for adding stable samples to a sample group."""
+
+    sample_ids: list[str]
+
+
+class SampleGroupMembersRemove(BaseModel):
+    """Payload for removing processed samples from a sample group."""
+
+    run_sample_ids: list[str]
 
 
 class CohortCreate(BaseModel):
@@ -888,11 +949,18 @@ async def list_project_runs(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
 ) -> RunPageRead:
     """List runs in one project."""
 
     await _require_project(request, project_id)
-    return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
+    return await _list_runs(
+        request,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+    )
 
 
 @router.get("/search", response_model=list[SearchResultRead])
@@ -996,10 +1064,17 @@ async def list_runs(
     project_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
 ) -> RunPageRead:
     """List runs globally or within one project."""
 
-    return await _list_runs(request, project_id=project_id, limit=limit, offset=offset)
+    return await _list_runs(
+        request,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+    )
 
 
 @router.post("/runs", response_model=Run, status_code=201)
@@ -1705,6 +1780,213 @@ async def export_rendered_report_html(
     return Response(content=report.html, media_type="text/html")
 
 
+@router.get(
+    "/projects/{project_id}/sample-groups",
+    response_model=SampleSetPageRead,
+)
+async def list_project_sample_groups(
+    project_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
+    kind: str | None = Query(default=None, max_length=64),
+) -> SampleSetPageRead:
+    """List project sample groups with search, counts, and pagination."""
+
+    return await _list_project_sample_groups(
+        request,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+        kind=kind,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/sample-groups",
+    response_model=SampleSetRead,
+    status_code=201,
+)
+async def create_project_sample_group(
+    project_id: str,
+    payload: SampleGroupCreate,
+    request: Request,
+) -> SampleSetRead:
+    """Create a project-scoped sample group."""
+
+    project = await _require_project(request, project_id)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Sample group name is required")
+    kind = payload.kind.strip() or "cohort"
+    now = datetime.now(UTC)
+    async with _session(request) as session:
+        row = SampleSetRecord(
+            sample_set_id=_new_id("sample-set"),
+            project_id=project.id,
+            name=name,
+            kind=kind,
+            description=payload.description,
+            definition_json={"source": "dashboard"},
+            created_at=now,
+            updated_at=now,
+            metadata_json={},
+        )
+        session.add(row)
+        await session.flush()
+        await _add_sample_group_members_by_sample_id(
+            session,
+            project,
+            row,
+            payload.sample_ids,
+        )
+        await session.commit()
+        await session.refresh(row)
+        return await _sample_set_read(session, row)
+
+
+@router.patch(
+    "/projects/{project_id}/sample-groups/{sample_set_id}",
+    response_model=SampleSetRead,
+)
+async def patch_project_sample_group(
+    project_id: str,
+    sample_set_id: str,
+    payload: SampleGroupPatch,
+    request: Request,
+) -> SampleSetRead:
+    """Patch a project-scoped sample group."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        if payload.name is not None:
+            name = payload.name.strip()
+            if not name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Sample group name is required",
+                )
+            row.name = name
+        if payload.description is not None:
+            row.description = payload.description
+        if payload.kind is not None:
+            row.kind = payload.kind.strip() or "cohort"
+        if payload.metadata_json is not None:
+            row.metadata_json = payload.metadata_json
+        row.updated_at = datetime.now(UTC)
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return await _sample_set_read(session, row)
+
+
+@router.delete(
+    "/projects/{project_id}/sample-groups/{sample_set_id}",
+    status_code=204,
+)
+async def delete_project_sample_group(
+    project_id: str,
+    sample_set_id: str,
+    request: Request,
+) -> Response:
+    """Delete a project-scoped sample group and its members."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        if row.id is not None:
+            await session.exec(
+                delete(SampleSetMemberRecord).where(
+                    SampleSetMemberRecord.sample_set_id == row.id
+                )
+            )
+        await session.delete(row)
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.get(
+    "/projects/{project_id}/sample-groups/{sample_set_id}/members",
+    response_model=SampleGroupMemberPageRead,
+)
+async def list_project_sample_group_members(
+    project_id: str,
+    sample_set_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
+) -> SampleGroupMemberPageRead:
+    """List processed-sample members for one sample group."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        return await _sample_group_members_page(
+            session,
+            project,
+            row,
+            limit=limit,
+            offset=offset,
+            search=search,
+        )
+
+
+@router.post(
+    "/projects/{project_id}/sample-groups/{sample_set_id}/members",
+    response_model=SampleSetRead,
+)
+async def add_project_sample_group_members(
+    project_id: str,
+    sample_set_id: str,
+    payload: SampleGroupMembersAdd,
+    request: Request,
+) -> SampleSetRead:
+    """Add samples to a sample group by resolving their latest processed sample."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        await _add_sample_group_members_by_sample_id(
+            session,
+            project,
+            row,
+            payload.sample_ids,
+        )
+        await session.commit()
+        await session.refresh(row)
+        return await _sample_set_read(session, row)
+
+
+@router.delete(
+    "/projects/{project_id}/sample-groups/{sample_set_id}/members",
+    response_model=SampleSetRead,
+)
+async def remove_project_sample_group_members(
+    project_id: str,
+    sample_set_id: str,
+    payload: SampleGroupMembersRemove,
+    request: Request,
+) -> SampleSetRead:
+    """Remove processed-sample members from a sample group."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        await _remove_sample_group_members_by_run_sample_id(
+            session,
+            project,
+            row,
+            payload.run_sample_ids,
+        )
+        await session.commit()
+        await session.refresh(row)
+        return await _sample_set_read(session, row)
+
+
 @router.get("/sample-sets", response_model=list[SampleSetRead])
 async def list_sample_sets(
     request: Request,
@@ -1741,20 +2023,14 @@ async def list_sample_sets(
                 )
             ).all()
             counts = {int(row[0]): int(row[1]) for row in count_rows}
-    return [
-        SampleSetRead(
-            sample_set_id=row.sample_set_id,
-            project_id=project_id,
-            name=row.name,
-            kind=row.kind,
-            description=row.description,
-            definition_json=row.definition_json,
-            metadata_json=row.metadata_json,
-            created_at=row.created_at,
-            member_count=counts.get(int(row.id or 0), 0),
-        )
-        for row in rows
-    ]
+        return [
+            await _sample_set_read(
+                session,
+                row,
+                member_count=counts.get(int(row.id or 0), 0),
+            )
+            for row in rows
+        ]
 
 
 @router.get("/cohorts", response_model=list[CohortRead])
@@ -2024,6 +2300,362 @@ async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
         return await _project_read(row, session=session)
 
 
+async def _list_project_sample_groups(
+    request: Request,
+    *,
+    project_id: str,
+    limit: int,
+    offset: int,
+    search: str = "",
+    kind: str | None = None,
+) -> SampleSetPageRead:
+    """List project sample groups with member counts."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        filters: list[Any] = [SampleSetRecord.project_id == project.id]
+        if kind:
+            filters.append(SampleSetRecord.kind == kind)
+        term = search.strip().lower()
+        if term:
+            pattern = f"%{term}%"
+            filters.append(
+                or_(
+                    func.lower(SampleSetRecord.sample_set_id).like(pattern),
+                    func.lower(SampleSetRecord.name).like(pattern),
+                    func.lower(SampleSetRecord.kind).like(pattern),
+                    func.lower(SampleSetRecord.description).like(pattern),
+                )
+            )
+        total = int(
+            (
+                await session.exec(
+                    select(func.count()).select_from(SampleSetRecord).where(*filters)
+                )
+            ).one()
+        )
+        rows = (
+            await session.exec(
+                select(SampleSetRecord)
+                .where(*filters)
+                .order_by(
+                    cast(Any, SampleSetRecord.updated_at).desc(),
+                    SampleSetRecord.name,
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+        counts = await _sample_set_member_counts(
+            session,
+            [row.id for row in rows if row.id is not None],
+        )
+        return SampleSetPageRead(
+            items=[
+                await _sample_set_read(
+                    session,
+                    row,
+                    member_count=counts.get(int(row.id or 0), 0),
+                )
+                for row in rows
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+
+async def _sample_set_read(
+    session: AsyncSession,
+    row: SampleSetRecord,
+    *,
+    member_count: int | None = None,
+) -> SampleSetRead:
+    """Convert a sample-set catalog row into a dashboard/API response."""
+
+    row_id = int(row.id or 0)
+    count = (
+        member_count
+        if member_count is not None
+        else (await _sample_set_member_counts(session, [row_id])).get(row_id, 0)
+    )
+    definition_json = (
+        row.definition_json if isinstance(row.definition_json, dict) else {}
+    )
+    metadata_json = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+    return SampleSetRead(
+        sample_set_id=row.sample_set_id,
+        project_id=await _public_label(
+            session,
+            ProjectRecord,
+            "project_id",
+            row.project_id,
+        ),
+        name=row.name,
+        kind=row.kind,
+        description=row.description,
+        definition_json=definition_json,
+        metadata_json=metadata_json,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        member_count=count,
+    )
+
+
+async def _sample_set_member_counts(
+    session: AsyncSession,
+    sample_set_ids: list[int],
+) -> dict[int, int]:
+    """Return member counts keyed by internal sample-set primary key."""
+
+    if not sample_set_ids:
+        return {}
+    sample_set_member_id = cast(Any, SampleSetMemberRecord.sample_set_id)
+    member_id = cast(Any, SampleSetMemberRecord.id)
+    count_rows = (
+        await session.exec(
+            select(
+                sample_set_member_id,
+                func.count(member_id),
+            )
+            .where(sample_set_member_id.in_(sample_set_ids))
+            .group_by(sample_set_member_id)
+        )
+    ).all()
+    return {int(row[0]): int(row[1]) for row in count_rows}
+
+
+async def _require_project_sample_group(
+    session: AsyncSession,
+    project: ProjectRecord,
+    sample_set_id: str,
+) -> SampleSetRecord:
+    """Return a sample group only when it belongs to the project."""
+
+    row = await get_record_where(
+        session,
+        SampleSetRecord,
+        SampleSetRecord.project_id == project.id,
+        SampleSetRecord.sample_set_id == sample_set_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sample group not found")
+    return row
+
+
+async def _sample_group_members_page(
+    session: AsyncSession,
+    project: ProjectRecord,
+    sample_set: SampleSetRecord,
+    *,
+    limit: int,
+    offset: int,
+    search: str = "",
+) -> SampleGroupMemberPageRead:
+    """List display-ready members for a sample group."""
+
+    filters: list[Any] = [
+        SampleSetMemberRecord.sample_set_id == sample_set.id,
+        RunSampleRecord.project_id == project.id,
+    ]
+    term = search.strip().lower()
+    if term:
+        pattern = f"%{term}%"
+        filters.append(
+            or_(
+                func.lower(SampleRecord.sample_id).like(pattern),
+                func.lower(SampleRecord.sample_name).like(pattern),
+                func.lower(RunRecord.run_id).like(pattern),
+                func.lower(RunRecord.name).like(pattern),
+                cast(Any, SampleRecord.subject_id).in_(
+                    select(SubjectRecord.id).where(
+                        func.lower(SubjectRecord.subject_id).like(pattern)
+                    )
+                ),
+            )
+        )
+    count_statement = (
+        select(func.count())
+        .select_from(SampleSetMemberRecord)
+        .join(
+            RunSampleRecord,
+            cast(Any, RunSampleRecord.id) == SampleSetMemberRecord.run_sample_id,
+        )
+        .join(SampleRecord, cast(Any, SampleRecord.id) == RunSampleRecord.sample_id)
+        .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+        .where(*filters)
+    )
+    total = int((await session.exec(count_statement)).one())
+    rows = (
+        await session.exec(
+            select(
+                SampleSetMemberRecord,
+                RunSampleRecord,
+                SampleRecord,
+                RunRecord,
+            )
+            .join(
+                RunSampleRecord,
+                cast(Any, RunSampleRecord.id) == SampleSetMemberRecord.run_sample_id,
+            )
+            .join(SampleRecord, cast(Any, SampleRecord.id) == RunSampleRecord.sample_id)
+            .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+            .where(*filters)
+            .order_by(SampleRecord.sample_id, cast(Any, RunRecord.created_at).desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    return SampleGroupMemberPageRead(
+        items=[
+            await _sample_group_member_read(session, run_sample, sample, run)
+            for _member, run_sample, sample, run in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def _sample_group_member_read(
+    session: AsyncSession,
+    run_sample: RunSampleRecord,
+    sample: SampleRecord,
+    run: RunRecord,
+) -> SampleGroupMemberRead:
+    """Convert joined sample-group member rows to the public API shape."""
+
+    return SampleGroupMemberRead(
+        run_sample_id=run_sample.run_sample_id,
+        sample_id=sample.sample_id,
+        sample_name=sample.sample_name,
+        subject_id=await _public_label(
+            session,
+            SubjectRecord,
+            "subject_id",
+            sample.subject_id,
+        ),
+        run_id=run.run_id,
+        run_name=run.name,
+        status=run_sample.status,
+    )
+
+
+async def _add_sample_group_members_by_sample_id(
+    session: AsyncSession,
+    project: ProjectRecord,
+    sample_set: SampleSetRecord,
+    sample_ids: list[str],
+) -> None:
+    """Resolve stable sample labels to latest run-sample rows and add members."""
+
+    requested_sample_ids = _unique_nonempty(sample_ids)
+    if not requested_sample_ids:
+        return
+    latest_run_samples: list[RunSampleRecord] = []
+    unresolved: list[str] = []
+    project_id = project.project_id
+    for sample_id in requested_sample_ids:
+        await _require_project_sample(session, project_id, sample_id)
+        latest = await _latest_sample_run(session, project_id, sample_id)
+        if latest is None:
+            unresolved.append(sample_id)
+            continue
+        latest_run_samples.append(latest[1])
+    if unresolved:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Samples must have at least one processed sample before they "
+                f"can be added to a group: {', '.join(unresolved)}"
+            ),
+        )
+    run_sample_pks = [
+        int(row.id)
+        for row in latest_run_samples
+        if row.id is not None and row.sample_id is not None
+    ]
+    if not run_sample_pks or sample_set.id is None:
+        return
+    existing = (
+        await session.exec(
+            select(SampleSetMemberRecord.run_sample_id).where(
+                SampleSetMemberRecord.sample_set_id == sample_set.id,
+                cast(Any, SampleSetMemberRecord.run_sample_id).in_(run_sample_pks),
+            )
+        )
+    ).all()
+    existing_pks = {int(row) for row in existing}
+    new_members = [
+        SampleSetMemberRecord(
+            sample_set_id=sample_set.id,
+            run_sample_id=run_sample_pk,
+        )
+        for run_sample_pk in run_sample_pks
+        if run_sample_pk not in existing_pks
+    ]
+    if not new_members:
+        return
+    session.add_all(new_members)
+    sample_set.updated_at = datetime.now(UTC)
+    session.add(sample_set)
+    await session.flush()
+
+
+async def _remove_sample_group_members_by_run_sample_id(
+    session: AsyncSession,
+    project: ProjectRecord,
+    sample_set: SampleSetRecord,
+    run_sample_ids: list[str],
+) -> None:
+    """Remove processed-sample labels from a sample group."""
+
+    requested_run_sample_ids = _unique_nonempty(run_sample_ids)
+    if not requested_run_sample_ids or sample_set.id is None:
+        return
+    run_samples = (
+        await session.exec(
+            select(RunSampleRecord).where(
+                RunSampleRecord.project_id == project.id,
+                cast(Any, RunSampleRecord.run_sample_id).in_(requested_run_sample_ids),
+            )
+        )
+    ).all()
+    found_ids = {row.run_sample_id for row in run_samples}
+    missing = [
+        run_sample_id
+        for run_sample_id in requested_run_sample_ids
+        if run_sample_id not in found_ids
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run samples are not in this project: {', '.join(missing)}",
+        )
+    run_sample_pks = [int(row.id) for row in run_samples if row.id is not None]
+    members = (
+        await session.exec(
+            select(SampleSetMemberRecord).where(
+                SampleSetMemberRecord.sample_set_id == sample_set.id,
+                cast(Any, SampleSetMemberRecord.run_sample_id).in_(run_sample_pks),
+            )
+        )
+    ).all()
+    if not members:
+        return
+    for member in members:
+        await session.delete(member)
+    sample_set.updated_at = datetime.now(UTC)
+    session.add(sample_set)
+    await session.flush()
+
+
+def _unique_nonempty(values: list[str]) -> list[str]:
+    """Return unique, stripped non-empty values while preserving order."""
+
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
 async def _get_project_run(request: Request, project_id: str, run_id: str) -> Run:
     """Return a public run model after checking project ownership."""
 
@@ -2169,6 +2801,11 @@ async def _list_samples(
                 or_(
                     func.lower(SampleRecord.sample_id).like(pattern),
                     func.lower(SampleRecord.sample_name).like(pattern),
+                    cast(Any, SampleRecord.subject_id).in_(
+                        select(SubjectRecord.id).where(
+                            func.lower(SubjectRecord.subject_id).like(pattern)
+                        )
+                    ),
                 )
             )
         total = int(
@@ -2330,6 +2967,7 @@ async def _list_runs(
     project_id: str | None,
     limit: int,
     offset: int,
+    search: str = "",
 ) -> RunPageRead:
     """List runs with optional project scoping and pagination."""
 
@@ -2346,6 +2984,17 @@ async def _list_runs(
         if project_pk is not None:
             count_statement = count_statement.where(RunRecord.project_id == project_pk)
             rows_statement = rows_statement.where(RunRecord.project_id == project_pk)
+        term = search.strip().lower()
+        if term:
+            pattern = f"%{term}%"
+            run_filter = or_(
+                func.lower(RunRecord.run_id).like(pattern),
+                func.lower(RunRecord.name).like(pattern),
+                func.lower(RunRecord.assay).like(pattern),
+                func.lower(RunRecord.status).like(pattern),
+            )
+            count_statement = count_statement.where(run_filter)
+            rows_statement = rows_statement.where(run_filter)
         total = int((await session.exec(count_statement)).one())
         rows = (await session.exec(rows_statement.offset(offset).limit(limit))).all()
         items = [await _run_from_row_public(session, row) for row in rows]

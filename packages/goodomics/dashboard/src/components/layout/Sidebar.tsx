@@ -33,10 +33,10 @@ import { SidebarModeSelect } from "./SidebarModeSelect";
 
 const navItems = [
   { suffix: "/samples", label: "Samples", icon: FlaskConical },
+  { suffix: "/sample-groups", label: "Sample groups", icon: Layers3 },
   { suffix: "/runs", label: "Runs", icon: Gauge },
   { suffix: "/reports", label: "Reports", icon: FileText },
   { suffix: "/insights", label: "Insights", icon: BarChart3 },
-  { suffix: "/cohorts", label: "Cohorts", icon: Layers3 },
   { suffix: "/qc-policies", label: "QC policies", icon: Gauge },
   { suffix: "/database", label: "Database", icon: Database },
   { suffix: "/settings", label: "Settings", icon: SettingsIcon },
