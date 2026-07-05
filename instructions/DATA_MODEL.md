@@ -195,7 +195,7 @@ Stable semantic query contracts. A data profile declares what kind of data a
 parser, SDK workflow, or user-defined source writes, how it should be queried,
 and how agents should understand it. Built-in profile IDs are stable across
 projects, runs, samples, and source datasets, so MCP tools and agents can ask
-for `cbioportal:mutations:maf` or `multiqc:qc_metrics` without learning a
+for `cbioportal:mutations:maf` or `salmon:metrics` without learning a
 specific import run ID.
 
 A data profile is not a dataset instance and is not sample membership. Data
@@ -205,8 +205,9 @@ IDs, source filenames, generated import IDs, source `stable_id` values, and
 platform descriptions.
 
 A data profile is also not the same thing as a field definition. A profile might
-be `multiqc:qc_metrics`; the fields inside it might be `duplication_rate`,
-`insert_size_mean`, and `mean_coverage`. Keep profile-level query behavior,
+be `fastqc:raw:metrics`; the fields inside it might be
+`general_stats.fastqc_raw_percent_duplicates` and
+`general_stats.fastqc_raw_total_sequences`. Keep profile-level query behavior,
 source fingerprints, summaries, and agent descriptions on `data_profiles`, and
 keep per-field labels, units, directions, query refs, and compact summaries in
 `data_profile_fields`.
@@ -241,10 +242,11 @@ Examples:
 
 | Data profile                      | Data type              | Producer   |
 | --------------------------------- | ---------------------- | ---------- |
-| `multiqc:qc_metrics`              | `generic_metrics`      | MultiQC    |
+| `salmon:metrics`                  | `generic_metrics`      | Salmon     |
+| `fastqc:raw:metrics`              | `generic_metrics`      | FastQC     |
 | `cbioportal:mutations:maf`        | `small_variants`       | cBioPortal |
 | `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal |
-| `picard_alignment_metrics`        | `generic_metrics`      | Picard     |
+| `picard:alignment:metrics`        | `generic_metrics`      | Picard     |
 | `mutect2_somatic_variants`        | `small_variants`       | Mutect2    |
 | `salmon_gene_tpm`                 | `feature_matrix`       | Salmon     |
 | `gistic_gene_cna`                 | `feature_calls`        | GISTIC     |
@@ -418,8 +420,8 @@ facets, and other user-facing fields inside a data profile.
 
 `data_profiles` describe a logical dataset. `data_profile_fields` describe the
 queryable columns or measures inside that dataset. For example,
-`multiqc:qc_metrics` is a data profile; `percent_duplicates` and
-`general_stats.salmon_percent_mapped` are fields.
+`fastqc:raw:metrics` is a data profile; `percent_duplicates` and
+`general_stats.fastqc_raw_percent_gc` are fields.
 
 | Column            | Notes                                                                     |
 | ----------------- | ------------------------------------------------------------------------- |
@@ -989,11 +991,12 @@ display and user input, but table relationships use the integer `id` columns.
 
 | id  | data_profile_id                   | data_type              | producer_tool | Notes                                          |
 | --- | --------------------------------- | ---------------------- | ------------- | ---------------------------------------------- |
-| `1` | `multiqc:qc_metrics`              | `generic_metrics`      | MultiQC       | Built-in QC metric contract reused across runs |
+| `1` | `salmon:metrics`                  | `generic_metrics`      | Salmon        | Tool-owned metric contract reused across runs  |
 | `2` | `cbioportal:mutations:maf`        | `small_variants`       | cBioPortal    | Built-in cBioPortal mutation contract          |
 | `3` | `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal    | Built-in segment-level CNA contract            |
 | `4` | `goodomics:sdk_metrics`           | `generic_metrics`      | goodomics-sdk | Native SDK metric contract                     |
-| `5` | `project_rnaseq:salmon_gene_tpm`  | `feature_matrix`       | Salmon        | Example project-defined profile                |
+| `5` | `fastqc:raw:metrics`              | `generic_metrics`      | FastQC        | Tool-owned raw-read QC metric contract         |
+| `6` | `project_rnaseq:salmon_gene_tpm`  | `feature_matrix`       | Salmon        | Example project-defined profile                |
 
 ### Files
 
@@ -1062,6 +1065,6 @@ processed by RNA-seq 3.19.
 Given this model, an MCP layer can accurately say:
 
 > This project has WES variants from Mutect2, WES alignment files from BWA,
-> RNA-seq QC metrics from MultiQC, and gene TPM profiles from Salmon. Sample
+> RNA-seq QC metrics from Salmon and FastQC parsed via MultiQC, and gene TPM profiles from Salmon. Sample
 > `P001_Tumor_RNA` has two RNA-seq processed results: one from nf-core/rnaseq
 > 3.18 and one from 3.19.

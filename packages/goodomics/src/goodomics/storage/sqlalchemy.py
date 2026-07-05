@@ -1011,18 +1011,17 @@ async def _upsert_data_profile_fields(
 ) -> list[DataProfileFieldRecord]:
     if not fields:
         return []
-    profile_pks = sorted(
-        {
-            profile_pk_by_label[field.data_profile_id]
-            for field in fields
-            if field.data_profile_id in profile_pk_by_label
-        }
-    )
-    if profile_pks:
+    field_ids_by_profile_pk: dict[int, set[str]] = {}
+    for field in fields:
+        profile_pk = profile_pk_by_label.get(field.data_profile_id)
+        if profile_pk is not None:
+            field_ids_by_profile_pk.setdefault(profile_pk, set()).add(field.field_id)
+
+    for profile_pk, field_ids in sorted(field_ids_by_profile_pk.items()):
         await session.exec(
-            delete(DataProfileFieldRecord).where(
-                cast(Any, DataProfileFieldRecord.data_profile_id).in_(profile_pks)
-            )
+            delete(DataProfileFieldRecord)
+            .where(DataProfileFieldRecord.data_profile_id == profile_pk)
+            .where(cast(Any, DataProfileFieldRecord.field_id).in_(sorted(field_ids)))
         )
     rows = [
         DataProfileFieldRecord(

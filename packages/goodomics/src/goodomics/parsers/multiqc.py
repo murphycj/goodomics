@@ -4,20 +4,39 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from goodomics.profiles.multiqc import MULTIQC_METRICS, MULTIQC_PAYLOADS
+from goodomics.profiles.multiqc import MULTIQC_PAYLOADS
+from goodomics.profiles.registry import built_in_data_profile
+from goodomics.profiles.tool import tool_metrics_profile, tool_payload_profile
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    DataProfile,
     DataProfileField,
     UnresolvedAnalyticalRecord,
 )
 
-MULTIQC_METRICS_PROFILE = MULTIQC_METRICS
 MULTIQC_PAYLOAD_PROFILE = MULTIQC_PAYLOADS
+
+
+@dataclass(frozen=True)
+class ToolProfileIdentity:
+    tool: str
+    context: str | None = None
+    label: str | None = None
+    module: str | None = None
+
+    @property
+    def metrics_profile_id(self) -> str:
+        return tool_metrics_profile(self.tool, self.context).data_profile_id
+
+    @property
+    def payload_profile_id(self) -> str:
+        return tool_payload_profile(self.tool, self.context).data_profile_id
 
 
 @dataclass(frozen=True)
@@ -35,6 +54,7 @@ class MultiQCParseResult:
 
     sample_metric_numeric: list[Any] = field(default_factory=list)
     sample_metric_string: list[Any] = field(default_factory=list)
+    data_profiles: dict[str, DataProfile] = field(default_factory=dict)
     fields: list[DataProfileField] = field(default_factory=list)
     payloads: list[Any] = field(default_factory=list)
     tool_versions: list[Any] = field(default_factory=list)
@@ -79,6 +99,10 @@ class MultiQCParseResult:
     def profile_fields(self) -> list[DataProfileField]:
         return _dedupe_fields(self.fields)
 
+    @property
+    def profiles(self) -> list[DataProfile]:
+        return [self.data_profiles[key] for key in sorted(self.data_profiles)]
+
 
 def parse_multiqc_bundle(path: Path, *, run_id: str) -> MultiQCParseResult:
     """Parse all MultiQC outputs discoverable beneath the given path."""
@@ -96,11 +120,12 @@ def parse_multiqc_outputs(
     result = MultiQCParseResult()
     for output in outputs:
         result.outputs.append(output)
-        _parse_general_stats(output, run_id, result)
-        _parse_module_summary_tables(output, run_id, result)
+        metadata = _read_multiqc_metadata(output)
+        _parse_general_stats(output, run_id, result, metadata)
+        _parse_module_summary_tables(output, run_id, result, metadata)
         _parse_sources(output, run_id, result)
         _parse_versions(output, run_id, result)
-        _parse_payloads(output, run_id, result)
+        _parse_payloads(output, run_id, result, metadata)
     return result
 
 
@@ -160,16 +185,24 @@ def _parse_general_stats(
     output: MultiQCOutput,
     run_id: str,
     result: MultiQCParseResult,
+    metadata: dict[str, Any],
 ) -> None:
     path = output.data_dir / "multiqc_general_stats.txt"
     if path.exists():
-        _parse_metric_table(path, run_id, result, module_hint="general_stats")
+        _parse_metric_table(
+            path,
+            run_id,
+            result,
+            metadata,
+            module_hint="general_stats",
+        )
 
 
 def _parse_module_summary_tables(
     output: MultiQCOutput,
     run_id: str,
     result: MultiQCParseResult,
+    metadata: dict[str, Any],
 ) -> None:
     for path in sorted(output.data_dir.glob("multiqc_*.txt")):
         if path.name in {
@@ -180,20 +213,21 @@ def _parse_module_summary_tables(
         }:
             continue
         if path.name.startswith("multiqc_") and _has_sample_column(path):
-            _parse_metric_table(path, run_id, result, module_hint=path.stem)
+            _parse_metric_table(path, run_id, result, metadata, module_hint=path.stem)
 
 
 def _parse_metric_table(
     path: Path,
     run_id: str,
     result: MultiQCParseResult,
+    metadata: dict[str, Any],
     *,
     module_hint: str,
 ) -> None:
     rows = _read_tsv(path)
     source_hash = sha256_file(path)
-    fields: dict[str, DataProfileField] = {}
-    field_values: dict[str, list[Any]] = {}
+    fields: dict[tuple[str, str], DataProfileField] = {}
+    field_values: dict[tuple[str, str], list[Any]] = {}
     for row in rows:
         sample_id = _clean_text(row.get("Sample"))
         for column, raw_value in row.items():
@@ -203,12 +237,16 @@ def _parse_metric_table(
             if value is None:
                 continue
             metric_id = _metric_id(module_hint, column)
-            tool, module, _, display_name = _metric_parts(module_hint, column)
+            header = _general_stats_header(metadata, column)
+            identity = _metric_identity(module_hint, column, header)
+            data_profile_id = _metrics_profile_id(result, identity)
+            display_name = _metric_display_name(module_hint, column, header)
+            field_key = (data_profile_id, metric_id)
             value_num, value_text = _coerce_metric_value(value)
             if value_num is not None:
                 result.sample_metric_numeric.append(
                     UnresolvedAnalyticalRecord(
-                        data_profile_id=MULTIQC_METRICS_PROFILE,
+                        data_profile_id=data_profile_id,
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
@@ -221,7 +259,7 @@ def _parse_metric_table(
             else:
                 result.sample_metric_string.append(
                     UnresolvedAnalyticalRecord(
-                        data_profile_id=MULTIQC_METRICS_PROFILE,
+                        data_profile_id=data_profile_id,
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
@@ -231,19 +269,19 @@ def _parse_metric_table(
                         source_file_id=str(path),
                     )
                 )
-            field_values.setdefault(metric_id, []).append(
+            field_values.setdefault(field_key, []).append(
                 value_num if value_num is not None else value_text
             )
-            if metric_id not in fields:
+            if field_key not in fields:
                 value_type = "numeric" if value_num is not None else "string"
-                fields[metric_id] = DataProfileField(
-                    data_profile_id=MULTIQC_METRICS_PROFILE,
+                fields[field_key] = DataProfileField(
+                    data_profile_id=data_profile_id,
                     field_id=metric_id,
                     field_role="metric",
                     entity_scope="run_sample",
                     display_name=display_name,
                     value_type=value_type,
-                    unit=None,
+                    unit=_metric_unit(header),
                     query_ref_json={
                         "table": "sample_metrics",
                         "field_column": "field_id",
@@ -254,24 +292,33 @@ def _parse_metric_table(
                             else "value_string"
                         ),
                     },
-                    metadata_json={"producer_tool": tool, "producer_module": module},
+                    metadata_json={
+                        "producer_tool": identity.tool,
+                        "producer_module": identity.module,
+                        "tool_context": identity.context,
+                        "multiqc_module": module_hint,
+                        "multiqc_namespace": identity.label,
+                    },
                 )
-    for metric_id, profile_field in fields.items():
+    for field_key, profile_field in fields.items():
         result.fields.append(
             profile_field.model_copy(
                 update={
                     "summary_json": _field_summary(
                         profile_field.value_type,
-                        field_values.get(metric_id, []),
+                        field_values.get(field_key, []),
                     )
                 }
             )
         )
     if rows:
+        payload_profile_id = _summary_table_payload_profile_id(
+            result, metadata, module_hint
+        )
         result.payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=f"{run_id}:{path.stem}",
-                data_profile_id=MULTIQC_PAYLOAD_PROFILE,
+                data_profile_id=payload_profile_id,
                 run_id=run_id,
                 payload_name=path.stem,
                 payload_kind="multiqc_summary_table",
@@ -337,6 +384,7 @@ def _parse_payloads(
     output: MultiQCOutput,
     run_id: str,
     result: MultiQCParseResult,
+    metadata: dict[str, Any],
 ) -> None:
     for path in sorted(output.data_dir.glob("*.txt")):
         if not _is_payload_file(path):
@@ -349,12 +397,13 @@ def _parse_payloads(
             for row in rows
             if (value := _clean_text(row.get("Sample"))) is not None
         }
-        tool, module, _, _ = _metric_parts(path.stem, "")
+        identity = _payload_identity(path.stem, metadata)
+        data_profile_id = _payload_profile_id(result, identity)
         sample_id = next(iter(samples)) if len(samples) == 1 else None
         result.payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=f"{run_id}:{path.stem}:{sample_id or 'all'}",
-                data_profile_id=MULTIQC_PAYLOAD_PROFILE,
+                data_profile_id=data_profile_id,
                 run_id=run_id,
                 run_sample_id=_run_sample_id(run_id, sample_id),
                 payload_name=path.stem,
@@ -367,11 +416,218 @@ def _parse_payloads(
                     "rows": rows,
                     "source_hash": sha256_file(path),
                     "sample_id": sample_id,
-                    "tool": tool,
-                    "module": module,
+                    "tool": identity.tool,
+                    "module": identity.module,
+                    "tool_context": identity.context,
+                    "multiqc_namespace": identity.label,
                 },
             )
         )
+
+
+def _read_multiqc_metadata(output: MultiQCOutput) -> dict[str, Any]:
+    path = output.data_dir / "multiqc_data.json"
+    if not path.exists():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _general_stats_header(
+    metadata: dict[str, Any],
+    column: str,
+) -> dict[str, Any] | None:
+    headers = metadata.get("report_general_stats_headers")
+    if not isinstance(headers, dict):
+        return None
+    for module_headers in headers.values():
+        if not isinstance(module_headers, dict):
+            continue
+        for metric_header in module_headers.values():
+            if not isinstance(metric_header, dict):
+                continue
+            if column in {
+                _clean_text(metric_header.get("rid")),
+                _clean_text(metric_header.get("clean_rid")),
+            }:
+                return metric_header
+    return None
+
+
+def _metric_identity(
+    module_hint: str,
+    column: str,
+    header: dict[str, Any] | None,
+) -> ToolProfileIdentity:
+    namespace = (
+        _clean_text(header.get("namespace")) if isinstance(header, dict) else None
+    )
+    if namespace:
+        return _identity_from_namespace(namespace, module_hint=module_hint)
+    return _identity_from_metric_prefix(module_hint, column)
+
+
+def _payload_identity(
+    payload_name: str,
+    metadata: dict[str, Any],
+) -> ToolProfileIdentity:
+    identity = _identity_from_metric_prefix(payload_name, "")
+    if identity.tool != "unknown":
+        return identity
+    plot_data = metadata.get("report_plot_data")
+    plot = plot_data.get(payload_name) if isinstance(plot_data, dict) else None
+    if isinstance(plot, dict):
+        pconfig = plot.get("pconfig")
+        title = pconfig.get("title") if isinstance(pconfig, dict) else None
+        if isinstance(title, str):
+            return _identity_from_metric_prefix(title, "")
+    return identity
+
+
+def _summary_table_payload_profile_id(
+    result: MultiQCParseResult,
+    metadata: dict[str, Any],
+    module_hint: str,
+) -> str:
+    if module_hint == "general_stats":
+        return _multiqc_payload_profile_id(result)
+    raw_data = metadata.get("report_saved_raw_data")
+    module_data = raw_data.get(module_hint) if isinstance(raw_data, dict) else None
+    if isinstance(module_data, dict):
+        return _payload_profile_id(
+            result, _identity_from_metric_prefix(module_hint, "")
+        )
+    return _payload_profile_id(result, _identity_from_metric_prefix(module_hint, ""))
+
+
+def _metrics_profile_id(
+    result: MultiQCParseResult,
+    identity: ToolProfileIdentity,
+) -> str:
+    data_profile = tool_metrics_profile(identity.tool, identity.context)
+    _register_profile(result, data_profile)
+    return data_profile.data_profile_id
+
+
+def _payload_profile_id(
+    result: MultiQCParseResult,
+    identity: ToolProfileIdentity,
+) -> str:
+    data_profile = tool_payload_profile(identity.tool, identity.context)
+    _register_profile(result, data_profile)
+    return data_profile.data_profile_id
+
+
+def _multiqc_payload_profile_id(result: MultiQCParseResult) -> str:
+    _register_profile(result, built_in_data_profile(MULTIQC_PAYLOAD_PROFILE))
+    return MULTIQC_PAYLOAD_PROFILE
+
+
+def _register_profile(
+    result: MultiQCParseResult,
+    data_profile: DataProfile,
+) -> None:
+    result.data_profiles.setdefault(data_profile.data_profile_id, data_profile)
+
+
+def _identity_from_namespace(
+    namespace: str,
+    *,
+    module_hint: str,
+) -> ToolProfileIdentity:
+    tool_text = namespace.strip()
+    context: str | None = None
+    paren = re.search(r"\(([^)]+)\)\s*$", tool_text)
+    if paren:
+        context = _normalize_key(paren.group(1))
+        tool_text = tool_text[: paren.start()].strip()
+    if ":" in tool_text:
+        tool_text, context_text = tool_text.split(":", 1)
+        context = _normalize_key(context_text)
+    tool = _normalize_key(tool_text)
+    if tool == "bbmap" and context == "bbsplit":
+        tool = "bbtools"
+    return ToolProfileIdentity(
+        tool=tool,
+        context=context,
+        label=namespace,
+        module=_normalize_key(module_hint),
+    )
+
+
+def _identity_from_metric_prefix(
+    module_hint: str,
+    column: str,
+) -> ToolProfileIdentity:
+    source = module_hint.removeprefix("multiqc_")
+    if (module_hint == "general_stats" or source == "general_stats") and "-" in column:
+        source = column.split("-", 1)[0]
+    prefix = _normalize_key(source)
+    parts = [part for part in prefix.split("_") if part]
+    if not parts:
+        return ToolProfileIdentity(tool="unknown", module=_normalize_key(module_hint))
+
+    tool = parts[0]
+    context: str | None = None
+    if tool == "fastqc":
+        context = _fastqc_context(parts[1:])
+    elif tool == "bbtools" and len(parts) > 1:
+        context = parts[1]
+    elif tool == "bbsplit" or (
+        tool == "bbmap" and len(parts) > 1 and parts[1] == "bbsplit"
+    ):
+        tool = "bbtools"
+        context = "bbsplit"
+    elif tool == "picard" and len(parts) > 1:
+        context = _picard_context(parts[1:])
+
+    return ToolProfileIdentity(
+        tool=tool,
+        context=context,
+        label=source,
+        module=_normalize_key(source),
+    )
+
+
+def _fastqc_context(parts: list[str]) -> str | None:
+    known_contexts = {"raw", "trimmed", "filtered"}
+    if len(parts) >= 2 and parts[0] == "fastqc" and parts[1] in known_contexts:
+        return parts[1]
+    if parts and parts[0] in known_contexts:
+        return parts[0]
+    return None
+
+
+def _picard_context(parts: list[str]) -> str | None:
+    trimmed = list(parts)
+    if trimmed and trimmed[-1] == "metrics":
+        trimmed.pop()
+    return "_".join(trimmed) if trimmed else None
+
+
+def _metric_display_name(
+    module_hint: str,
+    column: str,
+    header: dict[str, Any] | None,
+) -> str:
+    title = _clean_text(header.get("title")) if isinstance(header, dict) else None
+    if title:
+        return title
+    _, _, _, display_name = _metric_parts(module_hint, column)
+    return display_name
+
+
+def _metric_unit(header: dict[str, Any] | None) -> str | None:
+    suffix = _clean_text(header.get("suffix")) if isinstance(header, dict) else None
+    if suffix is None:
+        return None
+    if suffix == "M":
+        return suffix
+    return suffix.strip()
 
 
 def _read_tsv(path: Path) -> list[dict[str, Any]]:

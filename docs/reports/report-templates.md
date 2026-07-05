@@ -52,11 +52,11 @@ insights:
     query:
       source:
         kind: data_profile
-        data_profile_id: multiqc:qc_metrics
+        data_profile_id: salmon:metrics
       fields: [general_stats.salmon_percent_mapped]
       entity: run_sample
     series:
-      - profile_id: multiqc:qc_metrics
+      - profile_id: salmon:metrics
         field_id: general_stats.salmon_percent_mapped
         name: Percent mapped
         aggregation: avg
@@ -109,7 +109,7 @@ visualization: histogram
 query:
   source:
     kind: data_profile
-    data_profile_id: multiqc:qc_metrics
+    data_profile_id: picard:insert_size:metrics
   fields: [multiqc_picard.insert_size]
   y: multiqc_picard.insert_size
   bins: 30
