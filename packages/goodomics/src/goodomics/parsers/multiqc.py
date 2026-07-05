@@ -10,33 +10,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from goodomics.profiles.multiqc import MULTIQC_PAYLOADS
-from goodomics.profiles.registry import built_in_data_profile
-from goodomics.profiles.tool import tool_metrics_profile, tool_payload_profile
+from goodomics.contracts.multiqc import MULTIQC_PAYLOADS
+from goodomics.contracts.registry import (
+    built_in_data_contract,
+    built_in_data_contract_field,
+)
+from goodomics.contracts.tool import tool_metrics_contract, tool_payload_contract
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    DataProfile,
-    DataProfileField,
+    DataContract,
+    DataContractField,
     UnresolvedAnalyticalRecord,
 )
 
-MULTIQC_PAYLOAD_PROFILE = MULTIQC_PAYLOADS
+MULTIQC_PAYLOAD_CONTRACT = MULTIQC_PAYLOADS
 
 
 @dataclass(frozen=True)
-class ToolProfileIdentity:
+class ToolContractIdentity:
     tool: str
     context: str | None = None
     label: str | None = None
     module: str | None = None
 
     @property
-    def metrics_profile_id(self) -> str:
-        return tool_metrics_profile(self.tool, self.context).data_profile_id
+    def metrics_contract_id(self) -> str:
+        return tool_metrics_contract(self.tool, self.context).data_contract_id
 
     @property
-    def payload_profile_id(self) -> str:
-        return tool_payload_profile(self.tool, self.context).data_profile_id
+    def payload_contract_id(self) -> str:
+        return tool_payload_contract(self.tool, self.context).data_contract_id
 
 
 @dataclass(frozen=True)
@@ -54,8 +57,8 @@ class MultiQCParseResult:
 
     sample_metric_numeric: list[Any] = field(default_factory=list)
     sample_metric_string: list[Any] = field(default_factory=list)
-    data_profiles: dict[str, DataProfile] = field(default_factory=dict)
-    fields: list[DataProfileField] = field(default_factory=list)
+    data_contracts: dict[str, DataContract] = field(default_factory=dict)
+    fields: list[DataContractField] = field(default_factory=list)
     payloads: list[Any] = field(default_factory=list)
     tool_versions: list[Any] = field(default_factory=list)
     data_sources: list[Any] = field(default_factory=list)
@@ -90,18 +93,18 @@ class MultiQCParseResult:
     def to_batch(self, *, run_id: str) -> AnalyticsIngestBatch:
         return AnalyticsIngestBatch(
             sample_metrics=[*self.sample_metric_numeric, *self.sample_metric_string],
-            profile_payloads=self.payloads,
+            contract_payloads=self.payloads,
             tool_versions=self.tool_versions,
             data_sources=self.data_sources,
         )
 
     @property
-    def profile_fields(self) -> list[DataProfileField]:
+    def contract_fields(self) -> list[DataContractField]:
         return _dedupe_fields(self.fields)
 
     @property
-    def profiles(self) -> list[DataProfile]:
-        return [self.data_profiles[key] for key in sorted(self.data_profiles)]
+    def contracts(self) -> list[DataContract]:
+        return [self.data_contracts[key] for key in sorted(self.data_contracts)]
 
 
 def parse_multiqc_bundle(path: Path, *, run_id: str) -> MultiQCParseResult:
@@ -226,7 +229,7 @@ def _parse_metric_table(
 ) -> None:
     rows = _read_tsv(path)
     source_hash = sha256_file(path)
-    fields: dict[tuple[str, str], DataProfileField] = {}
+    fields: dict[tuple[str, str], DataContractField] = {}
     field_values: dict[tuple[str, str], list[Any]] = {}
     for row in rows:
         sample_id = _clean_text(row.get("Sample"))
@@ -239,14 +242,14 @@ def _parse_metric_table(
             metric_id = _metric_id(module_hint, column)
             header = _general_stats_header(metadata, column)
             identity = _metric_identity(module_hint, column, header)
-            data_profile_id = _metrics_profile_id(result, identity)
+            data_contract_id = _metrics_contract_id(result, identity)
             display_name = _metric_display_name(module_hint, column, header)
-            field_key = (data_profile_id, metric_id)
+            field_key = (data_contract_id, metric_id)
             value_num, value_text = _coerce_metric_value(value)
             if value_num is not None:
                 result.sample_metric_numeric.append(
                     UnresolvedAnalyticalRecord(
-                        data_profile_id=data_profile_id,
+                        data_contract_id=data_contract_id,
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
@@ -259,7 +262,7 @@ def _parse_metric_table(
             else:
                 result.sample_metric_string.append(
                     UnresolvedAnalyticalRecord(
-                        data_profile_id=data_profile_id,
+                        data_contract_id=data_contract_id,
                         run_id=run_id,
                         run_sample_id=_run_sample_id(run_id, sample_id),
                         sample_id=sample_id,
@@ -274,51 +277,34 @@ def _parse_metric_table(
             )
             if field_key not in fields:
                 value_type = "numeric" if value_num is not None else "string"
-                fields[field_key] = DataProfileField(
-                    data_profile_id=data_profile_id,
+                fields[field_key] = _metric_field(
+                    data_contract_id=data_contract_id,
                     field_id=metric_id,
-                    field_role="metric",
-                    entity_scope="run_sample",
                     display_name=display_name,
                     value_type=value_type,
                     unit=_metric_unit(header),
-                    query_ref_json={
-                        "table": "sample_metrics",
-                        "field_column": "field_id",
-                        "field_value": metric_id,
-                        "value_column": (
-                            "value_numeric"
-                            if value_type == "numeric"
-                            else "value_string"
-                        ),
-                    },
-                    metadata_json={
-                        "producer_tool": identity.tool,
-                        "producer_module": identity.module,
-                        "tool_context": identity.context,
-                        "multiqc_module": module_hint,
-                        "multiqc_namespace": identity.label,
-                    },
+                    identity=identity,
+                    module_hint=module_hint,
                 )
-    for field_key, profile_field in fields.items():
+    for field_key, contract_field in fields.items():
         result.fields.append(
-            profile_field.model_copy(
+            contract_field.model_copy(
                 update={
                     "summary_json": _field_summary(
-                        profile_field.value_type,
+                        contract_field.value_type,
                         field_values.get(field_key, []),
                     )
                 }
             )
         )
     if rows:
-        payload_profile_id = _summary_table_payload_profile_id(
+        payload_contract_id = _summary_table_payload_contract_id(
             result, metadata, module_hint
         )
         result.payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=f"{run_id}:{path.stem}",
-                data_profile_id=payload_profile_id,
+                data_contract_id=payload_contract_id,
                 run_id=run_id,
                 payload_name=path.stem,
                 payload_kind="multiqc_summary_table",
@@ -398,12 +384,12 @@ def _parse_payloads(
             if (value := _clean_text(row.get("Sample"))) is not None
         }
         identity = _payload_identity(path.stem, metadata)
-        data_profile_id = _payload_profile_id(result, identity)
+        data_contract_id = _payload_contract_id(result, identity)
         sample_id = next(iter(samples)) if len(samples) == 1 else None
         result.payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=f"{run_id}:{path.stem}:{sample_id or 'all'}",
-                data_profile_id=data_profile_id,
+                data_contract_id=data_contract_id,
                 run_id=run_id,
                 run_sample_id=_run_sample_id(run_id, sample_id),
                 payload_name=path.stem,
@@ -462,7 +448,7 @@ def _metric_identity(
     module_hint: str,
     column: str,
     header: dict[str, Any] | None,
-) -> ToolProfileIdentity:
+) -> ToolContractIdentity:
     namespace = (
         _clean_text(header.get("namespace")) if isinstance(header, dict) else None
     )
@@ -474,7 +460,7 @@ def _metric_identity(
 def _payload_identity(
     payload_name: str,
     metadata: dict[str, Any],
-) -> ToolProfileIdentity:
+) -> ToolContractIdentity:
     identity = _identity_from_metric_prefix(payload_name, "")
     if identity.tool != "unknown":
         return identity
@@ -488,57 +474,111 @@ def _payload_identity(
     return identity
 
 
-def _summary_table_payload_profile_id(
+def _summary_table_payload_contract_id(
     result: MultiQCParseResult,
     metadata: dict[str, Any],
     module_hint: str,
 ) -> str:
     if module_hint == "general_stats":
-        return _multiqc_payload_profile_id(result)
+        return _multiqc_payload_contract_id(result)
     raw_data = metadata.get("report_saved_raw_data")
     module_data = raw_data.get(module_hint) if isinstance(raw_data, dict) else None
     if isinstance(module_data, dict):
-        return _payload_profile_id(
+        return _payload_contract_id(
             result, _identity_from_metric_prefix(module_hint, "")
         )
-    return _payload_profile_id(result, _identity_from_metric_prefix(module_hint, ""))
+    return _payload_contract_id(result, _identity_from_metric_prefix(module_hint, ""))
 
 
-def _metrics_profile_id(
+def _metrics_contract_id(
     result: MultiQCParseResult,
-    identity: ToolProfileIdentity,
+    identity: ToolContractIdentity,
 ) -> str:
-    data_profile = tool_metrics_profile(identity.tool, identity.context)
-    _register_profile(result, data_profile)
-    return data_profile.data_profile_id
+    fallback = tool_metrics_contract(identity.tool, identity.context)
+    data_contract = _known_contract_or_fallback(fallback)
+    _register_contract(result, data_contract)
+    return data_contract.data_contract_id
 
 
-def _payload_profile_id(
+def _payload_contract_id(
     result: MultiQCParseResult,
-    identity: ToolProfileIdentity,
+    identity: ToolContractIdentity,
 ) -> str:
-    data_profile = tool_payload_profile(identity.tool, identity.context)
-    _register_profile(result, data_profile)
-    return data_profile.data_profile_id
+    fallback = tool_payload_contract(identity.tool, identity.context)
+    data_contract = _known_contract_or_fallback(fallback)
+    _register_contract(result, data_contract)
+    return data_contract.data_contract_id
 
 
-def _multiqc_payload_profile_id(result: MultiQCParseResult) -> str:
-    _register_profile(result, built_in_data_profile(MULTIQC_PAYLOAD_PROFILE))
-    return MULTIQC_PAYLOAD_PROFILE
+def _multiqc_payload_contract_id(result: MultiQCParseResult) -> str:
+    _register_contract(result, built_in_data_contract(MULTIQC_PAYLOAD_CONTRACT))
+    return MULTIQC_PAYLOAD_CONTRACT
 
 
-def _register_profile(
+def _known_contract_or_fallback(fallback: DataContract) -> DataContract:
+    try:
+        return built_in_data_contract(fallback.data_contract_id)
+    except KeyError:
+        return fallback
+
+
+def _metric_field(
+    *,
+    data_contract_id: str,
+    field_id: str,
+    display_name: str,
+    value_type: str,
+    unit: str | None,
+    identity: ToolContractIdentity,
+    module_hint: str,
+) -> DataContractField:
+    authored = built_in_data_contract_field(data_contract_id, field_id)
+    metadata = {
+        "producer_tool": identity.tool,
+        "producer_module": identity.module,
+        "tool_context": identity.context,
+        "multiqc_module": module_hint,
+        "multiqc_namespace": identity.label,
+    }
+    if authored is not None:
+        return authored.model_copy(
+            update={
+                "summary_json": {},
+                "metadata_json": dict(authored.metadata_json) | metadata,
+            }
+        )
+    return DataContractField(
+        data_contract_id=data_contract_id,
+        field_id=field_id,
+        field_role="metric",
+        entity_scope="run_sample",
+        display_name=display_name,
+        value_type="numeric" if value_type == "numeric" else "string",
+        unit=unit,
+        query_ref_json={
+            "table": "sample_metrics",
+            "field_column": "field_id",
+            "field_value": field_id,
+            "value_column": "value_numeric"
+            if value_type == "numeric"
+            else "value_string",
+        },
+        metadata_json=metadata | {"contract_field_source": "inferred"},
+    )
+
+
+def _register_contract(
     result: MultiQCParseResult,
-    data_profile: DataProfile,
+    data_contract: DataContract,
 ) -> None:
-    result.data_profiles.setdefault(data_profile.data_profile_id, data_profile)
+    result.data_contracts.setdefault(data_contract.data_contract_id, data_contract)
 
 
 def _identity_from_namespace(
     namespace: str,
     *,
     module_hint: str,
-) -> ToolProfileIdentity:
+) -> ToolContractIdentity:
     tool_text = namespace.strip()
     context: str | None = None
     paren = re.search(r"\(([^)]+)\)\s*$", tool_text)
@@ -551,7 +591,7 @@ def _identity_from_namespace(
     tool = _normalize_key(tool_text)
     if tool == "bbmap" and context == "bbsplit":
         tool = "bbtools"
-    return ToolProfileIdentity(
+    return ToolContractIdentity(
         tool=tool,
         context=context,
         label=namespace,
@@ -562,14 +602,14 @@ def _identity_from_namespace(
 def _identity_from_metric_prefix(
     module_hint: str,
     column: str,
-) -> ToolProfileIdentity:
+) -> ToolContractIdentity:
     source = module_hint.removeprefix("multiqc_")
     if (module_hint == "general_stats" or source == "general_stats") and "-" in column:
         source = column.split("-", 1)[0]
     prefix = _normalize_key(source)
     parts = [part for part in prefix.split("_") if part]
     if not parts:
-        return ToolProfileIdentity(tool="unknown", module=_normalize_key(module_hint))
+        return ToolContractIdentity(tool="unknown", module=_normalize_key(module_hint))
 
     tool = parts[0]
     context: str | None = None
@@ -585,7 +625,7 @@ def _identity_from_metric_prefix(
     elif tool == "picard" and len(parts) > 1:
         context = _picard_context(parts[1:])
 
-    return ToolProfileIdentity(
+    return ToolContractIdentity(
         tool=tool,
         context=context,
         label=source,
@@ -778,8 +818,10 @@ def _quantile(values: list[float], q: float) -> float:
     return values[lower] * (1 - weight) + values[upper] * weight
 
 
-def _dedupe_fields(fields: list[DataProfileField]) -> list[DataProfileField]:
-    by_id: dict[tuple[str, str], DataProfileField] = {}
-    for profile_field in fields:
-        by_id[(profile_field.field_id, profile_field.value_type)] = profile_field
+def _dedupe_fields(fields: list[DataContractField]) -> list[DataContractField]:
+    by_id: dict[tuple[str, str], DataContractField] = {}
+    for contract_field in fields:
+        by_id[(contract_field.data_contract_id, contract_field.field_id)] = (
+            contract_field
+        )
     return list(by_id.values())

@@ -39,21 +39,21 @@ def _sql_literal(value: Path | str) -> str:
 
 def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int]]:
     sample_ids = sorted(parsed.sample_ids)
-    data_profile_ids = sorted(
+    data_contract_ids = sorted(
         {
-            record.data_profile_id
+            record.data_contract_id
             for record in [*parsed.metrics, *parsed.payloads]
-            if isinstance(record.data_profile_id, str)
+            if isinstance(record.data_contract_id, str)
         }
     )
     return {
-        "data_profile_id": {
-            data_profile_id: index
-            for index, data_profile_id in enumerate(data_profile_ids, start=1)
+        "data_contract_id": {
+            data_contract_id: index
+            for index, data_contract_id in enumerate(data_contract_ids, start=1)
         },
         "field_id": {
             field.field_id: index
-            for index, field in enumerate(parsed.profile_fields, start=1)
+            for index, field in enumerate(parsed.contract_fields, start=1)
         },
         "run_id": {run_id: 1},
         "run_sample_id": {
@@ -108,19 +108,19 @@ def test_parse_multiqc_bundle_extracts_metrics_sources_versions_and_payloads(
     assert "multiqc_salmon.percent_mapped" in metric_ids
     metrics_by_field = {metric.field_id: metric for metric in parsed.metrics}
     assert (
-        metrics_by_field["general_stats.salmon_percent_mapped"].data_profile_id
+        metrics_by_field["general_stats.salmon_percent_mapped"].data_contract_id
         == "salmon:metrics"
     )
     assert (
-        metrics_by_field["general_stats.fastqc_raw_percent_gc"].data_profile_id
+        metrics_by_field["general_stats.fastqc_raw_percent_gc"].data_contract_id
         == "fastqc:raw:metrics"
     )
     assert (
-        metrics_by_field["multiqc_salmon.percent_mapped"].data_profile_id
+        metrics_by_field["multiqc_salmon.percent_mapped"].data_contract_id
         == "salmon:metrics"
     )
     assert {"salmon:metrics", "fastqc:raw:metrics"} <= {
-        profile.data_profile_id for profile in parsed.profiles
+        contract.data_contract_id for contract in parsed.contracts
     }
     assert parsed.data_sources[0].source_path == "/work/S1/libParams/flenDist.txt"
     assert {version.tool for version in parsed.tool_versions} == {"fastqc", "salmon"}
@@ -128,7 +128,7 @@ def test_parse_multiqc_bundle_extracts_metrics_sources_versions_and_payloads(
         payload for payload in parsed.payloads if payload.payload_name == "salmon_plot"
     ]
     assert len(salmon_payloads) == 1
-    assert salmon_payloads[0].data_profile_id == "salmon:payloads"
+    assert salmon_payloads[0].data_contract_id == "salmon:payloads"
     assert salmon_payloads[0].sample_id == "S1"
     assert salmon_payloads[0].columns == ["Sample", "0", "1", "2"]
 
@@ -230,7 +230,7 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
         "entity_scope",
         "entity_id",
         "field_id",
-        "data_profile_id",
+        "data_contract_id",
         "source_file_id",
         "value_type",
         "value_numeric",
@@ -248,7 +248,7 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
                         'sample' AS entity_scope,
                         'sample-1' AS entity_id,
                         'sample:status' AS field_id,
-                        7::BIGINT AS data_profile_id,
+                        7::BIGINT AS data_contract_id,
                         NULL AS source_file_id,
                         'string' AS value_type,
                         NULL::DOUBLE AS value_numeric,
@@ -262,7 +262,7 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
         delete_public_parquet(
             connection,
             "entity_attributes",
-            ("entity_scope", "entity_id", "field_id", "data_profile_id"),
+            ("entity_scope", "entity_id", "field_id", "data_contract_id"),
             second_path,
         )
         insert_public_parquet(

@@ -1,0 +1,104 @@
+source:
+  id: salmon
+  kind: tool
+  name: Salmon
+contracts:
+  - data_contract_id: salmon:metrics
+    name: Salmon metrics
+    data_type: generic_metrics
+    producer_tool: salmon
+    feature_type: metric
+    value_type: mixed
+    entity_grain: run_sample
+    primary_table: sample_metrics
+    physical_tables: [sample_metrics]
+    query_modes: [sample, metric, cohort]
+    mcp_description: Sample-level metrics from Salmon outputs.
+    metadata_json:
+      contract_scope: semantic_contract
+      contract_family: tool_output
+      tool: salmon
+      tool_context:
+    fields:
+      - field_id: general_stats.salmon_percent_mapped
+        entity_scope: run_sample
+        display_name: Percent mapped
+        value_type: numeric
+        unit: percent
+        query_ref_json:
+          table: sample_metrics
+          field_column: field_id
+          field_value: general_stats.salmon_percent_mapped
+          value_column: value_numeric
+        metadata_json:
+          producer_tool: salmon
+          producer_module: general_stats
+          multiqc_module: general_stats
+      - field_id: multiqc_salmon.percent_mapped
+        entity_scope: run_sample
+        display_name: Percent mapped
+        value_type: numeric
+        unit: percent
+        query_ref_json:
+          table: sample_metrics
+          field_column: field_id
+          field_value: multiqc_salmon.percent_mapped
+          value_column: value_numeric
+        metadata_json:
+          producer_tool: salmon
+          producer_module: multiqc_salmon
+          multiqc_module: multiqc_salmon
+      - field_id: multiqc_salmon.num_processed
+        entity_scope: run_sample
+        display_name: Number processed
+        value_type: numeric
+        query_ref_json:
+          table: sample_metrics
+          field_column: field_id
+          field_value: multiqc_salmon.num_processed
+          value_column: value_numeric
+        metadata_json:
+          producer_tool: salmon
+          producer_module: multiqc_salmon
+          multiqc_module: multiqc_salmon
+      - field_id: multiqc_salmon.num_mapped
+        entity_scope: run_sample
+        display_name: Number mapped
+        value_type: numeric
+        query_ref_json:
+          table: sample_metrics
+          field_column: field_id
+          field_value: multiqc_salmon.num_mapped
+          value_column: value_numeric
+        metadata_json:
+          producer_tool: salmon
+          producer_module: multiqc_salmon
+          multiqc_module: multiqc_salmon
+      - field_id: multiqc_salmon.salmon_version
+        entity_scope: run_sample
+        display_name: Salmon version
+        value_type: string
+        query_ref_json:
+          table: sample_metrics
+          field_column: field_id
+          field_value: multiqc_salmon.salmon_version
+          value_column: value_string
+        metadata_json:
+          producer_tool: salmon
+          producer_module: multiqc_salmon
+          multiqc_module: multiqc_salmon
+  - data_contract_id: salmon:payloads
+    name: Salmon payload tables
+    data_type: contract_payload
+    producer_tool: salmon
+    value_type: table
+    entity_grain: run
+    primary_table: contract_payloads
+    physical_tables: [contract_payloads]
+    query_modes: [payload]
+    mcp_description: Source tables and plot payloads from Salmon outputs.
+    metadata_json:
+      contract_scope: semantic_contract
+      contract_family: tool_output
+      tool: salmon
+      tool_context:

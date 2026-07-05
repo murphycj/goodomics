@@ -3,23 +3,32 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
-from goodomics.schemas.models import DataProfile
+from goodomics.schemas.models import DataContract
 
-# Built-in and custom namespaces share the same profile ID space so query tools
+# Built-in and custom namespaces share the same contract ID space so query tools
 # can reason about both without special casing user-provided data.
-PROFILE_NAMESPACE_PREFIXES = ("cbioportal:", "multiqc:", "goodomics:", "user:")
+CONTRACT_NAMESPACE_PREFIXES = (
+    "bbtools:",
+    "cbioportal:",
+    "cutadapt:",
+    "fastqc:",
+    "goodomics:",
+    "multiqc:",
+    "salmon:",
+    "user:",
+)
 
 
-class DataProfileProvider(Protocol):
-    """Provider for source-owned reusable data profile contracts."""
+class DataContractProvider(Protocol):
+    """Provider for source-owned reusable data contracts."""
 
-    def profiles(self) -> list[DataProfile]:
-        """Return the profiles this provider can emit."""
+    def contracts(self) -> list[DataContract]:
+        """Return the contracts this provider can emit."""
         ...
 
 
-def profile(
-    data_profile_id: str,
+def contract(
+    data_contract_id: str,
     *,
     name: str,
     data_type: str,
@@ -34,16 +43,16 @@ def profile(
     primary_table: str | None = None,
     physical_tables: Iterable[str] | None = None,
     description: str | None = None,
-) -> DataProfile:
-    """Create a reusable semantic data profile contract."""
-    # Profile records are contracts, not source/run instances; provenance stays
+) -> DataContract:
+    """Create a reusable semantic data contract."""
+    # Contract records are contracts, not source/run instances; provenance stays
     # on imports, runs, files, and analytical records.
     resolved_primary_table = primary_table or _default_primary_table(data_type)
     resolved_physical_tables = list(physical_tables or [])
     if resolved_primary_table and not resolved_physical_tables:
         resolved_physical_tables = [resolved_primary_table]
-    return DataProfile(
-        data_profile_id=data_profile_id,
+    return DataContract(
+        data_contract_id=data_contract_id,
         name=name,
         data_type=data_type,
         assay=assay,
@@ -57,7 +66,7 @@ def profile(
         physical_tables_json={"tables": resolved_physical_tables},
         query_modes_json={"modes": list(query_modes)},
         mcp_description=description,
-        metadata_json={"profile_scope": "semantic_contract"},
+        metadata_json={"contract_scope": "semantic_contract"},
     )
 
 
@@ -70,5 +79,5 @@ def _default_primary_table(data_type: str) -> str | None:
         "copy_number_segments": "copy_number_segments",
         "small_variants": "sample_variant_calls",
         "structural_variants": "sample_structural_variant_calls",
-        "profile_payload": "profile_payloads",
+        "contract_payload": "contract_payloads",
     }.get(data_type)

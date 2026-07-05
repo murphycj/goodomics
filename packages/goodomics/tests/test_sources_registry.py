@@ -8,16 +8,20 @@ from typing import Any
 
 import pytest
 from fixtures import write_multiqc_fixture
+from goodomics.contracts import (
+    all_built_in_data_contracts,
+    contract,
+    tool_metrics_contract,
+)
+from goodomics.contracts.cbioportal import contract_for_meta
 from goodomics.custom_parser import ParserOutput, parser
 from goodomics.ingest.multiqc import ingest_multiqc
-from goodomics.profiles import all_built_in_data_profiles, profile, tool_metrics_profile
-from goodomics.profiles.cbioportal import profile_for_meta
 from goodomics.sources import SourceSpec, get_source, list_sources, register_source
 from goodomics.sources import registry as source_registry
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    DataProfileFieldRecord,
-    DataProfileRecord,
+    DataContractFieldRecord,
+    DataContractRecord,
     RunRecord,
     SQLModelGoodomicsStore,
 )
@@ -43,14 +47,14 @@ def _run_pk(database_url: str, run_id: str) -> int:
     return asyncio.run(load())
 
 
-def _data_profile_pk(database_url: str, data_profile_id: str) -> int:
+def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
         async with AsyncSession(catalog_store._get_engine()) as session:
             row = (
                 await session.exec(
-                    select(DataProfileRecord).where(
-                        DataProfileRecord.data_profile_id == data_profile_id
+                    select(DataContractRecord).where(
+                        DataContractRecord.data_contract_id == data_contract_id
                     )
                 )
             ).one()
@@ -113,27 +117,27 @@ def test_fake_entry_point_source_is_discovered(monkeypatch: pytest.MonkeyPatch) 
     assert get_source("external-demo").label == "External demo"
 
 
-def test_profile_providers_cover_built_in_contracts() -> None:
-    built_ins = {item.data_profile_id for item in all_built_in_data_profiles()}
+def test_contract_providers_cover_built_in_contracts() -> None:
+    built_ins = {item.data_contract_id for item in all_built_in_data_contracts()}
 
     assert "multiqc:payloads" in built_ins
     assert "goodomics:sdk_metrics" in built_ins
-    assert tool_metrics_profile("salmon").data_profile_id == "salmon:metrics"
+    assert tool_metrics_contract("salmon").data_contract_id == "salmon:metrics"
     assert (
-        profile_for_meta(
+        contract_for_meta(
             {
                 "genetic_alteration_type": "MUTATION_EXTENDED",
                 "datatype": "MAF",
             },
             source_meta_file="meta_mutations.txt",
-        ).data_profile_id
+        ).data_contract_id
         == "cbioportal:mutations:maf"
     )
-    custom = profile_for_meta(
-        {"stable_id": "weird_custom_profile", "datatype": "WEIRD"},
+    custom = contract_for_meta(
+        {"stable_id": "weird_custom_contract", "datatype": "WEIRD"},
         source_meta_file="meta_custom.txt",
     )
-    assert custom.data_profile_id == "cbioportal:custom:unknown:weird_custom_profile"
+    assert custom.data_contract_id == "cbioportal:custom:unknown:weird_custom_contract"
 
 
 def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> None:
@@ -165,7 +169,7 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
 def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> None:
     # This mirrors the notebook use case: define one function and ingest from
     # the current Python process, with no package metadata.
-    rnaseq_tpm = profile(
+    rnaseq_tpm = contract(
         "user:rnaseq:tpm",
         name="RNA-seq TPM values",
         data_type="feature_matrix",
@@ -175,7 +179,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
         query_modes=["sample", "feature", "cohort"],
     )
 
-    @parser(key="notebook-parser", label="Notebook parser", profiles=[rnaseq_tpm])
+    @parser(key="notebook-parser", label="Notebook parser", contracts=[rnaseq_tpm])
     def parse_table(path: object, out: ParserOutput) -> None:
         assert isinstance(path, Path)
         out.metric("rows", 2, sample_id="S1")
@@ -183,7 +187,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
             sample_id="S1",
             feature_id="TP53",
             value=42,
-            profile=rnaseq_tpm,
+            contract=rnaseq_tpm,
         )
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
@@ -200,36 +204,36 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
 
     assert result.run_id == "custom-run"
     assert result.samples_ingested == 1
-    assert result.profiles_ingested == 2
+    assert result.contracts_ingested == 2
     analytics = DuckDBAnalyticsStore(analytics_path)
     assert analytics.list_metric_values(_run_pk(database_url, "custom-run"))
     assert analytics.row_counts()["feature_value_numeric"] == 1
 
 
-def test_custom_parser_reuses_tool_profile_id(tmp_path: Path) -> None:
-    @parser(key="tool-profile-parser", profiles=["salmon:metrics"])
+def test_custom_parser_reuses_tool_contract_id(tmp_path: Path) -> None:
+    @parser(key="tool-contract-parser", contracts=["salmon:metrics"])
     def parse_metrics(path: object, out: ParserOutput) -> None:
-        out.metric("pct_mapped", 99.0, sample_id="S1", profile="salmon:metrics")
+        out.metric("pct_mapped", 99.0, sample_id="S1", contract="salmon:metrics")
 
     analytics_path = tmp_path / "analytics.duckdb"
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
     result = parse_metrics.ingest(
         tmp_path / "metrics.tsv",
-        run_id="builtin-profile-run",
+        run_id="builtin-contract-run",
         database_url=database_url,
         analytics_path=analytics_path,
     )
 
-    assert result.profiles_ingested == 1
+    assert result.contracts_ingested == 1
     values = DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_url, "builtin-profile-run")
+        _run_pk(database_url, "builtin-contract-run")
     )
-    metrics_profile_id = _data_profile_pk(database_url, "salmon:metrics")
-    assert values[0].data_profile_id == metrics_profile_id
+    metrics_contract_id = _data_contract_pk(database_url, "salmon:metrics")
+    assert values[0].data_contract_id == metrics_contract_id
 
 
-def test_tool_profile_reuse_preserves_existing_fields(tmp_path: Path) -> None:
-    salmon_metrics = tool_metrics_profile("salmon")
+def test_tool_contract_reuse_preserves_existing_fields(tmp_path: Path) -> None:
+    salmon_metrics = tool_metrics_contract("salmon")
     analytics_path = tmp_path / "analytics.duckdb"
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
     ingest_multiqc(
@@ -240,10 +244,10 @@ def test_tool_profile_reuse_preserves_existing_fields(tmp_path: Path) -> None:
         analytics_path=analytics_path,
     )
 
-    @parser(key="salmon-direct-parser", profiles=[salmon_metrics])
+    @parser(key="salmon-direct-parser", contracts=[salmon_metrics])
     def parse_salmon(path: object, out: ParserOutput) -> None:
         out.metric(
-            "direct_percent_mapped", 98.0, sample_id="S1", profile=salmon_metrics
+            "direct_percent_mapped", 98.0, sample_id="S1", contract=salmon_metrics
         )
 
     parse_salmon.ingest(
@@ -257,18 +261,18 @@ def test_tool_profile_reuse_preserves_existing_fields(tmp_path: Path) -> None:
     async def load_salmon_fields() -> set[str]:
         catalog_store = SQLModelGoodomicsStore(database_url)
         async with AsyncSession(catalog_store._get_engine()) as session:
-            profile = (
+            contract = (
                 await session.exec(
-                    select(DataProfileRecord).where(
-                        DataProfileRecord.data_profile_id == "salmon:metrics"
+                    select(DataContractRecord).where(
+                        DataContractRecord.data_contract_id == "salmon:metrics"
                     )
                 )
             ).one()
-            assert profile.id is not None
+            assert contract.id is not None
             rows = (
                 await session.exec(
-                    select(DataProfileFieldRecord).where(
-                        DataProfileFieldRecord.data_profile_id == profile.id
+                    select(DataContractFieldRecord).where(
+                        DataContractFieldRecord.data_contract_id == contract.id
                     )
                 )
             ).all()

@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import re
 
-from goodomics.profiles.base import PROFILE_NAMESPACE_PREFIXES, profile
-from goodomics.schemas.models import DataProfile
+from goodomics.contracts.base import CONTRACT_NAMESPACE_PREFIXES, contract
+from goodomics.schemas.models import DataContract
 
 
-def tool_profile_id(
+def tool_contract_id(
     tool: str,
     context: str | None = None,
     *,
     kind: str = "metrics",
 ) -> str:
-    """Return a stable bare profile ID for one tool output contract."""
+    """Return a stable bare contract ID for one tool output contract."""
 
     parts = [_normalize_part(tool)]
     if context:
@@ -21,20 +21,20 @@ def tool_profile_id(
     return ":".join(parts)
 
 
-def tool_metrics_profile(
+def tool_metrics_contract(
     tool: str,
     context: str | None = None,
     *,
     name: str | None = None,
-) -> DataProfile:
-    """Build a reusable metric profile for a bioinformatics tool output."""
+) -> DataContract:
+    """Build a reusable metric contract for a bioinformatics tool output."""
 
     normalized_tool = _normalize_part(tool)
     normalized_context = _normalize_part(context) if context else None
     display_base = _display_name(normalized_tool, normalized_context)
     display_name = name or f"{display_base} metrics"
-    data_profile = profile(
-        tool_profile_id(normalized_tool, normalized_context, kind="metrics"),
+    data_contract = contract(
+        tool_contract_id(normalized_tool, normalized_context, kind="metrics"),
         name=display_name,
         data_type="generic_metrics",
         producer_tool=normalized_tool,
@@ -46,42 +46,42 @@ def tool_metrics_profile(
         query_modes=["sample", "metric", "cohort"],
         description=f"Sample-level metrics from {display_base} outputs.",
     )
-    return _with_tool_metadata(data_profile, normalized_tool, normalized_context)
+    return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
 
 
-def tool_payload_profile(
+def tool_payload_contract(
     tool: str,
     context: str | None = None,
     *,
     name: str | None = None,
-) -> DataProfile:
-    """Build a reusable payload-table profile for a bioinformatics tool output."""
+) -> DataContract:
+    """Build a reusable payload-table contract for a bioinformatics tool output."""
 
     normalized_tool = _normalize_part(tool)
     normalized_context = _normalize_part(context) if context else None
     display_base = _display_name(normalized_tool, normalized_context)
     display_name = name or f"{display_base} payload tables"
-    data_profile = profile(
-        tool_profile_id(normalized_tool, normalized_context, kind="payloads"),
+    data_contract = contract(
+        tool_contract_id(normalized_tool, normalized_context, kind="payloads"),
         name=display_name,
-        data_type="profile_payload",
+        data_type="contract_payload",
         producer_tool=normalized_tool,
         value_type="table",
         entity_grain="run",
-        primary_table="profile_payloads",
-        physical_tables=["profile_payloads"],
+        primary_table="contract_payloads",
+        physical_tables=["contract_payloads"],
         query_modes=["payload"],
         description=f"Source tables and plot payloads from {display_base} outputs.",
     )
-    return _with_tool_metadata(data_profile, normalized_tool, normalized_context)
+    return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
 
 
-def tool_profile_from_id(data_profile_id: str) -> DataProfile | None:
-    """Return a tool profile for a bare tool profile ID, if it matches one."""
+def tool_contract_from_id(data_contract_id: str) -> DataContract | None:
+    """Return a tool contract for a bare tool contract ID, if it matches one."""
 
-    if data_profile_id.startswith(PROFILE_NAMESPACE_PREFIXES):
+    if data_contract_id.startswith(CONTRACT_NAMESPACE_PREFIXES):
         return None
-    parts = data_profile_id.split(":")
+    parts = data_contract_id.split(":")
     if len(parts) < 2:
         return None
     kind = parts[-1]
@@ -89,12 +89,12 @@ def tool_profile_from_id(data_profile_id: str) -> DataProfile | None:
         return None
     tool = parts[0]
     context = ":".join(parts[1:-1]) or None
-    expected = tool_profile_id(tool, context, kind=kind)
-    if expected != data_profile_id:
+    expected = tool_contract_id(tool, context, kind=kind)
+    if expected != data_contract_id:
         return None
     if kind == "metrics":
-        return tool_metrics_profile(tool, context)
-    return tool_payload_profile(tool, context)
+        return tool_metrics_contract(tool, context)
+    return tool_payload_contract(tool, context)
 
 
 def _normalize_part(value: str | None) -> str:
@@ -122,16 +122,16 @@ def _title_word(value: str) -> str:
 
 
 def _with_tool_metadata(
-    data_profile: DataProfile,
+    data_contract: DataContract,
     tool: str,
     context: str | None,
-) -> DataProfile:
-    metadata = dict(data_profile.metadata_json)
+) -> DataContract:
+    metadata = dict(data_contract.metadata_json)
     metadata.update(
         {
-            "profile_family": "tool_output",
+            "contract_family": "tool_output",
             "tool": tool,
             "tool_context": context,
         }
     )
-    return data_profile.model_copy(update={"metadata_json": metadata})
+    return data_contract.model_copy(update={"metadata_json": metadata})

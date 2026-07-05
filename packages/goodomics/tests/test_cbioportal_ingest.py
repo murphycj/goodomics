@@ -8,9 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from fixtures import write_cbioportal_fixture
-from goodomics.ingest.cbioportal import ingest_cbioportal_study
-from goodomics.parsers.cbioportal import parse_cbioportal_study
-from goodomics.profiles.cbioportal import (
+from goodomics.contracts.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
@@ -19,21 +17,23 @@ from goodomics.profiles.cbioportal import (
     CBIOPORTAL_MUTATIONS_MAF,
     CBIOPORTAL_STRUCTURAL_VARIANTS,
 )
+from goodomics.ingest.cbioportal import ingest_cbioportal_study
+from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.schemas.models import (
+    ContractPayload,
     CopyNumberSegment,
     EntityAttribute,
     FeatureCall,
     FeatureValueNumeric,
-    ProfilePayload,
     SampleStructuralVariantCall,
     SampleVariantCall,
 )
 from goodomics.server.app import create_app
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataContractRecord,
     DataImportRecord,
-    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     RunRecord,
@@ -78,14 +78,14 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
     return asyncio.run(load())
 
 
-def _data_profile_pk(database_url: str, data_profile_id: str) -> int:
+def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
         async with AsyncSession(catalog_store._get_engine()) as session:
             row = (
                 await session.exec(
-                    select(DataProfileRecord).where(
-                        DataProfileRecord.data_profile_id == data_profile_id
+                    select(DataContractRecord).where(
+                        DataContractRecord.data_contract_id == data_contract_id
                     )
                 )
             ).one()
@@ -124,32 +124,32 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
     }
     assert {sample.sample_id for sample in parsed.samples} == {"S1", "S2"}
     assert {subject.subject_id for subject in parsed.subjects} == {"S1", "S2"}
-    assert {profile.data_type for profile in parsed.data_profiles} >= {
+    assert {contract.data_type for contract in parsed.data_contracts} >= {
         "entity_attributes",
         "feature_matrix",
         "feature_calls",
         "small_variants",
         "copy_number_segments",
         "structural_variants",
-        "profile_payload",
+        "contract_payload",
     }
-    profile_ids = {profile.data_profile_id for profile in parsed.data_profiles}
-    assert CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS in profile_ids
-    assert CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS in profile_ids
-    assert CBIOPORTAL_COPY_NUMBER_SEGMENTS in profile_ids
-    assert CBIOPORTAL_MUTATIONS_MAF in profile_ids
+    contract_ids = {contract.data_contract_id for contract in parsed.data_contracts}
+    assert CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS in contract_ids
+    assert CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS in contract_ids
+    assert CBIOPORTAL_COPY_NUMBER_SEGMENTS in contract_ids
+    assert CBIOPORTAL_MUTATIONS_MAF in contract_ids
     assert any(
         field.field_role == "attribute" and field.field_id == "sample:tmb"
-        for field in parsed.data_profile_fields
+        for field in parsed.data_contract_fields
     )
-    assert CBIOPORTAL_STRUCTURAL_VARIANTS in profile_ids
-    assert CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE in profile_ids
-    assert CBIOPORTAL_GENE_PANEL_MATRIX in profile_ids
-    assert all("run-cbio" not in profile_id for profile_id in profile_ids)
-    assert all("S1" not in profile_id for profile_id in profile_ids)
+    assert CBIOPORTAL_STRUCTURAL_VARIANTS in contract_ids
+    assert CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE in contract_ids
+    assert CBIOPORTAL_GENE_PANEL_MATRIX in contract_ids
+    assert all("run-cbio" not in contract_id for contract_id in contract_ids)
+    assert all("S1" not in contract_id for contract_id in contract_ids)
     assert parsed.files
     assert any(
-        link.data_profile_id == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
+        link.data_contract_id == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
         and link.data_import_id == "run-cbio"
         and link.run_id is None
         for link in parsed.file_links
@@ -174,7 +174,7 @@ def test_parse_cbioportal_study_creates_sample_runs(
         "demo_cbio:S1",
         "demo_cbio:S2",
     }
-    assert {profile.data_profile_id for profile in parsed.data_profiles} >= {
+    assert {contract.data_contract_id for contract in parsed.data_contracts} >= {
         CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
         CBIOPORTAL_MUTATIONS_MAF,
     }
@@ -182,7 +182,7 @@ def test_parse_cbioportal_study_creates_sample_runs(
         link.data_import_id == "demo_cbio"
         and link.run_id is None
         and link.run_sample_id is None
-        and link.data_profile_id == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
+        and link.data_contract_id == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
         for link in parsed.file_links
     )
 
@@ -266,7 +266,7 @@ def test_parse_cbioportal_tcga_sample_suffixes_share_subject_ids(
     }
 
 
-def test_parse_cbioportal_studies_reuse_semantic_profiles(tmp_path: Path) -> None:
+def test_parse_cbioportal_studies_reuse_semantic_contracts(tmp_path: Path) -> None:
     first = parse_cbioportal_study(
         write_cbioportal_fixture(tmp_path / "study-1"),
         data_import_id="run-one",
@@ -278,8 +278,8 @@ def test_parse_cbioportal_studies_reuse_semantic_profiles(tmp_path: Path) -> Non
         project_id="project-1",
     )
 
-    assert {profile.data_profile_id for profile in first.data_profiles} == {
-        profile.data_profile_id for profile in second.data_profiles
+    assert {contract.data_contract_id for contract in first.data_contracts} == {
+        contract.data_contract_id for contract in second.data_contracts
     }
 
 
@@ -297,7 +297,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         analytics_path=analytics_path,
     )
 
-    assert result.profiles_ingested > 0
+    assert result.contracts_ingested > 0
     assert result.files_registered > 0
     assert result.bulk_loads == 6
 
@@ -317,13 +317,13 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
             ).all()
             files = (await session.exec(select(FileRecord))).all()
             links = (await session.exec(select(FileLinkRecord))).all()
-            profiles = (await session.exec(select(DataProfileRecord))).all()
+            contracts = (await session.exec(select(DataContractRecord))).all()
             sample_sets = (await session.exec(select(SampleSetRecord))).all()
         return (
             len(imports),
             len(files),
             len(links),
-            len(profiles),
+            len(contracts),
             len(sample_sets),
             [row.run_id for row in runs],
             {link.data_import_id for link in links},
@@ -333,7 +333,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         imports_count,
         files_count,
         links_count,
-        profiles_count,
+        contracts_count,
         sample_sets_count,
         run_ids,
         linked_import_ids,
@@ -343,7 +343,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert linked_import_ids == {1}
     assert files_count > 0
     assert links_count >= files_count
-    assert profiles_count == result.profiles_ingested
+    assert contracts_count == result.contracts_ingested
     assert sample_sets_count == 1
 
     analytics = DuckDBAnalyticsStore(analytics_path)
@@ -354,7 +354,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert counts["copy_number_segments"] == 1
     assert counts["sample_variant_calls"] == 1
     assert counts["sample_structural_variant_calls"] == 1
-    assert counts["profile_payloads"] == 1
+    assert counts["contract_payloads"] == 1
     with analytics._connect() as connection:
         physical_columns_by_table = {
             table_name: {
@@ -370,11 +370,11 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
                 "copy_number_segments",
                 "sample_variant_calls",
                 "sample_structural_variant_calls",
-                "profile_payloads",
+                "contract_payloads",
             )
         }
     for table_columns in physical_columns_by_table.values():
-        assert table_columns["data_profile_id"] == "BIGINT"
+        assert table_columns["data_contract_id"] == "BIGINT"
         assert table_columns["source_file_id"] == "BIGINT"
     for table_name, table_columns in physical_columns_by_table.items():
         if table_name == "entity_attributes":
@@ -433,7 +433,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     )
     assert sv_calls[0].split_read_count == 4
     payloads = analytics.fetch_records(
-        "profile_payloads", ProfilePayload, run_id=_run_pk(database_url, "run-cbio")
+        "contract_payloads", ContractPayload, run_id=_run_pk(database_url, "run-cbio")
     )
     assert payloads[0].payload_kind == "gene_panel_matrix"
     numeric_attributes = analytics.fetch_records(
@@ -507,7 +507,7 @@ def test_cbioportal_run_files_include_inherited_import_files(
     assert {file["association_scope"] for file in files} == {"data_import"}
     assert {file["data_import_id"] for file in files} == {"run-cbio"}
     assert any(
-        file["data_profile_id"] == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
+        file["data_contract_id"] == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
         for file in files
     )
 
@@ -554,29 +554,29 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
         run_id=_run_pk(database_url, f"{result.data_import_id}:S1"),
     )
     assert expression_values
-    expected_profile_ids = {
-        _data_profile_pk(database_url, CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE),
-        _data_profile_pk(database_url, CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS),
+    expected_contract_ids = {
+        _data_contract_pk(database_url, CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE),
+        _data_contract_pk(database_url, CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS),
     }
     s1_sample_id = _sample_pk(database_url, "S1")
     assert {value.sample_id for value in expression_values} == {s1_sample_id}
     assert {
-        value.data_profile_id for value in expression_values
-    } == expected_profile_ids
+        value.data_contract_id for value in expression_values
+    } == expected_contract_ids
 
 
-def test_cbioportal_ccle_fixture_discovers_profiles_without_loading_large_files() -> (
+def test_cbioportal_ccle_fixture_discovers_contracts_without_loading_large_files() -> (
     None
 ):
     study = _external_cbioportal_fixture("ccle_broad_2019")
 
     parsed = parse_cbioportal_study(study, data_import_id="ccle-test")
 
-    assert len(parsed.data_profiles) >= 10
+    assert len(parsed.data_contracts) >= 10
     assert parsed.summary["files_registered"] >= 30
     assert any(
-        profile.data_profile_id == CBIOPORTAL_MUTATIONS_MAF
-        for profile in parsed.data_profiles
+        contract.data_contract_id == CBIOPORTAL_MUTATIONS_MAF
+        for contract in parsed.data_contracts
     )
     assert len(parsed.bulk_loads) >= 10
 
@@ -598,10 +598,10 @@ def test_cbioportal_brca_fixture_creates_sample_runs() -> None:
         CBIOPORTAL_COPY_NUMBER_SEGMENTS,
         CBIOPORTAL_MUTATIONS_MAF,
         CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
-    }.issubset({profile.data_profile_id for profile in parsed.data_profiles})
+    }.issubset({contract.data_contract_id for contract in parsed.data_contracts})
 
 
-def test_cbioportal_chol_fixture_uses_sample_runs_and_stable_profiles() -> None:
+def test_cbioportal_chol_fixture_uses_sample_runs_and_stable_contracts() -> None:
     study = _external_cbioportal_fixture("chol_tcga_pan_can_atlas_2018")
 
     parsed = parse_cbioportal_study(study)
@@ -614,7 +614,7 @@ def test_cbioportal_chol_fixture_uses_sample_runs_and_stable_profiles() -> None:
         for run_sample in parsed.run_samples
     }
     assert "cbioportal:copy_number:log2" in {
-        profile.data_profile_id for profile in parsed.data_profiles
+        contract.data_contract_id for contract in parsed.data_contracts
     }
 
 

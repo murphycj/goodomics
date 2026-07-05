@@ -12,15 +12,15 @@ import goodomics.server.app as server_app
 import pytest
 from fastapi.testclient import TestClient
 from fixtures import write_cbioportal_fixture, write_multiqc_fixture
-from goodomics.ingest.cbioportal import ingest_cbioportal_study
-from goodomics.ingest.multiqc import ingest_multiqc
-from goodomics.profiles.cbioportal import (
+from goodomics.contracts.cbioportal import (
     CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
     CBIOPORTAL_MUTATIONS_MAF,
 )
+from goodomics.ingest.cbioportal import ingest_cbioportal_study
+from goodomics.ingest.multiqc import ingest_multiqc
 from goodomics.projects import DEFAULT_PROJECT_ID, new_project_id
 from goodomics.server.ai import GoodomicsChatService, ProviderResponse, ProviderToolCall
 from goodomics.server.app import create_app
@@ -35,8 +35,8 @@ from goodomics.server.settings import Settings
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    DataProfileFieldRecord,
-    DataProfileRecord,
+    DataContractFieldRecord,
+    DataContractRecord,
     ProjectRecord,
     RunSampleRecord,
     SampleRecord,
@@ -106,8 +106,8 @@ def _field_pk(database_url: str, field_id: str) -> int:
         async with AsyncSession(store._get_engine()) as session:
             row = (
                 await session.exec(
-                    select(DataProfileFieldRecord).where(
-                        DataProfileFieldRecord.field_id == field_id
+                    select(DataContractFieldRecord).where(
+                        DataContractFieldRecord.field_id == field_id
                     )
                 )
             ).one()
@@ -117,22 +117,22 @@ def _field_pk(database_url: str, field_id: str) -> int:
     return asyncio.run(load())
 
 
-def _profile_project_ids(database_url: str) -> dict[str, str | None]:
+def _contract_project_ids(database_url: str) -> dict[str, str | None]:
     async def load() -> dict[str, str | None]:
         store = SQLModelGoodomicsStore(database_url)
         async with AsyncSession(store._get_engine()) as session:
             rows = (
                 await session.exec(
-                    select(DataProfileRecord, ProjectRecord.project_id)
+                    select(DataContractRecord, ProjectRecord.project_id)
                     .join(
                         ProjectRecord,
-                        cast(Any, DataProfileRecord.project_id) == ProjectRecord.id,
+                        cast(Any, DataContractRecord.project_id) == ProjectRecord.id,
                         isouter=True,
                     )
-                    .order_by(DataProfileRecord.data_profile_id)
+                    .order_by(DataContractRecord.data_contract_id)
                 )
             ).all()
-        return {row[0].data_profile_id: row[1] for row in rows}
+        return {row[0].data_contract_id: row[1] for row in rows}
 
     return asyncio.run(load())
 
@@ -707,7 +707,7 @@ def test_control_tables_use_integer_primary_keys(
         "data_imports": "data_import_id",
         "runs": "run_id",
         "run_samples": "run_sample_id",
-        "data_profiles": "data_profile_id",
+        "data_contracts": "data_contract_id",
         "files": "file_id",
         "sample_sets": "sample_set_id",
     }
@@ -715,7 +715,7 @@ def test_control_tables_use_integer_primary_keys(
         table_name: [readable_column]
         for table_name, readable_column in readable_id_columns.items()
     }
-    expected_unique_key_columns["data_profiles"] = ["project_id", "data_profile_id"]
+    expected_unique_key_columns["data_contracts"] = ["project_id", "data_contract_id"]
     with sqlite3.connect(database_path) as connection:
         for table_name, readable_column in readable_id_columns.items():
             columns = {
@@ -775,10 +775,10 @@ def test_run_analytics_and_file_content_endpoints(
         analytics_path=analytics_path,
         file_root=file_root,
     )
-    profile_projects = _profile_project_ids(database_url)
-    assert profile_projects["salmon:metrics"] == DEFAULT_PROJECT_ID
-    assert profile_projects["fastqc:raw:metrics"] == DEFAULT_PROJECT_ID
-    assert profile_projects["multiqc:payloads"] == DEFAULT_PROJECT_ID
+    contract_projects = _contract_project_ids(database_url)
+    assert contract_projects["salmon:metrics"] == DEFAULT_PROJECT_ID
+    assert contract_projects["fastqc:raw:metrics"] == DEFAULT_PROJECT_ID
+    assert contract_projects["multiqc:payloads"] == DEFAULT_PROJECT_ID
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
     monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
@@ -924,7 +924,7 @@ def test_database_summary_reports_control_and_analytics_counts(
     assert body["total_payloads"] > 0
 
 
-def test_profile_browser_and_profile_first_insight_execution(
+def test_contract_browser_and_contract_first_insight_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -943,11 +943,11 @@ def test_profile_browser_and_profile_first_insight_execution(
     monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
 
     with TestClient(create_app()) as test_client:
-        profiles = test_client.get(
-            "/api/v1/profiles",
+        contracts = test_client.get(
+            "/api/v1/contracts",
         )
-        profile = test_client.get(
-            "/api/v1/profiles/salmon:metrics",
+        contract = test_client.get(
+            "/api/v1/contracts/salmon:metrics",
         )
         result = test_client.post(
             "/api/v1/insights/execute",
@@ -958,8 +958,8 @@ def test_profile_browser_and_profile_first_insight_execution(
                     "visualization": "table",
                     "query": {
                         "source": {
-                            "kind": "data_profile",
-                            "data_profile_id": "salmon:metrics",
+                            "kind": "data_contract",
+                            "data_contract_id": "salmon:metrics",
                         },
                         "fields": ["general_stats.salmon_percent_mapped"],
                         "entity": "run_sample",
@@ -974,12 +974,14 @@ def test_profile_browser_and_profile_first_insight_execution(
                 },
             },
         )
-    assert profiles.status_code == 200
-    assert any(item["data_profile_id"] == "salmon:metrics" for item in profiles.json())
-    assert profile.status_code == 200
+    assert contracts.status_code == 200
+    assert any(
+        item["data_contract_id"] == "salmon:metrics" for item in contracts.json()
+    )
+    assert contract.status_code == 200
     field = next(
         item
-        for item in profile.json()["fields"]
+        for item in contract.json()["fields"]
         if item["field_id"] == "general_stats.salmon_percent_mapped"
     )
     assert field["value_type"] == "numeric"
@@ -990,7 +992,7 @@ def test_profile_browser_and_profile_first_insight_execution(
     assert result.json()["result"]["columns"] == ["run_sample_id", "average_mapped"]
 
 
-def test_profile_series_charts_match_catalog_field_ids(
+def test_contract_series_charts_match_catalog_field_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1012,11 +1014,11 @@ def test_profile_series_charts_match_catalog_field_ids(
         "version": 1,
         "title": "Salmon mapped",
         "context": {"kind": "cohort"},
-        "mode": "profile_metrics",
+        "mode": "contract_metrics",
         "query": {
             "source": {
-                "kind": "data_profile",
-                "data_profile_id": "salmon:metrics",
+                "kind": "data_contract",
+                "data_contract_id": "salmon:metrics",
             },
             "fields": [field_id],
             "entity": "run_sample",
@@ -1026,7 +1028,7 @@ def test_profile_series_charts_match_catalog_field_ids(
         "series": [
             {
                 "series_id": "series-0",
-                "profile_id": "salmon:metrics",
+                "contract_id": "salmon:metrics",
                 "field_id": field_id,
                 "name": "Percent mapped",
                 "aggregation": "avg",
@@ -1087,14 +1089,14 @@ def test_profile_series_charts_match_catalog_field_ids(
     assert histogram_result["echarts_options"]["series"][0]["data"]
 
 
-def test_profile_browser_scopes_profiles_and_fields_to_project(
+def test_contract_browser_scopes_contracts_and_fields_to_project(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from goodomics.contracts import contract
     from goodomics.custom_parser import ParserOutput, parser
-    from goodomics.profiles import profile
 
-    shared_profile = profile(
+    shared_contract = contract(
         "user:shared:metrics",
         name="Shared project metrics",
         data_type="sample_metrics",
@@ -1103,14 +1105,14 @@ def test_profile_browser_scopes_profiles_and_fields_to_project(
         query_modes=["sample", "cohort"],
     )
 
-    @parser(key="project-scope-test", profiles=[shared_profile])
+    @parser(key="project-scope-test", contracts=[shared_contract])
     def parse_metric(value: object, out: ParserOutput) -> None:
         metric_name = str(value)
         out.metric(
             metric_name,
             1.0,
             sample_id=f"{metric_name}_sample",
-            profile=shared_profile,
+            contract=shared_contract,
         )
 
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
@@ -1137,30 +1139,30 @@ def test_profile_browser_scopes_profiles_and_fields_to_project(
             item["slug"]: item["project_id"]
             for item in test_client.get("/api/v1/projects").json()
         }
-        alpha_profiles = test_client.get(
-            "/api/v1/profiles",
+        alpha_contracts = test_client.get(
+            "/api/v1/contracts",
             params={"project_id": projects["alpha"]},
         )
-        beta_profile = test_client.get(
-            "/api/v1/profiles/user:shared:metrics",
+        beta_contract = test_client.get(
+            "/api/v1/contracts/user:shared:metrics",
             params={"project_id": projects["beta"]},
         )
 
-    assert alpha_profiles.status_code == 200
-    alpha_profile = next(
+    assert alpha_contracts.status_code == 200
+    alpha_contract = next(
         item
-        for item in alpha_profiles.json()
-        if item["data_profile_id"] == "user:shared:metrics"
+        for item in alpha_contracts.json()
+        if item["data_contract_id"] == "user:shared:metrics"
     )
-    alpha_fields = {field["field_id"] for field in alpha_profile["fields"]}
+    alpha_fields = {field["field_id"] for field in alpha_contract["fields"]}
     assert alpha_fields == {"user:shared:metrics:alpha_metric"}
 
-    assert beta_profile.status_code == 200
-    beta_fields = {field["field_id"] for field in beta_profile.json()["fields"]}
+    assert beta_contract.status_code == 200
+    beta_fields = {field["field_id"] for field in beta_contract.json()["fields"]}
     assert beta_fields == {"user:shared:metrics:beta_metric"}
 
 
-def test_profile_browser_keeps_legacy_default_project_profiles_visible(
+def test_contract_browser_keeps_legacy_default_project_contracts_visible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1169,20 +1171,20 @@ def test_profile_browser_keeps_legacy_default_project_profiles_visible(
     default_project = asyncio.run(store.ensure_default_project())
     other_project = asyncio.run(store.ensure_project("other"))
 
-    async def seed_legacy_profile() -> None:
+    async def seed_legacy_contract() -> None:
         async with AsyncSession(store._get_engine()) as session:
-            profile = DataProfileRecord(
-                data_profile_id="multiqc:legacy",
+            contract = DataContractRecord(
+                data_contract_id="multiqc:legacy",
                 project_id=None,
                 name="Legacy MultiQC",
                 data_type="sample_metrics",
             )
-            session.add(profile)
+            session.add(contract)
             await session.flush()
-            assert profile.id is not None
+            assert contract.id is not None
             session.add(
-                DataProfileFieldRecord(
-                    data_profile_id=profile.id,
+                DataContractFieldRecord(
+                    data_contract_id=contract.id,
                     field_id="legacy_metric",
                     field_role="metric",
                     display_name="Legacy metric",
@@ -1191,38 +1193,39 @@ def test_profile_browser_keeps_legacy_default_project_profiles_visible(
             )
             await session.commit()
 
-    asyncio.run(seed_legacy_profile())
+    asyncio.run(seed_legacy_contract())
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
 
     with TestClient(create_app()) as test_client:
-        default_profiles = test_client.get(
-            "/api/v1/profiles",
+        default_contracts = test_client.get(
+            "/api/v1/contracts",
             params={"project_id": default_project.project_id},
         )
-        default_profile = test_client.get(
-            "/api/v1/profiles/multiqc:legacy",
+        default_contract = test_client.get(
+            "/api/v1/contracts/multiqc:legacy",
             params={"project_id": default_project.project_id},
         )
-        other_profiles = test_client.get(
-            "/api/v1/profiles",
+        other_contracts = test_client.get(
+            "/api/v1/contracts",
             params={"project_id": other_project.project_id},
         )
 
-    assert default_profiles.status_code == 200
+    assert default_contracts.status_code == 200
     assert any(
-        item["data_profile_id"] == "multiqc:legacy" for item in default_profiles.json()
+        item["data_contract_id"] == "multiqc:legacy"
+        for item in default_contracts.json()
     )
-    assert default_profile.status_code == 200
-    assert {field["field_id"] for field in default_profile.json()["fields"]} == {
+    assert default_contract.status_code == 200
+    assert {field["field_id"] for field in default_contract.json()["fields"]} == {
         "legacy_metric"
     }
-    assert other_profiles.status_code == 200
+    assert other_contracts.status_code == 200
     assert all(
-        item["data_profile_id"] != "multiqc:legacy" for item in other_profiles.json()
+        item["data_contract_id"] != "multiqc:legacy" for item in other_contracts.json()
     )
 
 
-def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
+def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1255,9 +1258,9 @@ def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
 
     with TestClient(create_app()) as test_client:
         project_id = test_client.get("/api/v1/projects").json()[0]["project_id"]
-        profiles = {
-            profile_id: test_client.get(f"/api/v1/profiles/{profile_id}")
-            for profile_id in [
+        contracts = {
+            contract_id: test_client.get(f"/api/v1/contracts/{contract_id}")
+            for contract_id in [
                 CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
                 CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
                 CBIOPORTAL_COPY_NUMBER_SEGMENTS,
@@ -1275,8 +1278,8 @@ def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
                     "visualization": "pie",
                     "query": {
                         "source": {
-                            "kind": "data_profile",
-                            "data_profile_id": CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
+                            "kind": "data_contract",
+                            "data_contract_id": CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES,
                         },
                         "fields": ["subject:sex"],
                         "dimensions": ["subject_sex"],
@@ -1308,8 +1311,8 @@ def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
                     "visualization": "bar",
                     "query": {
                         "source": {
-                            "kind": "data_profile",
-                            "data_profile_id": CBIOPORTAL_MUTATIONS_MAF,
+                            "kind": "data_contract",
+                            "data_contract_id": CBIOPORTAL_MUTATIONS_MAF,
                         },
                         "fields": ["genotype"],
                         "dimensions": ["genotype"],
@@ -1325,26 +1328,26 @@ def test_cbioportal_profile_browser_fields_and_categorical_pie_execution(
             },
         )
 
-    assert all(response.status_code == 200 for response in profiles.values())
+    assert all(response.status_code == 200 for response in contracts.values())
     assert any(
         field["field_id"] == "subject:sex"
-        for field in profiles[CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES].json()["fields"]
+        for field in contracts[CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES].json()["fields"]
     )
     assert any(
         field["field_id"] == "call_code"
-        for field in profiles[CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS].json()["fields"]
+        for field in contracts[CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS].json()["fields"]
     )
     assert any(
         field["field_id"] == "segment_mean"
-        for field in profiles[CBIOPORTAL_COPY_NUMBER_SEGMENTS].json()["fields"]
+        for field in contracts[CBIOPORTAL_COPY_NUMBER_SEGMENTS].json()["fields"]
     )
     assert any(
         field["field_id"] == "payload_kind"
-        for field in profiles[CBIOPORTAL_GENE_PANEL_MATRIX].json()["fields"]
+        for field in contracts[CBIOPORTAL_GENE_PANEL_MATRIX].json()["fields"]
     )
     assert any(
         field["field_id"] == "allele_fraction"
-        for field in profiles[CBIOPORTAL_MUTATIONS_MAF].json()["fields"]
+        for field in contracts[CBIOPORTAL_MUTATIONS_MAF].json()["fields"]
     )
     assert result.status_code == 200
     body = result.json()["result"]
@@ -1543,11 +1546,11 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
                 "mode": "comparison",
                 "series": [
                     {
-                        "profile_id": "salmon:metrics",
+                        "contract_id": "salmon:metrics",
                         "field_id": "general_stats.salmon_percent_mapped",
                     },
                     {
-                        "profile_id": "fastqc:raw:metrics",
+                        "contract_id": "fastqc:raw:metrics",
                         "field_id": "general_stats.fastqc_raw_percent_gc",
                     },
                 ],
@@ -1561,7 +1564,7 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
     body = catalog.json()
     assert {chart["id"] for chart in body["charts"]} >= {"scatter", "table"}
     assert {mode["id"] for mode in body["modes"]} >= {
-        "profile_metrics",
+        "contract_metrics",
         "comparison",
         "advanced_sql",
     }
@@ -1663,8 +1666,8 @@ def test_invalid_non_numeric_chart_errors_and_pie_validation() -> None:
         {
             "visualization": "pie",
             "series": [
-                {"profile_id": "p", "field_id": "a"},
-                {"profile_id": "p", "field_id": "b"},
+                {"contract_id": "p", "field_id": "a"},
+                {"contract_id": "p", "field_id": "b"},
             ],
         }
     )
