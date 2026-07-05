@@ -241,10 +241,7 @@ def test_parse_cbioportal_tcga_sample_suffixes_share_subject_ids(
                 "stable_id: demo_all",
                 "case_list_name: All samples",
                 "case_list_category: all_cases_in_study",
-                (
-                    "case_list_ids: TCGA-3X-AAV9-01"
-                    "\tTCGA-3X-AAV9-02\tTCGA-4Y-BBC1-TA"
-                ),
+                ("case_list_ids: TCGA-3X-AAV9-01\tTCGA-3X-AAV9-02\tTCGA-4Y-BBC1-TA"),
             ]
         )
         + "\n",
@@ -262,9 +259,7 @@ def test_parse_cbioportal_tcga_sample_suffixes_share_subject_ids(
         "TCGA-3X-AAV9-02",
         "TCGA-4Y-BBC1-TA",
     }
-    assert {
-        sample.sample_id: sample.subject_id for sample in parsed.samples
-    } == {
+    assert {sample.sample_id: sample.subject_id for sample in parsed.samples} == {
         "TCGA-3X-AAV9-01": "TCGA-3X-AAV9",
         "TCGA-3X-AAV9-02": "TCGA-3X-AAV9",
         "TCGA-4Y-BBC1-TA": "TCGA-4Y-BBC1",
