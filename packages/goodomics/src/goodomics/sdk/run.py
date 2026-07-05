@@ -313,7 +313,7 @@ class GoodomicsRun:
         data_profiles = (
             [
                 built_in_data_profile(data_profile_id).model_copy(
-                    update={"assay": self.assay}
+                    update={"assay": self.assay, "project_id": project.project_id}
                 )
             ]
             if self.metrics

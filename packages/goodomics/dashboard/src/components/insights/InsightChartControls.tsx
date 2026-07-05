@@ -5,6 +5,8 @@ import {
   Box,
   Check,
   ChevronDown,
+  Code2,
+  FileSearch,
   Hash,
   LineChart,
   PieChart,
@@ -12,6 +14,7 @@ import {
   Settings2,
   Table2,
 } from "lucide-react";
+import type { InsightCatalog } from "../../api";
 import type { DisplayOptions } from "../../lib/insightDisplayOptions";
 import { DISPLAY_OPTION_ITEMS } from "../../lib/insightDisplayOptions";
 import {
@@ -21,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
+  Input,
   Select,
   SelectContent,
   SelectItem,
@@ -119,16 +123,19 @@ const CHART_OPTIONS: { group: string; items: ChartOption[] }[] = [
 ];
 
 export function InsightChartControls({
+  catalog,
   displayOptions,
   onDisplayOptionsChange,
   visualization,
   onVisualizationChange,
 }: {
+  catalog?: InsightCatalog;
   displayOptions: DisplayOptions;
   onDisplayOptionsChange: React.Dispatch<React.SetStateAction<DisplayOptions>>;
   visualization: string;
   onVisualizationChange: (value: string) => void;
 }) {
+  const chartGroups = chartOptionsFromCatalog(catalog);
   return (
     <div className="flex items-center gap-2">
       <OptionsMenu
@@ -136,6 +143,7 @@ export function InsightChartControls({
         onChange={onDisplayOptionsChange}
       />
       <ChartTypeSelect
+        groups={chartGroups}
         value={visualization}
         onChange={onVisualizationChange}
       />
@@ -158,7 +166,67 @@ function OptionsMenu({
           <ChevronDown className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>Axis labels</DropdownMenuLabel>
+        <div className="space-y-3 px-2 pb-3">
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#657082]">
+              X-axis label
+            </div>
+            <Input
+              className="h-9"
+              placeholder="X-axis label"
+              value={options.xAxisLabel}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  xAxisLabel: event.target.value,
+                }))
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#657082]">
+              Y-axis label
+            </div>
+            <Input
+              className="h-9"
+              placeholder="Y-axis label"
+              value={options.yAxisLabel}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  yAxisLabel: event.target.value,
+                }))
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+          </div>
+        </div>
+        <DropdownMenuLabel>Y-axis scale</DropdownMenuLabel>
+        <div className="grid grid-cols-2 gap-1 px-2 pb-3">
+          {(["linear", "log"] as const).map((scale) => (
+            <button
+              className={[
+                "h-9 rounded-md border px-3 text-sm font-semibold transition-colors",
+                options.yAxisScale === scale
+                  ? "border-[#16784a] bg-[#e8f5ee] text-[#16784a]"
+                  : "border-[#d6dee8] bg-white text-[#526071] hover:bg-[#f8fafc]",
+              ].join(" ")}
+              key={scale}
+              type="button"
+              onClick={() =>
+                onChange((current) => ({
+                  ...current,
+                  yAxisScale: scale,
+                }))
+              }
+            >
+              {scale === "linear" ? "Linear" : "Logarithmic"}
+            </button>
+          ))}
+        </div>
         <DropdownMenuLabel>Display</DropdownMenuLabel>
         {DISPLAY_OPTION_ITEMS.map((item) => (
           <DropdownMenuItem
@@ -183,13 +251,15 @@ function OptionsMenu({
 }
 
 function ChartTypeSelect({
+  groups,
   value,
   onChange,
 }: {
+  groups: { group: string; items: ChartOption[] }[];
   value: string;
   onChange: (value: string) => void;
 }) {
-  const selected = chartOption(value);
+  const selected = chartOption(groups, value);
   const Icon = selected.icon;
   return (
     <Select value={value} onValueChange={onChange}>
@@ -200,7 +270,7 @@ function ChartTypeSelect({
         </div>
       </SelectTrigger>
       <SelectContent className="max-h-[560px] w-[380px]">
-        {CHART_OPTIONS.map((group) => (
+        {groups.map((group) => (
           <div key={group.group}>
             <div className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#8b95a5]">
               {group.group}
@@ -228,12 +298,59 @@ function ChartTypeSelect({
   );
 }
 
-function chartOption(value: string) {
+function chartOption(
+  groups: { group: string; items: ChartOption[] }[],
+  value: string,
+) {
   return (
-    CHART_OPTIONS.flatMap((group) => group.items).find(
-      (item) => item.value === value,
-    ) ?? CHART_OPTIONS[0].items[0]
+    groups
+      .flatMap((group) => group.items)
+      .find((item) => item.value === value) ?? CHART_OPTIONS[0].items[0]
   );
+}
+
+function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
+  if (!catalog?.charts.length) return CHART_OPTIONS;
+  const items: ChartOption[] = [];
+  for (const chart of catalog.charts) {
+    const value = stringValue(chart.id);
+    const label = stringValue(chart.label) || value;
+    if (!value || !label) continue;
+    items.push({
+      value,
+      label,
+      description: stringValue(chart.rule) || stringValue(chart.description),
+      icon: iconForName(stringValue(chart.icon)),
+    });
+  }
+  return [
+    {
+      group: "Goodomics",
+      items,
+    },
+  ];
+}
+
+function iconForName(name: string) {
+  return (
+    {
+      AreaChart,
+      BarChart2,
+      BarChart3,
+      Box,
+      Code2,
+      FileSearch,
+      Hash,
+      LineChart,
+      PieChart,
+      ScatterChart,
+      Table2,
+    }[name] ?? BarChart3
+  );
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function GridIcon({ className }: { className?: string }) {

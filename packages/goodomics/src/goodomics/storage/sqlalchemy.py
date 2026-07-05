@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import JSON
+from sqlalchemy import JSON, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import Field, SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -130,9 +130,16 @@ class RunSampleRecord(SQLModel, table=True):
 
 class DataProfileRecord(SQLModel, table=True):
     __tablename__ = "data_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "data_profile_id",
+            name="uq_data_profiles_project_profile_id",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
-    data_profile_id: str = Field(max_length=255, unique=True, index=True)
+    data_profile_id: str = Field(max_length=255, index=True)
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
     data_type: str = Field(max_length=128, index=True)
@@ -718,11 +725,10 @@ class SQLModelGoodomicsStore:
             SampleRecord.sample_id,
             [link.sample_id for link in file_links if link.sample_id],
         )
-        profile_rows = await _records_by_field(
+        profile_rows = await _data_profile_records_by_label(
             session,
-            DataProfileRecord,
-            DataProfileRecord.data_profile_id,
             [link.data_profile_id for link in file_links if link.data_profile_id],
+            project_id=project_pk,
         )
         data_import_map = _id_map(data_import_rows.values(), "data_import_id")
         run_map = _id_map(run_rows.values(), "run_id")
@@ -843,6 +849,25 @@ async def _records_by_field(
     return {str(getattr(row, field.key)): row for row in rows}
 
 
+async def _data_profile_records_by_label(
+    session: AsyncSession,
+    labels: Iterable[str],
+    *,
+    project_id: int,
+) -> dict[str, DataProfileRecord]:
+    unique_labels = sorted({label for label in labels if label})
+    if not unique_labels:
+        return {}
+    rows = (
+        await session.exec(
+            select(DataProfileRecord)
+            .where(cast(Any, DataProfileRecord.data_profile_id).in_(unique_labels))
+            .where(DataProfileRecord.project_id == project_id)
+        )
+    ).all()
+    return {row.data_profile_id: row for row in rows}
+
+
 async def _upsert_subjects(
     session: AsyncSession,
     subjects: list[Subject],
@@ -917,16 +942,15 @@ async def _upsert_data_profiles(
     profiles: list[DataProfile],
     project_id: int,
 ) -> list[DataProfileRecord]:
-    existing = await _records_by_field(
+    existing = await _data_profile_records_by_label(
         session,
-        DataProfileRecord,
-        DataProfileRecord.data_profile_id,
         [profile.data_profile_id for profile in profiles],
+        project_id=project_id,
     )
     rows: list[DataProfileRecord] = []
     for profile in profiles:
         row = existing.get(profile.data_profile_id)
-        profile_project_id = project_id if profile.project_id is not None else None
+        profile_project_id = project_id
         if row is None:
             row = DataProfileRecord(
                 data_profile_id=profile.data_profile_id,

@@ -16,11 +16,14 @@ operational, and focused on how to work in the repo.
   checks, verification, and Python coding style.
 - Use `instructions/FRONTEND.md` for dashboard, report-rendering, charting,
   visual, and UI guidance.
+- Use `instructions/INSIGHTS_AND_REPORTS.md` for saved insight/report builder
+  behavior, chart grammar, context/linker rules, result-size policies, and
+  AI insight guardrails.
 - Use `instructions/DOCS.md` for documentation rules, user-facing copy
   standards, and documentation verification expectations.
 - Keep this file operational. If product strategy, data model direction,
-  frontend/reporting guidance, or documentation rules change, update the
-  relevant file under `instructions/`.
+  frontend/reporting guidance, insight/report behavior, or documentation rules
+  change, update the relevant file under `instructions/`.
 
 The app has not been deployed anywhere yet. For code changes, do not add database migrations, backwards compatibility layers, compatibility shims, or migration strategy docs unless the user explicitly asks for them. Prefer directly updating the current schema, models, tests, fixtures, and docs.
 

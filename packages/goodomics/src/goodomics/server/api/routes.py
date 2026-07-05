@@ -52,7 +52,12 @@ from goodomics.server.db.models import (
     ReportRecord,
     ReportRevisionRecord,
 )
-from goodomics.server.insights import execute_insight, execute_report
+from goodomics.server.insight_catalog import insight_catalog
+from goodomics.server.insights import (
+    execute_insight,
+    execute_report,
+    validate_and_explain_config,
+)
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     DataImportRecord,
@@ -64,6 +69,8 @@ from goodomics.storage.sqlalchemy import (
     RunRecord,
     RunSampleRecord,
     SampleRecord,
+    SampleSetMemberRecord,
+    SampleSetRecord,
     SubjectRecord,
     get_record_by_field,
     get_record_where,
@@ -323,6 +330,36 @@ class ReportResultRead(BaseModel):
     """Envelope for an executed report result payload."""
 
     result: dict[str, JsonValue]
+
+
+class InsightValidationRequest(BaseModel):
+    """Payload for validating and explaining a draft insight config."""
+
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class InsightValidationRead(BaseModel):
+    """Shared validation/explanation response for UI and AI insight drafting."""
+
+    valid: bool
+    messages: list[dict[str, JsonValue]]
+    normalized_config: dict[str, JsonValue]
+    explanation: str
+    catalog_version: int = 1
+
+
+class SampleSetRead(BaseModel):
+    """Canonical sample-set/cohort context option."""
+
+    sample_set_id: str
+    project_id: str | None = None
+    name: str
+    kind: str
+    description: str | None = None
+    definition_json: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+    created_at: datetime
+    member_count: int = 0
 
 
 class CohortCreate(BaseModel):
@@ -661,6 +698,7 @@ async def list_project_samples(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
 ) -> SamplePageRead:
     """List samples in a project with run summary metadata."""
 
@@ -670,6 +708,7 @@ async def list_project_samples(
         project_id=project_id,
         limit=limit,
         offset=offset,
+        search=search,
     )
 
 
@@ -1142,23 +1181,30 @@ async def list_data_profiles(
     request: Request,
     project_id: str | None = Query(default=None),
 ) -> list[DataProfileRead]:
-    """List data profiles visible to a project or globally."""
+    """List data profiles for a project, or all profiles when unscoped."""
 
+    project: ProjectRecord | None = None
     if project_id is not None:
-        await _require_project(request, project_id)
+        project = await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
-        project_pk = await _project_pk(request, project_id, session=session)
+        project_pk = project.id if project is not None else None
         statement = select(DataProfileRecord)
         if project_pk is not None:
-            statement = statement.where(
-                or_(
-                    cast(Any, DataProfileRecord.project_id).is_(None),
-                    cast(Any, DataProfileRecord.project_id) == project_pk,
+            if project and project.project_id == DEFAULT_PROJECT_ID:
+                profile_project_id = cast(Any, DataProfileRecord.project_id)
+                statement = statement.where(
+                    or_(
+                        profile_project_id == project_pk,
+                        profile_project_id.is_(None),
+                    )
                 )
-            )
+            else:
+                statement = statement.where(DataProfileRecord.project_id == project_pk)
         statement = statement.order_by(DataProfileRecord.name)
         profiles = list((await session.exec(statement)).all())
+        if project_pk is not None:
+            profiles = _prefer_project_profile_rows(profiles, project_pk)
         fields_by_profile = await _fields_by_profile(session, profiles)
     return [
         _data_profile_read(profile, fields_by_profile.get(profile.id, []))
@@ -1172,24 +1218,32 @@ async def get_data_profile(
     request: Request,
     project_id: str | None = Query(default=None),
 ) -> DataProfileRead:
-    """Return one data profile visible to a project or globally."""
+    """Return one data profile for a project, or an unscoped match."""
 
+    project: ProjectRecord | None = None
     if project_id is not None:
-        await _require_project(request, project_id)
+        project = await _require_project(request, project_id)
     await _ensure_schema(request)
     async with _session(request) as session:
-        project_pk = await _project_pk(request, project_id, session=session)
+        project_pk = project.id if project is not None else None
         statement = select(DataProfileRecord).where(
             DataProfileRecord.data_profile_id == data_profile_id
         )
         if project_pk is not None:
-            statement = statement.where(
-                or_(
-                    cast(Any, DataProfileRecord.project_id).is_(None),
-                    cast(Any, DataProfileRecord.project_id) == project_pk,
+            if project and project.project_id == DEFAULT_PROJECT_ID:
+                profile_project_id = cast(Any, DataProfileRecord.project_id)
+                statement = statement.where(
+                    or_(
+                        profile_project_id == project_pk,
+                        profile_project_id.is_(None),
+                    )
                 )
-            )
-        profile = (await session.exec(statement)).first()
+            else:
+                statement = statement.where(DataProfileRecord.project_id == project_pk)
+        profiles = list((await session.exec(statement)).all())
+        if project_pk is not None:
+            profiles = _prefer_project_profile_rows(profiles, project_pk)
+        profile = profiles[0] if profiles else None
         if profile is None:
             raise HTTPException(status_code=404, detail="Data profile not found")
         fields_by_profile = await _fields_by_profile(session, [profile])
@@ -1257,6 +1311,24 @@ async def list_insights(
             statement = statement.where(InsightRecord.project_id == project_id)
         rows = (await session.exec(statement)).all()
     return [SavedInsightRead.model_validate(row.model_dump()) for row in rows]
+
+
+@router.get("/insights/catalog")
+async def get_insight_catalog() -> dict[str, JsonValue]:
+    """Return the server-owned insight/report builder catalog."""
+
+    return insight_catalog()
+
+
+@router.post("/insights/validate", response_model=InsightValidationRead)
+async def validate_insight_config(
+    payload: InsightValidationRequest,
+) -> InsightValidationRead:
+    """Validate and explain a draft insight config without executing it."""
+
+    return InsightValidationRead.model_validate(
+        validate_and_explain_config(payload.config)
+    )
 
 
 @router.post("/insights", response_model=SavedInsightRead, status_code=201)
@@ -1633,6 +1705,58 @@ async def export_rendered_report_html(
     return Response(content=report.html, media_type="text/html")
 
 
+@router.get("/sample-sets", response_model=list[SampleSetRead])
+async def list_sample_sets(
+    request: Request,
+    project_id: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
+) -> list[SampleSetRead]:
+    """List canonical sample sets used as cohort/reference contexts."""
+
+    await _ensure_schema(request)
+    project_pk: int | None = None
+    if project_id is not None:
+        project = await _require_project(request, project_id)
+        project_pk = project.id
+    async with _session(request) as session:
+        statement = select(SampleSetRecord)
+        if project_pk is not None:
+            statement = statement.where(SampleSetRecord.project_id == project_pk)
+        if kind is not None:
+            statement = statement.where(SampleSetRecord.kind == kind)
+        rows = (await session.exec(statement.order_by(SampleSetRecord.name))).all()
+        counts: dict[int, int] = {}
+        sample_set_ids = [row.id for row in rows if row.id is not None]
+        if sample_set_ids:
+            sample_set_member_id = cast(Any, SampleSetMemberRecord.sample_set_id)
+            member_id = cast(Any, SampleSetMemberRecord.id)
+            count_rows = (
+                await session.exec(
+                    select(
+                        sample_set_member_id,
+                        func.count(member_id),
+                    )
+                    .where(sample_set_member_id.in_(sample_set_ids))
+                    .group_by(sample_set_member_id)
+                )
+            ).all()
+            counts = {int(row[0]): int(row[1]) for row in count_rows}
+    return [
+        SampleSetRead(
+            sample_set_id=row.sample_set_id,
+            project_id=project_id,
+            name=row.name,
+            kind=row.kind,
+            description=row.description,
+            definition_json=row.definition_json,
+            metadata_json=row.metadata_json,
+            created_at=row.created_at,
+            member_count=counts.get(int(row.id or 0), 0),
+        )
+        for row in rows
+    ]
+
+
 @router.get("/cohorts", response_model=list[CohortRead])
 async def list_cohorts(request: Request) -> list[CohortRead]:
     """List saved cohort definitions."""
@@ -2005,6 +2129,7 @@ async def _list_samples(
     project_id: str,
     limit: int,
     offset: int,
+    search: str = "",
 ) -> SamplePageRead:
     """List samples with latest-run and run-count summary columns."""
 
@@ -2036,12 +2161,22 @@ async def _list_samples(
         .subquery()
     )
     async with _session(request) as session:
+        sample_filters = [SampleRecord.project_id == project_pk]
+        term = search.strip().lower()
+        if term:
+            pattern = f"%{term}%"
+            sample_filters.append(
+                or_(
+                    func.lower(SampleRecord.sample_id).like(pattern),
+                    func.lower(SampleRecord.sample_name).like(pattern),
+                )
+            )
         total = int(
             (
                 await session.exec(
                     select(func.count())
                     .select_from(SampleRecord)
-                    .where(SampleRecord.project_id == project_pk)
+                    .where(*sample_filters)
                 )
             ).one()
         )
@@ -2059,7 +2194,7 @@ async def _list_samples(
                 latest_run_subquery,
                 cast(Any, SampleRecord.id) == latest_run_subquery.c.sample_id,
             )
-            .where(SampleRecord.project_id == project_pk)
+            .where(*sample_filters)
             .order_by(
                 cast(Any, latest_run_subquery.c.latest_run_created_at).desc(),
                 SampleRecord.sample_id,
@@ -2781,6 +2916,20 @@ async def _fields_by_profile(
     for row in rows:
         grouped.setdefault(row.data_profile_id, []).append(row)
     return grouped
+
+
+def _prefer_project_profile_rows(
+    profiles: list[DataProfileRecord],
+    project_pk: int,
+) -> list[DataProfileRecord]:
+    """Deduplicate profile labels, preferring project-owned rows over legacy nulls."""
+
+    by_label: dict[str, DataProfileRecord] = {}
+    for profile in profiles:
+        existing = by_label.get(profile.data_profile_id)
+        if existing is None or profile.project_id == project_pk:
+            by_label[profile.data_profile_id] = profile
+    return list(by_label.values())
 
 
 def _data_profile_read(

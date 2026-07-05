@@ -15,17 +15,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, TypeGuard, cast
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.sql import func
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.server.db.catalog import CATALOG_MODELS
 from goodomics.server.db.models import (
     InsightRecord,
@@ -33,11 +35,31 @@ from goodomics.server.db.models import (
     ReportRecord,
     ReportResultCacheRecord,
 )
-from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
+from goodomics.server.insight_catalog import (
+    ALL_ROWS_INLINE_THRESHOLD,
+    EXPORT_FULL_DATA_LIMIT,
+    LINKERS,
+    MORE_ROWS_MAX_LIMIT,
+    PREVIEW_DEFAULT_LIMIT,
+    chart_rule,
+    explain_insight_config,
+    normalize_linker,
+    normalize_result_policy,
+    validate_config_shape,
+)
+from goodomics.storage.duckdb import (
+    INTEGER_KEYED_TABLES,
+    SERIALIZERS_BY_TABLE,
+    DuckDBAnalyticsStore,
+)
 from goodomics.storage.sqlalchemy import (
     DataProfileFieldRecord,
     DataProfileRecord,
     ProjectRecord,
+    RunSampleRecord,
+    SampleRecord,
+    SampleSetMemberRecord,
+    SampleSetRecord,
 )
 
 JsonObject = dict[str, Any]
@@ -112,12 +134,36 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
 
     normalized = dict(config)
     normalized.setdefault("version", 1)
+    normalized.setdefault("context", {"kind": "cohort"})
+    normalized.setdefault("mode", _default_mode(normalized))
     normalized.setdefault("visualization", "table")
     normalized.setdefault("query", {})
     normalized.setdefault("series", [])
+    normalized["linker"] = normalize_linker(normalized.get("linker"))
     normalized.setdefault("filters", [])
+    display = normalized.get("display")
+    display_policy = (
+        display.get("result_policy") if isinstance(display, Mapping) else None
+    )
+    normalized["result_policy"] = normalize_result_policy(
+        normalized.get("result_policy") or display_policy
+    )
     normalized.setdefault("display", {})
     return normalized
+
+
+def validate_and_explain_config(config: Mapping[str, Any]) -> JsonObject:
+    """Return shared validation/explanation payload for UI and AI callers."""
+
+    normalized = normalize_insight_config(config)
+    messages = validate_config_shape(normalized)
+    return {
+        "valid": not any(message.get("level") == "error" for message in messages),
+        "messages": messages,
+        "normalized_config": normalized,
+        "explanation": explain_insight_config(normalized),
+        "catalog_version": 1,
+    }
 
 
 def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
@@ -130,6 +176,18 @@ def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
     normalized.setdefault("filters", [])
     normalized.setdefault("refresh_policy", {"mode": "manual"})
     return normalized
+
+
+def _default_mode(config: Mapping[str, Any]) -> str:
+    visualization = str(config.get("visualization") or "")
+    query = config.get("query")
+    if isinstance(query, Mapping) and query.get("sql"):
+        return "variant_table"
+    if visualization == "table":
+        return "variant_table"
+    if visualization == "scatter":
+        return "comparison"
+    return "profile_metrics"
 
 
 async def execute_insight(
@@ -153,6 +211,12 @@ async def execute_insight(
         config if config is not None else (insight.config if insight else {})
     )
     insight_config = normalize_insight_config(source_config)
+    validation = validate_and_explain_config(insight_config)
+    if not validation["valid"]:
+        first_error = next(
+            message for message in validation["messages"] if message["level"] == "error"
+        )
+        raise ValueError(str(first_error["message"]))
     source = _query_source(insight_config)
     # Cache identity is split into the normalized spec and a source fingerprint
     # so a config can be reused until either the config or the underlying data
@@ -184,13 +248,20 @@ async def execute_insight(
         project_id=project_id,
         config=insight_config,
     )
-    result = compile_insight_result(
+    policy_rows, policy_summary = _apply_result_policy(
         config=insight_config,
         columns=columns,
         rows=rows,
+        analytics_store=analytics_store,
+    )
+    result = compile_insight_result(
+        config=insight_config,
+        columns=columns,
+        rows=policy_rows,
         insight_id=insight_id,
         computed_at=datetime.now(UTC),
         cached=False,
+        result_policy_summary=policy_summary,
     )
     cache_id = f"insight_cache_{uuid4().hex}"
     session.add(
@@ -223,10 +294,13 @@ async def execute_report(
     report_id = report.report_id
     report_name = report.name
     report_description = report.description
+    effective_insight_configs = [
+        _inherit_report_context(insight.config, report_config) for insight in insights
+    ]
     spec_hash = canonical_hash(
         {
             "report": report_config,
-            "insights": [insight.config for insight in insights],
+            "insights": effective_insight_configs,
             "project_id": project_id,
         }
     )
@@ -240,9 +314,9 @@ async def execute_report(
                     session=session,
                     analytics_store=analytics_store,
                     project_id=project_id,
-                    source=_query_source(normalize_insight_config(insight.config)),
+                    source=_query_source(normalize_insight_config(config)),
                 )
-                for insight in insights
+                for config in effective_insight_configs
             ]
         }
     )
@@ -263,9 +337,10 @@ async def execute_report(
             analytics_store=analytics_store,
             project_id=project_id,
             insight=insight,
+            config=config,
             refresh=refresh,
         )
-        for insight in insights
+        for insight, config in zip(insights, effective_insight_configs, strict=True)
     ]
     result = {
         "kind": "report_result",
@@ -293,6 +368,28 @@ async def execute_report(
     return result
 
 
+def _inherit_report_context(
+    insight_config: Mapping[str, Any], report_config: Mapping[str, Any]
+) -> JsonObject:
+    inherited = dict(insight_config)
+    for key in ("context", "linker", "result_policy"):
+        if key not in inherited and key in report_config:
+            inherited[key] = report_config[key]
+    report_filters = report_config.get("filters")
+    if isinstance(report_filters, Sequence) and not isinstance(report_filters, str):
+        insight_filters = inherited.get("filters")
+        inherited["filters"] = [
+            *list(report_filters),
+            *(
+                list(insight_filters)
+                if isinstance(insight_filters, Sequence)
+                and not isinstance(insight_filters, str)
+                else []
+            ),
+        ]
+    return inherited
+
+
 async def execute_data_query(
     *,
     session: AsyncSession,
@@ -308,6 +405,14 @@ async def execute_data_query(
     """
 
     query_config = _query_config(config)
+    series_query = await _execute_profile_series_query(
+        session=session,
+        analytics_store=analytics_store,
+        project_id=project_id,
+        config=config,
+    )
+    if series_query is not None:
+        return series_query
     profile_query = await _compile_profile_query(
         session=session,
         project_id=project_id,
@@ -317,14 +422,14 @@ async def execute_data_query(
     if profile_query is not None:
         sql, parameters, columns = profile_query
         return analytics_store.query_rows(
-            sql, parameters=parameters, limit=_query_limit(query_config)
+            sql, parameters=parameters, limit=_query_limit(query_config, config)
         )
     store, table = _parse_source(query_config.get("source"))
     if query_config.get("sql") is not None:
         # Advanced SQL is still wrapped and limited by the storage adapters, but
         # it must pass a simple read-only validation gate first.
         sql = _validate_read_only_sql(str(query_config["sql"]))
-        limit = _query_limit(query_config)
+        limit = _query_limit(query_config, config)
         if store == "analytics":
             return analytics_store.query_rows(sql, limit=limit)
         return await _execute_catalog_sql(session, sql, limit=limit)
@@ -338,10 +443,780 @@ async def execute_data_query(
         query_config=query_config,
         config=config,
     )
-    limit = _query_limit(query_config)
+    limit = _query_limit(query_config, config)
     if store == "analytics":
         return analytics_store.query_rows(sql, parameters=parameters, limit=limit)
     return await _execute_catalog_sql(session, sql, parameters=parameters, limit=limit)
+
+
+async def _execute_profile_series_query(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    config: Mapping[str, Any],
+) -> tuple[list[str], list[JsonObject]] | None:
+    # New mode-first configs put profile identity on each series so different
+    # profiles can be aligned by sample/run_sample/feature without exposing a
+    # raw SQL join to the dashboard or future AI tooling.
+    series_items = _profile_series_items(config)
+    if not series_items:
+        return None
+    visualization = str(config.get("visualization") or "table")
+    if visualization in {"pie", "donut"} and len(series_items) == 1:
+        return await _execute_single_series_count_query(
+            session=session,
+            analytics_store=analytics_store,
+            project_id=project_id,
+            config=config,
+            series_item=series_items[0],
+        )
+    aliases = _series_aliases(series_items)
+    limit = _query_limit(_query_config(config), config)
+    if visualization == "histogram":
+        return await _execute_histogram_series_query(
+            session=session,
+            analytics_store=analytics_store,
+            project_id=project_id,
+            config=config,
+            series_items=series_items,
+            aliases=aliases,
+            limit=limit,
+        )
+    linker = await _resolve_profile_series_linker(
+        session=session,
+        project_id=project_id,
+        config=config,
+        series_items=series_items,
+    )
+    series_rows: list[list[JsonObject]] = []
+    for series_item, alias in zip(series_items, aliases, strict=True):
+        sql, parameters = await _profile_series_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item=series_item,
+            alias=alias,
+            linker_column=linker.get("column"),
+        )
+        _, rows = analytics_store.query_rows(sql, parameters=parameters, limit=limit)
+        series_rows.append(rows)
+    columns, rows, diagnostics = _align_series_rows(
+        aliases=aliases,
+        linker_column=cast(str | None, linker.get("column")),
+        linker_kind=str(linker["kind"]),
+        series_rows=series_rows,
+    )
+    _set_runtime_metadata(
+        config,
+        {
+            "linker": linker,
+            "linker_diagnostics": diagnostics,
+            "series_aliases": aliases,
+        },
+    )
+    return columns, rows
+
+
+async def _execute_histogram_series_query(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    series_items: Sequence[Mapping[str, Any]],
+    aliases: Sequence[str],
+    limit: int,
+) -> tuple[list[str], list[JsonObject]]:
+    series_rows: list[list[JsonObject]] = []
+    for series_item, alias in zip(series_items, aliases, strict=True):
+        sql, parameters = await _profile_series_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item=series_item,
+            alias=alias,
+            linker_column=None,
+        )
+        _, rows = analytics_store.query_rows(sql, parameters=parameters, limit=limit)
+        series_rows.append(rows)
+    max_rows = max((len(rows) for rows in series_rows), default=0)
+    rows: list[JsonObject] = []
+    for row_index in range(max_rows):
+        row: JsonObject = {}
+        for alias, source_rows in zip(aliases, series_rows, strict=True):
+            if row_index < len(source_rows):
+                row[alias] = source_rows[row_index].get(alias)
+        rows.append(row)
+    diagnostics = {
+        "linker": None,
+        "matched_count": max_rows,
+        "unmatched_count": 0,
+        "duplicate_conflict_count": 0,
+        "rows_excluded": 0,
+        "message": "Histogram series are overlaid by value distribution.",
+    }
+    _set_runtime_metadata(
+        config,
+        {
+            "linker": {"kind": "none", "column": None, "candidates": []},
+            "linker_diagnostics": diagnostics,
+            "series_aliases": list(aliases),
+        },
+    )
+    return list(aliases), rows
+
+
+async def _execute_single_series_count_query(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    series_item: Mapping[str, Any],
+) -> tuple[list[str], list[JsonObject]]:
+    alias = "count"
+    profile = await _series_profile(session, project_id, series_item)
+    table = _profile_table(profile)
+    field_id = _series_field_id(series_item)
+    field = await _series_field_record(
+        session=session,
+        profile=profile,
+        table=table,
+        field_id=field_id,
+    )
+    value_column = await _series_value_column(
+        session=session,
+        profile=profile,
+        table=table,
+        field_id=field_id,
+    )
+    source = _series_source_sql(table)
+    columns = _columns_for_source("analytics", table)
+    parameters: list[Any] = [_record_pk(profile)]
+    where_parts = ["data_profile_id = ?"]
+    if field is not None:
+        where_parts.append(_field_id_match_sql(parameters, field))
+    context_where = await _context_where_sql(
+        session=session,
+        project_id=project_id,
+        config=config,
+        columns=columns,
+        parameters=parameters,
+    )
+    where_parts.extend(context_where)
+    where_parts.extend(
+        _series_filters_sql(
+            table=table,
+            profile_pk=_record_pk(profile),
+            columns=columns,
+            filters=_combined_filters(config, series_item),
+            parameters=parameters,
+        )
+    )
+    category = _quote_identifier(value_column)
+    sql = (
+        f"SELECT {category} AS category, COUNT(*) AS {alias} "
+        f"FROM {source} WHERE {' AND '.join(where_parts)} "
+        f"GROUP BY {category} ORDER BY {alias} DESC"
+    )
+    limit = _query_limit(_query_config(config), config)
+    _, rows = analytics_store.query_rows(sql, parameters=parameters, limit=limit)
+    _set_runtime_metadata(
+        config,
+        {
+            "linker": {"kind": "none", "column": None, "candidates": []},
+            "linker_diagnostics": {
+                "linker": None,
+                "matched_count": len(rows),
+                "unmatched_count": 0,
+                "duplicate_conflict_count": 0,
+                "rows_excluded": 0,
+            },
+            "series_aliases": [alias],
+        },
+    )
+    return ["category", alias], rows
+
+
+async def _profile_series_sql(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    series_item: Mapping[str, Any],
+    alias: str,
+    linker_column: str | None,
+) -> tuple[str, list[Any]]:
+    profile = await _series_profile(session, project_id, series_item)
+    table = _profile_table(profile)
+    field_id = _series_field_id(series_item)
+    field = await _series_field_record(
+        session=session,
+        profile=profile,
+        table=table,
+        field_id=field_id,
+    )
+    value_column = await _series_value_column(
+        session=session,
+        profile=profile,
+        table=table,
+        field_id=field_id,
+    )
+    source = _series_source_sql(table)
+    columns = _columns_for_source("analytics", table)
+    select_parts = []
+    if linker_column is not None:
+        _require_column(columns, linker_column)
+        select_parts.append(f"{_quote_identifier(linker_column)} AS __linker")
+    select_parts.append(
+        f"{_quote_identifier(value_column)} AS {_quote_identifier(alias)}"
+    )
+    parameters: list[Any] = [_record_pk(profile)]
+    where_parts = ["data_profile_id = ?"]
+    if field is not None:
+        where_parts.append(_field_id_match_sql(parameters, field))
+    context_where = await _context_where_sql(
+        session=session,
+        project_id=project_id,
+        config=config,
+        columns=columns,
+        parameters=parameters,
+    )
+    where_parts.extend(context_where)
+    where_parts.extend(
+        _series_filters_sql(
+            table=table,
+            profile_pk=_record_pk(profile),
+            columns=columns,
+            filters=_combined_filters(config, series_item),
+            parameters=parameters,
+        )
+    )
+    order = "__linker" if linker_column is not None else _quote_identifier(value_column)
+    sql = (
+        f"SELECT {', '.join(select_parts)} FROM {source} "
+        f"WHERE {' AND '.join(where_parts)} ORDER BY {order}"
+    )
+    return sql, parameters
+
+
+async def _series_profile(
+    session: AsyncSession,
+    project_id: str | None,
+    series_item: Mapping[str, Any],
+) -> DataProfileRecord:
+    profile_id = _series_profile_id(series_item)
+    if not profile_id:
+        raise ValueError("Profile series require a data_profile_id.")
+    profile = await _get_profile_record(session, project_id, profile_id)
+    if profile is None:
+        raise ValueError(f"Unknown data profile: {profile_id}")
+    return profile
+
+
+def _profile_table(profile: DataProfileRecord) -> str:
+    table = profile.primary_table
+    if table not in {
+        "sample_metrics",
+        "entity_attributes",
+        "feature_value_numeric",
+        "feature_call",
+        "copy_number_segments",
+        "sample_variant_calls",
+        "sample_structural_variant_calls",
+        "profile_payloads",
+        "gene_alteration_state",
+    }:
+        raise ValueError(
+            f"Profile series are not available for table: {table or 'unknown'}"
+        )
+    return table
+
+
+async def _series_value_column(
+    *,
+    session: AsyncSession,
+    profile: DataProfileRecord,
+    table: str,
+    field_id: str,
+) -> str:
+    synthetic = _synthetic_profile_fields(table).get(table, {})
+    if field_id in synthetic:
+        return synthetic[field_id]
+    if table == "feature_value_numeric":
+        return "value"
+    if table in {"sample_metrics", "entity_attributes"}:
+        if not field_id:
+            raise ValueError("Metric and attribute profile series require a field_id.")
+        rows = await _get_profile_field_records(
+            session, profile_id=_record_pk(profile), field_ids=[field_id]
+        )
+        if field_id not in rows:
+            raise ValueError(f"Unknown profile field: {field_id}")
+        return _profile_value_column(rows[field_id])
+    fallback = {
+        "feature_call": "call_rank",
+        "copy_number_segments": "segment_mean",
+        "sample_variant_calls": "allele_fraction",
+        "sample_structural_variant_calls": "split_read_count",
+        "profile_payloads": "payload_name",
+        "gene_alteration_state": "value_numeric",
+    }.get(table)
+    if fallback is None:
+        raise ValueError(f"No default value column for profile table: {table}")
+    return fallback
+
+
+async def _series_field_record(
+    *,
+    session: AsyncSession,
+    profile: DataProfileRecord,
+    table: str,
+    field_id: str,
+) -> DataProfileFieldRecord | None:
+    if table not in {"sample_metrics", "entity_attributes"}:
+        return None
+    if not field_id:
+        raise ValueError("Metric and attribute profile series require a field_id.")
+    rows = await _get_profile_field_records(
+        session, profile_id=_record_pk(profile), field_ids=[field_id]
+    )
+    field = rows.get(field_id)
+    if field is None:
+        raise ValueError(f"Unknown profile field: {field_id}")
+    return field
+
+
+async def _resolve_profile_series_linker(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    series_items: Sequence[Mapping[str, Any]],
+) -> JsonObject:
+    column_sets = []
+    for series_item in series_items:
+        profile = await _series_profile(session, project_id, series_item)
+        table = _profile_table(profile)
+        column_sets.append(set(_columns_for_source("analytics", table)))
+    valid = [
+        linker_id
+        for linker_id in ("sample", "run_sample", "feature", "run", "entity")
+        if all(LINKERS[linker_id]["column"] in columns for columns in column_sets)
+    ]
+    requested = normalize_linker(config.get("linker"))
+    chart = str(config.get("visualization") or "table")
+    required = _chart_requires_linker(chart, config, series_items)
+    if requested["kind"] != "auto":
+        column = LINKERS[requested["kind"]]["column"]
+        if requested["kind"] not in valid or not isinstance(column, str):
+            raise ValueError(f"Matched by {requested['kind']} is not valid here.")
+        return {
+            "kind": requested["kind"],
+            "column": column,
+            "candidates": valid,
+            "required": required,
+            "auto_selected": False,
+        }
+    if len(valid) == 1:
+        selected = valid[0]
+        return {
+            "kind": selected,
+            "column": LINKERS[selected]["column"],
+            "candidates": valid,
+            "required": required,
+            "auto_selected": True,
+        }
+    if required and len(valid) > 1:
+        raise ValueError(
+            "This plot has multiple valid linkers. Choose Matched by explicitly."
+        )
+    if required:
+        raise ValueError("This plot requires a visible Matched by linker.")
+    selected = valid[0] if valid else "auto"
+    return {
+        "kind": selected,
+        "column": LINKERS.get(selected, LINKERS["auto"])["column"],
+        "candidates": valid,
+        "required": required,
+        "auto_selected": bool(valid),
+    }
+
+
+def _chart_requires_linker(
+    chart: str,
+    config: Mapping[str, Any],
+    series_items: Sequence[Mapping[str, Any]],
+) -> bool:
+    rule = chart_rule(chart)
+    requirement = rule.get("requires_linker")
+    if requirement is True:
+        return True
+    if requirement == "multi_series":
+        return len(series_items) > 1
+    if requirement == "multi_numeric":
+        return len(series_items) > 1
+    if requirement == "comparison":
+        return str(config.get("mode") or "") == "comparison"
+    return False
+
+
+async def _context_where_sql(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    columns: Sequence[str],
+    parameters: list[Any],
+) -> list[str]:
+    context = config.get("context")
+    if not isinstance(context, Mapping):
+        return []
+    kind = str(context.get("kind") or "cohort")
+    where_parts: list[str] = []
+    if kind == "sample":
+        sample_id = context.get("sample_id")
+        if isinstance(sample_id, str) and sample_id and "sample_id" in columns:
+            sample_pk = await _sample_pk(session, project_id, sample_id)
+            parameters.append(sample_pk)
+            where_parts.append("sample_id = ?")
+        run_sample_id = context.get("run_sample_id")
+        if (
+            isinstance(run_sample_id, str)
+            and run_sample_id
+            and "run_sample_id" in columns
+        ):
+            run_sample_pk = await _run_sample_pk(session, project_id, run_sample_id)
+            parameters.append(run_sample_pk)
+            where_parts.append("run_sample_id = ?")
+    elif kind == "cohort":
+        sample_set_id = context.get("sample_set_id")
+        if (
+            isinstance(sample_set_id, str)
+            and sample_set_id
+            and "run_sample_id" in columns
+        ):
+            run_sample_ids = await _sample_set_run_sample_pks(
+                session, project_id, sample_set_id
+            )
+            if not run_sample_ids:
+                where_parts.append("1 = 0")
+            else:
+                parameters.extend(run_sample_ids)
+                where_parts.append(
+                    f"run_sample_id IN ({', '.join('?' for _ in run_sample_ids)})"
+                )
+    return where_parts
+
+
+def _series_filters_sql(
+    *,
+    table: str,
+    profile_pk: int,
+    columns: Sequence[str],
+    filters: Sequence[Any],
+    parameters: list[Any],
+) -> list[str]:
+    where_parts: list[str] = []
+    for filter_config in filters:
+        normalized = _normalize_series_filter(filter_config)
+        if normalized is None:
+            continue
+        if table == "sample_variant_calls" and normalized["field"] == "feature_id":
+            where_parts.append(
+                _variant_feature_filter_sql(normalized, profile_pk, parameters)
+            )
+            continue
+        where_parts.append(_filter_sql(columns, normalized, parameters))
+    return where_parts
+
+
+def _variant_feature_filter_sql(
+    filter_config: Mapping[str, Any], profile_pk: int, parameters: list[Any]
+) -> str:
+    value = filter_config.get("value")
+    operator = str(filter_config.get("operator") or filter_config.get("op") or "eq")
+    annotation_source = _readable_source_sql("variant_annotations")
+    if operator == "in":
+        values = list(
+            value
+            if isinstance(value, Sequence) and not isinstance(value, str)
+            else [value]
+        )
+        if not values:
+            return "1 = 0"
+        parameters.extend([profile_pk, *values])
+        return (
+            "variant_id IN ("
+            f"SELECT variant_id FROM {annotation_source} "
+            "WHERE data_profile_id = ? "
+            f"AND feature_id IN ({', '.join('?' for _ in values)})"
+            ")"
+        )
+    parameters.extend([profile_pk, value])
+    return (
+        "variant_id IN ("
+        f"SELECT variant_id FROM {annotation_source} "
+        "WHERE data_profile_id = ? AND feature_id = ?"
+        ")"
+    )
+
+
+def _normalize_series_filter(filter_config: Any) -> JsonObject | None:
+    if not isinstance(filter_config, Mapping):
+        raise ValueError("Filters must be objects.")
+    field = str(filter_config.get("field") or "")
+    field = {
+        "feature": "feature_id",
+        "feature_label": "feature_id",
+        "gene": "feature_id",
+        "gene_symbol": "feature_id",
+        "field": "field_id",
+        "field_label": "field_id",
+        "metric": "field_id",
+        "sample": "sample_id",
+        "processed_sample": "run_sample_id",
+    }.get(field, field)
+    if not field:
+        return None
+    return dict(filter_config) | {"field": field}
+
+
+def _combined_filters(
+    config: Mapping[str, Any], series_item: Mapping[str, Any]
+) -> list[Any]:
+    query = _query_config(config)
+    filters: list[Any] = []
+    for value in (
+        config.get("filters"),
+        query.get("filters"),
+        series_item.get("filters"),
+    ):
+        if isinstance(value, Sequence) and not isinstance(value, str):
+            filters.extend(value)
+    return filters
+
+
+def _align_series_rows(
+    *,
+    aliases: Sequence[str],
+    linker_column: str | None,
+    linker_kind: str,
+    series_rows: Sequence[Sequence[Mapping[str, Any]]],
+) -> tuple[list[str], list[JsonObject], JsonObject]:
+    if linker_column is None:
+        columns = list(aliases)
+        rows = [dict(row) for row in series_rows[0]] if series_rows else []
+        return (
+            columns,
+            rows,
+            _linker_diagnostics(
+                linker_kind=linker_kind,
+                matched=len(rows),
+                unmatched=0,
+                duplicate_conflicts=0,
+                rows_excluded=0,
+            ),
+        )
+    maps: list[dict[Any, Any]] = []
+    conflict_keys: set[Any] = set()
+    total_source_rows = 0
+    for alias, rows in zip(aliases, series_rows, strict=True):
+        values: dict[Any, Any] = {}
+        seen: dict[Any, Any] = {}
+        for row in rows:
+            total_source_rows += 1
+            key = row.get("__linker")
+            value = row.get(alias)
+            if key is None:
+                continue
+            if key in seen and seen[key] != value:
+                conflict_keys.add(key)
+                continue
+            seen[key] = value
+            values[key] = value
+        maps.append(values)
+    if not maps:
+        return (
+            [linker_column, *aliases],
+            [],
+            _linker_diagnostics(
+                linker_kind=linker_kind,
+                matched=0,
+                unmatched=0,
+                duplicate_conflicts=0,
+                rows_excluded=0,
+            ),
+        )
+    key_sets = [set(values) - conflict_keys for values in maps]
+    matched_keys = set.intersection(*key_sets) if key_sets else set()
+    union_keys = set.union(*key_sets) if key_sets else set()
+    rows = [
+        {linker_column: key}
+        | {alias: values.get(key) for alias, values in zip(aliases, maps, strict=True)}
+        for key in sorted(matched_keys, key=lambda value: str(value))
+    ]
+    used_values = len(rows) * len(aliases)
+    diagnostics = _linker_diagnostics(
+        linker_kind=linker_kind,
+        matched=len(rows),
+        unmatched=len(union_keys - matched_keys),
+        duplicate_conflicts=len(conflict_keys),
+        rows_excluded=max(total_source_rows - used_values, 0),
+    )
+    return [linker_column, *aliases], rows, diagnostics
+
+
+def _linker_diagnostics(
+    *,
+    linker_kind: str,
+    matched: int,
+    unmatched: int,
+    duplicate_conflicts: int,
+    rows_excluded: int,
+) -> JsonObject:
+    return {
+        "linker": linker_kind,
+        "matched_count": matched,
+        "unmatched_count": unmatched,
+        "duplicate_conflict_count": duplicate_conflicts,
+        "rows_excluded": rows_excluded,
+    }
+
+
+def _profile_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    raw = config.get("series")
+    if isinstance(raw, Mapping):
+        raw_items = [raw]
+    elif isinstance(raw, Sequence) and not isinstance(raw, str):
+        raw_items = [item for item in raw if isinstance(item, Mapping)]
+    else:
+        raw_items = []
+    items = [
+        item
+        for item in raw_items
+        if _series_profile_id(item) and _series_field_id(item)
+    ]
+    return items
+
+
+def _series_profile_id(series_item: Mapping[str, Any]) -> str:
+    source = series_item.get("source")
+    if isinstance(source, Mapping):
+        value = source.get("data_profile_id") or source.get("id")
+        if isinstance(value, str):
+            return value
+    value = (
+        series_item.get("profile_id")
+        or series_item.get("data_profile_id")
+        or series_item.get("profileId")
+    )
+    return str(value) if isinstance(value, str) else ""
+
+
+def _series_field_id(series_item: Mapping[str, Any]) -> str:
+    value = (
+        series_item.get("field_id")
+        or series_item.get("field")
+        or series_item.get("fieldId")
+        or series_item.get("value")
+    )
+    return str(value) if isinstance(value, str) else ""
+
+
+def _series_aliases(series_items: Sequence[Mapping[str, Any]]) -> list[str]:
+    aliases: list[str] = []
+    used: set[str] = set()
+    for index, series_item in enumerate(series_items):
+        label = str(
+            series_item.get("name")
+            or series_item.get("label")
+            or _series_field_id(series_item)
+            or f"series_{index + 1}"
+        )
+        alias = _safe_alias(label, fallback=f"series_{index + 1}")
+        if alias in used:
+            alias = f"{alias}_{index + 1}"
+        used.add(alias)
+        aliases.append(alias)
+    return aliases
+
+
+def _readable_source_sql(table: str) -> str:
+    integer_table = INTEGER_KEYED_TABLES.get(table)
+    if integer_table is None:
+        return _quote_identifier(table)
+    return f"({integer_table.readable_select_sql()})"
+
+
+def _series_source_sql(table: str) -> str:
+    if table in {"sample_metrics", "entity_attributes"}:
+        return _quote_identifier(table)
+    return _readable_source_sql(table)
+
+
+def _set_runtime_metadata(
+    config: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> None:
+    if isinstance(config, dict):
+        runtime = config.setdefault("_runtime", {})
+        if isinstance(runtime, dict):
+            runtime.update(metadata)
+
+
+def _runtime_metadata(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    runtime = config.get("_runtime")
+    return runtime if isinstance(runtime, Mapping) else {}
+
+
+async def _sample_pk(
+    session: AsyncSession, project_id: str | None, sample_id: str
+) -> int | None:
+    statement = select(SampleRecord).where(SampleRecord.sample_id == sample_id)
+    if project_id is not None:
+        statement = statement.where(
+            SampleRecord.project_id == await _project_pk(session, project_id)
+        )
+    row = (await session.exec(statement)).first()
+    return row.id if row is not None else None
+
+
+async def _run_sample_pk(
+    session: AsyncSession, project_id: str | None, run_sample_id: str
+) -> int | None:
+    statement = select(RunSampleRecord).where(
+        RunSampleRecord.run_sample_id == run_sample_id
+    )
+    if project_id is not None:
+        statement = statement.where(
+            RunSampleRecord.project_id == await _project_pk(session, project_id)
+        )
+    row = (await session.exec(statement)).first()
+    return row.id if row is not None else None
+
+
+async def _sample_set_run_sample_pks(
+    session: AsyncSession, project_id: str | None, sample_set_id: str
+) -> list[int]:
+    statement = select(SampleSetRecord).where(
+        SampleSetRecord.sample_set_id == sample_set_id
+    )
+    if project_id is not None:
+        statement = statement.where(
+            SampleSetRecord.project_id == await _project_pk(session, project_id)
+        )
+    sample_set = (await session.exec(statement)).first()
+    if sample_set is None or sample_set.id is None:
+        return []
+    rows = (
+        await session.exec(
+            select(SampleSetMemberRecord.run_sample_id).where(
+                SampleSetMemberRecord.sample_set_id == sample_set.id
+            )
+        )
+    ).all()
+    return [int(row) for row in rows]
 
 
 async def _compile_profile_query(
@@ -606,22 +1481,52 @@ def compile_insight_result(
     insight_id: str | None,
     computed_at: datetime,
     cached: bool,
+    result_policy_summary: Mapping[str, Any] | None = None,
 ) -> JsonObject:
     """Compile query rows into a dashboard/report insight payload."""
 
     visualization = str(config.get("visualization") or "table")
     row_dicts = [dict(row) for row in rows]
+    plot_table = {
+        "columns": list(columns),
+        "rows": row_dicts,
+        "row_count": len(row_dicts),
+    }
+    runtime = _runtime_metadata(config)
+    result_policy = (
+        dict(result_policy_summary)
+        if result_policy_summary is not None
+        else _inline_result_policy_summary(config, len(row_dicts))
+    )
     result: JsonObject = {
         "kind": "insight_result",
         "insight_id": insight_id,
         "title": config.get("title") or config.get("name") or "Untitled insight",
         "description": config.get("description"),
+        "context": (
+            config.get("context") if isinstance(config.get("context"), dict) else {}
+        ),
+        "mode": config.get("mode") or _default_mode(config),
+        "linker": runtime.get("linker") or normalize_linker(config.get("linker")),
+        "filters": (
+            config.get("filters") if isinstance(config.get("filters"), list) else []
+        ),
+        "result_policy": result_policy,
+        "linker_diagnostics": runtime.get("linker_diagnostics")
+        or _linker_diagnostics(
+            linker_kind=str(normalize_linker(config.get("linker"))["kind"]),
+            matched=len(row_dicts),
+            unmatched=0,
+            duplicate_conflicts=0,
+            rows_excluded=0,
+        ),
         "visualization": visualization,
         "display": (
             config.get("display") if isinstance(config.get("display"), dict) else {}
         ),
         "columns": list(columns),
         "rows": row_dicts,
+        "plot_table": plot_table,
         "computed_at": computed_at.isoformat(),
         "cached": cached,
     }
@@ -632,8 +1537,175 @@ def compile_insight_result(
         # visualizations are expressed as ECharts options.
         result["metric"] = _metric_payload(row_dicts, columns)
         return result
+    _validate_plot_result(config, list(columns), row_dicts)
     result["echarts_options"] = _echarts_options(config, list(columns), row_dicts)
     return result
+
+
+def _apply_result_policy(
+    *,
+    config: Mapping[str, Any],
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+    analytics_store: DuckDBAnalyticsStore,
+) -> tuple[list[JsonObject], JsonObject]:
+    policy = normalize_result_policy(config.get("result_policy"))
+    mode = str(policy["mode"])
+    limit = int(policy["limit"])
+    row_dicts = [dict(row) for row in rows]
+    if mode == "all_rows" and len(row_dicts) > ALL_ROWS_INLINE_THRESHOLD:
+        raise ValueError(
+            "All rows can only be embedded below the configured response threshold. "
+            "Use Export full data for larger results."
+        )
+    if mode == "random_sample" and len(row_dicts) > limit:
+        seed = str(policy.get("seed") or "goodomics")
+        randomizer = random.Random(seed)
+        sampled_indices = sorted(randomizer.sample(range(len(row_dicts)), limit))
+        sampled = [row_dicts[index] for index in sampled_indices]
+        return sampled, {
+            **policy,
+            "embedded_row_count": len(sampled),
+            "source_row_count": len(row_dicts),
+            "sampled": True,
+        }
+    if mode == "export_full_data":
+        artifact = _write_plot_artifact(
+            analytics_store=analytics_store,
+            columns=columns,
+            rows=row_dicts,
+        )
+        embedded = row_dicts[:PREVIEW_DEFAULT_LIMIT]
+        return embedded, {
+            **policy,
+            "embedded_row_count": len(embedded),
+            "source_row_count": len(row_dicts),
+            "artifact": artifact,
+            "exported": True,
+        }
+    embedded = row_dicts[:limit]
+    return embedded, {
+        **policy,
+        "embedded_row_count": len(embedded),
+        "source_row_count": len(row_dicts),
+    }
+
+
+def _write_plot_artifact(
+    *,
+    analytics_store: DuckDBAnalyticsStore,
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> JsonObject:
+    artifact_dir = analytics_store.path.parent / "insight_artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_id = f"plot_table_{uuid4().hex}.json"
+    path = artifact_dir / artifact_id
+    payload = {"columns": list(columns), "rows": [dict(row) for row in rows]}
+    path.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    return {
+        "artifact_id": artifact_id,
+        "path": str(path),
+        "format": "json",
+        "row_count": len(rows),
+    }
+
+
+def _inline_result_policy_summary(
+    config: Mapping[str, Any], row_count: int
+) -> JsonObject:
+    policy = normalize_result_policy(config.get("result_policy"))
+    return {
+        **policy,
+        "embedded_row_count": row_count,
+        "source_row_count": row_count,
+    }
+
+
+def _validate_plot_result(
+    config: Mapping[str, Any], columns: list[str], rows: list[JsonObject]
+) -> None:
+    visualization = str(config.get("visualization") or "table")
+    if visualization in {"table", "metric", "stat", "number"}:
+        return
+    query = _query_config(config)
+    x_field = str(query.get("x") or _default_x_field(config, columns))
+    y_field = str(
+        query.get("y") or _first_numeric_column(columns, rows, exclude={x_field}) or ""
+    )
+    series_fields = _plot_series_fields(config, columns, rows, x_field, y_field)
+    numeric_fields = [
+        field for field in series_fields if _column_is_numeric(rows, field)
+    ]
+    if visualization == "scatter":
+        linker = _runtime_metadata(config).get("linker") or normalize_linker(
+            config.get("linker")
+        )
+        if len(series_fields) != 2 or len(numeric_fields) != 2:
+            raise ValueError("Scatter plots require exactly two numeric measures.")
+        if not isinstance(linker, Mapping) or linker.get("kind") in {None, "auto"}:
+            raise ValueError("Scatter plots require a visible Matched by linker.")
+    if visualization in {"line", "area", "histogram", "boxplot"}:
+        non_numeric = [field for field in series_fields if field not in numeric_fields]
+        if non_numeric:
+            raise ValueError(
+                f"{visualization} charts require numeric fields: "
+                f"{', '.join(non_numeric)}"
+            )
+    if visualization == "stacked_bar":
+        if len(series_fields) < 2:
+            raise ValueError("Stacked bars require at least two numeric series.")
+        non_numeric = [field for field in series_fields if field not in numeric_fields]
+        if non_numeric:
+            raise ValueError(
+                "Stacked bars require numeric fields: " + ", ".join(non_numeric)
+            )
+    if visualization in {"pie", "donut"} and len(series_fields) != 1:
+        raise ValueError("Pie and donut charts require exactly one series.")
+
+
+def _plot_series_fields(
+    config: Mapping[str, Any],
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+    x_field: str,
+    y_field: str,
+) -> list[str]:
+    runtime = _runtime_metadata(config)
+    runtime_aliases = runtime.get("series_aliases")
+    if isinstance(runtime_aliases, Sequence) and not isinstance(runtime_aliases, str):
+        return [str(field) for field in runtime_aliases if str(field) in columns]
+    query = _query_config(config)
+    if str(config.get("visualization") or "") == "scatter":
+        x_value = query.get("x")
+        y_value = query.get("y")
+        if isinstance(x_value, str) and isinstance(y_value, str):
+            return [field for field in (x_value, y_value) if field in columns]
+    if str(config.get("visualization") or "") == "histogram":
+        return _histogram_value_fields(query, columns, y_field)
+    if query.get("y") is not None and y_field in columns:
+        return [y_field]
+    first_row = rows[0] if rows else {}
+    return [
+        column
+        for column in columns
+        if column != x_field and column in first_row and column != "__linker"
+    ]
+
+
+def _default_x_field(config: Mapping[str, Any], columns: Sequence[str]) -> str:
+    query = _query_config(config)
+    dimensions = _string_list(query.get("dimensions") or query.get("group_by"))
+    if query.get("x") is not None:
+        return str(query["x"])
+    if dimensions:
+        return dimensions[0]
+    return columns[0] if columns else ""
+
+
+def _column_is_numeric(rows: Sequence[Mapping[str, Any]], field: str) -> bool:
+    values = [row.get(field) for row in rows if row.get(field) is not None]
+    return bool(values) and all(_is_numeric_value(value) for value in values)
 
 
 async def fingerprint_source(
@@ -674,6 +1746,26 @@ async def fingerprint_source(
                     else None
                 ),
                 "fields": field_count,
+            }
+        )
+    if source.get("kind") == "profile_series":
+        profile_ids = [
+            str(value)
+            for value in source.get("data_profile_ids", [])
+            if isinstance(value, str)
+        ]
+        return canonical_hash(
+            {
+                "kind": "profile_series",
+                "profiles": [
+                    await fingerprint_source(
+                        session=session,
+                        analytics_store=analytics_store,
+                        project_id=project_id,
+                        source={"kind": "data_profile", "data_profile_id": profile_id},
+                    )
+                    for profile_id in profile_ids
+                ],
             }
         )
     store = source.get("store")
@@ -883,7 +1975,8 @@ async def _execute_catalog_sql(
         text(
             f"SELECT * FROM ({bounded_sql}) AS goodomics_query LIMIT :goodomics_limit"
         ),
-        params=named_parameters | {"goodomics_limit": min(max(limit, 1), 5000)},
+        params=named_parameters
+        | {"goodomics_limit": min(max(limit, 1), EXPORT_FULL_DATA_LIMIT)},
     )
     rows = [dict(row) for row in result.mappings().all()]
     columns = list(rows[0]) if rows else []
@@ -971,6 +2064,14 @@ def _query_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
 def _query_source(config: Mapping[str, Any]) -> JsonObject:
     # Extract only the source identity used for fingerprinting. Query shape,
     # filters, and visualization are already part of the config hash.
+    profile_series = _profile_series_items(config)
+    if profile_series:
+        return {
+            "kind": "profile_series",
+            "data_profile_ids": sorted(
+                {_series_profile_id(series_item) for series_item in profile_series}
+            ),
+        }
     query = _query_config(config)
     source = query.get("source")
     if isinstance(source, Mapping) and source.get("kind") == "data_profile":
@@ -1007,15 +2108,29 @@ async def _get_profile_record(
     project_id: str | None,
     data_profile_id: str,
 ) -> DataProfileRecord | None:
-    # Built-in profiles have project_id=None and are visible everywhere. Project
-    # profiles are visible only within their owning project.
     statement = select(DataProfileRecord).where(
         DataProfileRecord.data_profile_id == data_profile_id
     )
-    row = (await session.exec(statement)).first()
-    if row is None or project_id is None or row.project_id is None:
-        return row
-    return row if row.project_id == await _project_pk(session, project_id) else None
+    if project_id is not None:
+        project_pk = await _project_pk(session, project_id)
+        if project_pk is None:
+            return None
+        if project_id == DEFAULT_PROJECT_ID:
+            profile_project_id = cast(Any, DataProfileRecord.project_id)
+            statement = statement.where(
+                or_(
+                    profile_project_id == project_pk,
+                    profile_project_id.is_(None),
+                )
+            )
+        else:
+            statement = statement.where(DataProfileRecord.project_id == project_pk)
+    rows = list((await session.exec(statement)).all())
+    if project_id == DEFAULT_PROJECT_ID:
+        for row in rows:
+            if row.project_id == project_pk:
+                return row
+    return rows[0] if rows else None
 
 
 async def _get_profile_field_records(
@@ -1235,13 +2350,33 @@ def _measures(
     return measures
 
 
-def _query_limit(query_config: Mapping[str, Any]) -> int:
-    # Bound every query to keep previews/report execution responsive.
-    value = query_config.get("limit", 1000)
+def _query_limit(
+    query_config: Mapping[str, Any], config: Mapping[str, Any] | None = None
+) -> int:
+    # Bound every query according to the visible result-size policy. The final
+    # response may be smaller, sampled, or file-backed after rows are returned.
+    policy = normalize_result_policy(
+        config.get("result_policy") if isinstance(config, Mapping) else None
+    )
+    mode = str(policy["mode"])
+    if mode == "preview":
+        return PREVIEW_DEFAULT_LIMIT
+    if mode == "more_rows":
+        return min(int(policy["limit"]), MORE_ROWS_MAX_LIMIT)
+    if mode == "random_sample":
+        return min(
+            max(int(policy["limit"]) * 5, PREVIEW_DEFAULT_LIMIT),
+            MORE_ROWS_MAX_LIMIT,
+        )
+    if mode == "all_rows":
+        return ALL_ROWS_INLINE_THRESHOLD + 1
+    if mode == "export_full_data":
+        return EXPORT_FULL_DATA_LIMIT
+    value = query_config.get("limit", PREVIEW_DEFAULT_LIMIT)
     try:
-        return min(max(int(value), 1), 5000)
+        return min(max(int(value), 1), MORE_ROWS_MAX_LIMIT)
     except (TypeError, ValueError):
-        return 1000
+        return PREVIEW_DEFAULT_LIMIT
 
 
 def _validate_read_only_sql(sql: str) -> str:
@@ -1265,6 +2400,14 @@ def _echarts_options(
     visualization = str(config.get("visualization") or "bar")
     query = _query_config(config)
     colors = _display_colors(config)
+    runtime = _runtime_metadata(config)
+    runtime_aliases = runtime.get("series_aliases")
+    series_aliases = (
+        [str(value) for value in runtime_aliases if str(value) in columns]
+        if isinstance(runtime_aliases, Sequence)
+        and not isinstance(runtime_aliases, str)
+        else []
+    )
     dimensions = _string_list(query.get("dimensions") or query.get("group_by"))
     x_field = str(query.get("x") or (dimensions[0] if dimensions else columns[0]))
     y_field = str(
@@ -1297,6 +2440,9 @@ def _echarts_options(
             ],
         }
     if visualization == "scatter":
+        if len(series_aliases) >= 2:
+            x_field = series_aliases[0]
+            y_field = series_aliases[1]
         return {
             "tooltip": {"trigger": "item"},
             "grid": {
@@ -1321,7 +2467,13 @@ def _echarts_options(
             "series": [
                 {
                     "type": "scatter",
-                    "data": [[row.get(x_field), row.get(y_field)] for row in rows],
+                    "data": [
+                        {
+                            "value": [row.get(x_field), row.get(y_field)],
+                            "name": str(row.get(columns[0])) if columns else "",
+                        }
+                        for row in rows
+                    ],
                     "itemStyle": {"color": _series_color(colors, x_field, 0)},
                 }
             ],
@@ -1371,8 +2523,10 @@ def _echarts_options(
     if visualization == "histogram":
         # Histograms are computed server-side from raw numeric values so the
         # dashboard receives a compact binned series.
-        value_fields = _histogram_value_fields(query, columns, y_field) or (
-            [y_field] if y_field in columns else columns[:1]
+        value_fields = (
+            series_aliases
+            or _histogram_value_fields(query, columns, y_field)
+            or ([y_field] if y_field in columns else columns[:1])
         )
         bin_count = _histogram_bin_count(config)
         return {
@@ -1402,7 +2556,7 @@ def _echarts_options(
                 {
                     "name": value_field,
                     "type": "bar",
-                    "barGap": "0%",
+                    "barGap": "-100%" if len(value_fields) > 1 else "0%",
                     "data": [
                         {
                             "name": bin_["label"],
@@ -1414,11 +2568,22 @@ def _echarts_options(
                             bin_count=bin_count,
                         )
                     ],
-                    "itemStyle": {"color": _series_color(colors, value_field, index)},
+                    "itemStyle": {
+                        "color": _series_color(colors, value_field, index),
+                        "opacity": 0.48 if len(value_fields) > 1 else 0.82,
+                    },
                 }
                 for index, value_field in enumerate(value_fields)
             ],
         }
+    if visualization in {"boxplot", "box_plot"}:
+        return _boxplot_options(
+            config=config,
+            columns=columns,
+            rows=rows,
+            x_field=x_field,
+            y_fields=series_aliases or [y_field],
+        )
     chart_type = {
         "line": "line",
         "area": "line",
@@ -1429,9 +2594,17 @@ def _echarts_options(
     }.get(visualization, "bar")
     first_row = rows[0] if rows else {}
     series_fields = (
-        [y_field]
-        if query.get("y") is not None and y_field and y_field in first_row
-        else [column for column in columns if column != x_field and column in first_row]
+        series_aliases
+        if series_aliases
+        else (
+            [y_field]
+            if query.get("y") is not None and y_field and y_field in first_row
+            else [
+                column
+                for column in columns
+                if column != x_field and column in first_row
+            ]
+        )
     ) or ([y_field] if y_field else [])
     return {
         "tooltip": {"trigger": "axis"},
@@ -1483,6 +2656,88 @@ def _display_colors(config: Mapping[str, Any]) -> dict[str, str]:
         for key, value in colors.items()
         if isinstance(value, str) and value.startswith("#")
     }
+
+
+def _boxplot_options(
+    *,
+    config: Mapping[str, Any],
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+    x_field: str,
+    y_fields: Sequence[str],
+) -> JsonObject:
+    colors = _display_colors(config)
+    title = str(config.get("title") or config.get("name") or "Insight")
+    group_field = x_field if x_field in columns else columns[0] if columns else "group"
+    groups = list(dict.fromkeys(str(row.get(group_field)) for row in rows))
+    return {
+        "title": {"text": title, "left": "center"},
+        "tooltip": {"trigger": "item"},
+        "legend": {"type": "scroll"},
+        "grid": {
+            "left": 64,
+            "right": 32,
+            "top": 40,
+            "bottom": 72,
+            "containLabel": True,
+        },
+        "xAxis": {
+            "type": "category",
+            "name": group_field,
+            "data": groups,
+            "nameLocation": "middle",
+            "nameGap": 48,
+        },
+        "yAxis": {
+            "type": "value",
+            "name": ", ".join(y_fields),
+            "nameLocation": "middle",
+            "nameGap": 44,
+        },
+        "series": [
+            {
+                "name": field,
+                "type": "boxplot",
+                "data": [
+                    _five_number_summary(
+                        [
+                            float(row[field])
+                            for row in rows
+                            if str(row.get(group_field)) == group
+                            and _is_numeric_value(row.get(field))
+                        ]
+                    )
+                    for group in groups
+                ],
+                "itemStyle": {"color": _series_color(colors, field, index)},
+            }
+            for index, field in enumerate(y_fields)
+            if field in columns
+        ],
+    }
+
+
+def _five_number_summary(values: Sequence[float]) -> list[float | None]:
+    if not values:
+        return [None, None, None, None, None]
+    sorted_values = sorted(values)
+    return [
+        sorted_values[0],
+        _quantile(sorted_values, 0.25),
+        _quantile(sorted_values, 0.5),
+        _quantile(sorted_values, 0.75),
+        sorted_values[-1],
+    ]
+
+
+def _quantile(values: Sequence[float], q: float) -> float:
+    if len(values) == 1:
+        return values[0]
+    position = (len(values) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    fraction = position - lower
+    return values[lower] * (1 - fraction) + values[upper] * fraction
 
 
 def _series_color(

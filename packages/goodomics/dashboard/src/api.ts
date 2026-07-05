@@ -218,6 +218,35 @@ const reportResultSchema = z.object({
   result: z.record(z.string(), z.unknown()),
 });
 
+const insightCatalogSchema = z.object({
+  version: z.number(),
+  modes: z.array(z.record(z.string(), z.unknown())).default([]),
+  charts: z.array(z.record(z.string(), z.unknown())).default([]),
+  linkers: z.array(z.record(z.string(), z.unknown())).default([]),
+  result_policies: z.array(z.record(z.string(), z.unknown())).default([]),
+  validation_messages: z.record(z.string(), z.unknown()).default({}),
+});
+
+const insightValidationSchema = z.object({
+  valid: z.boolean(),
+  messages: z.array(z.record(z.string(), z.unknown())).default([]),
+  normalized_config: z.record(z.string(), z.unknown()),
+  explanation: z.string(),
+  catalog_version: z.number(),
+});
+
+const sampleSetSchema = z.object({
+  sample_set_id: z.string(),
+  project_id: z.string().nullable(),
+  name: z.string(),
+  kind: z.string(),
+  description: z.string().nullable(),
+  definition_json: z.record(z.string(), z.unknown()).default({}),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+  created_at: z.string(),
+  member_count: z.number(),
+});
+
 const aiMessageSchema = z.object({
   role: z.string(),
   content: z.string(),
@@ -255,6 +284,9 @@ export type SavedInsight = z.infer<typeof insightSchema>;
 export type SavedReport = z.infer<typeof reportSchema>;
 export type InsightResult = z.infer<typeof insightResultSchema>['result'];
 export type ReportResult = z.infer<typeof reportResultSchema>['result'];
+export type InsightCatalog = z.infer<typeof insightCatalogSchema>;
+export type InsightValidation = z.infer<typeof insightValidationSchema>;
+export type SampleSet = z.infer<typeof sampleSetSchema>;
 export type AiMessage = z.infer<typeof aiMessageSchema>;
 export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
 export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
@@ -299,12 +331,15 @@ export function listProjectSamples({
   limit,
   offset,
   projectId,
+  search,
 }: {
   limit: number;
   offset: number;
   projectId: string;
+  search?: string;
 }) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search?.trim()) params.set("search", search.trim());
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/samples?${params.toString()}`,
     samplePageSchema,
@@ -453,6 +488,26 @@ export function listProjectDatabaseTables(projectId: string) {
 export function listProjectDataProfiles(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
   return getJson(`/api/v1/profiles?${params.toString()}`, z.array(dataProfileSchema));
+}
+
+export function getInsightCatalog() {
+  return getJson('/api/v1/insights/catalog', insightCatalogSchema);
+}
+
+export async function validateInsightConfig(config: Record<string, unknown>) {
+  const response = await fetch('/api/v1/insights/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return insightValidationSchema.parse(await response.json());
+}
+
+export function listSampleSets(projectId: string, kind?: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (kind) params.set('kind', kind);
+  return getJson(`/api/v1/sample-sets?${params.toString()}`, z.array(sampleSetSchema));
 }
 
 export function getProjectDataProfile(projectId: string, dataProfileId: string) {

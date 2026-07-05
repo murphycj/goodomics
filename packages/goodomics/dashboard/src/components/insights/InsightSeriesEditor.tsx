@@ -1,9 +1,23 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
-import { Copy, MoreHorizontal, Plus } from "lucide-react";
-import type { DataProfile, DataProfileField } from "../../api";
+import {
+  ChevronDown,
+  Copy,
+  Database,
+  MoreHorizontal,
+  Plus,
+  Search,
+} from "lucide-react";
+import type { DataProfile, DataProfileField, DatabaseTable } from "../../api";
 import { CHART_COLORS } from "../../lib/chartColors";
 import {
   Button,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -19,6 +33,16 @@ import {
 } from "../ui";
 import { isRecord } from "../reports/reportUtils";
 
+type QueryMode = "profile" | "table";
+type SourceTab = "profiles" | "sql";
+type Store = DatabaseTable["store"];
+type ProfileFieldGroup = { profile: DataProfile; fields: DataProfileField[] };
+type ProfileFieldOption = {
+  id: string;
+  profile: DataProfile;
+  field: DataProfileField;
+};
+
 export type BuilderSeries = {
   id: string;
   profileId: string;
@@ -28,52 +52,92 @@ export type BuilderSeries = {
   color: string;
 };
 
+export type SqlSourceSelection = {
+  store: Store;
+  table: string;
+  xField: string;
+  yField: string;
+};
+
 export function InsightSeriesEditor({
   profiles,
+  tables = [],
+  sourceKind = "profile",
+  store = "analytics",
+  table = "",
+  xField = "",
+  yField = "",
+  advancedSql = "",
   series,
   setSeries,
+  onAdvancedSqlChange,
+  onProfileFieldSelect,
+  onSqlSourceSelect,
 }: {
   profiles: DataProfile[];
+  tables?: DatabaseTable[];
+  sourceKind?: QueryMode;
+  store?: Store;
+  table?: string;
+  xField?: string;
+  yField?: string;
+  advancedSql?: string;
   series: BuilderSeries[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+  onAdvancedSqlChange?: (value: string) => void;
+  onProfileFieldSelect?: (selection: {
+    profileId: string;
+    fieldId: string;
+  }) => void;
+  onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Label>Series</Label>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            setSeries((current) => [
-              ...current,
-              blankSeries(current.length, current[0]?.profileId ?? "", ""),
-            ])
-          }
-        >
-          <Plus className="h-4 w-4" /> Series
-        </Button>
-      </div>
+      <Label>Series</Label>
       {series.map((item, index) => {
         const profile = profiles.find(
           (candidate) => candidate.data_profile_id === item.profileId,
         );
-        const fields = profile?.fields ?? [];
-        const field = fields.find(
+        const field = profile?.fields.find(
           (candidate) => candidate.field_id === item.fieldId,
         );
         return (
           <SeriesCard
+            advancedSql={advancedSql}
             field={field}
-            fields={fields}
             index={index}
             item={item}
             key={item.id}
             profiles={profiles}
             setSeries={setSeries}
+            sourceKind={sourceKind}
+            store={store}
+            table={table}
+            tables={tables}
+            xField={xField}
+            yField={yField}
+            onAdvancedSqlChange={onAdvancedSqlChange}
+            onProfileFieldSelect={onProfileFieldSelect}
+            onSqlSourceSelect={onSqlSourceSelect}
           />
         );
       })}
+      <Button
+        className="w-full justify-center"
+        size="sm"
+        variant="outline"
+        onClick={() =>
+          setSeries((current) => {
+            const previous = current[current.length - 1] ?? current[0];
+            return [
+              ...current,
+              blankSeries(current.length, previous?.profileId ?? "", ""),
+            ];
+          })
+        }
+      >
+        <Plus className="h-4 w-4" /> Series
+      </Button>
     </div>
   );
 }
@@ -109,7 +173,7 @@ export function profileSeries(
     ...current,
     profileId,
     fieldId: field?.field_id ?? "",
-    name: field?.display_name ?? "",
+    name: current.name,
   };
 }
 
@@ -134,63 +198,95 @@ export function seriesDisplayName(
   );
 }
 
+function customSeriesName(
+  series: BuilderSeries,
+  field: DataProfileField | undefined,
+) {
+  return series.name && series.name !== field?.display_name ? series.name : "";
+}
+
 function SeriesCard({
+  advancedSql,
   field,
-  fields,
   index,
   item,
   profiles,
   setSeries,
+  sourceKind,
+  store,
+  table,
+  tables,
+  xField,
+  yField,
+  onAdvancedSqlChange,
+  onProfileFieldSelect,
+  onSqlSourceSelect,
 }: {
+  advancedSql: string;
   field: DataProfileField | undefined;
-  fields: DataProfileField[];
   index: number;
   item: BuilderSeries;
   profiles: DataProfile[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+  sourceKind: QueryMode;
+  store: Store;
+  table: string;
+  tables: DatabaseTable[];
+  xField: string;
+  yField: string;
+  onAdvancedSqlChange?: (value: string) => void;
+  onProfileFieldSelect?: (selection: {
+    profileId: string;
+    fieldId: string;
+  }) => void;
+  onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
 }) {
+  const [renameOpen, setRenameOpen] = useState(false);
   return (
     <div className="rounded-md border border-[#d6dee8] bg-white p-3 shadow-sm">
-      <div className="mb-3 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
         <ColorPickerTrigger
           color={item.color}
           index={index}
           label={seriesDisplayName(profiles, item)}
           onChange={(color) => updateSeries(setSeries, item.id, { color })}
         />
-        <Input
-          aria-label="Series name"
-          className="h-9 min-w-0 border-transparent bg-transparent px-2 font-semibold shadow-none hover:border-[#cfd8e3] focus:border-[#cfd8e3]"
-          placeholder={field?.display_name || `Series ${index + 1}`}
-          value={item.name}
-          onChange={(event) =>
-            updateSeries(setSeries, item.id, { name: event.target.value })
-          }
+        <DataSourcePicker
+          advancedSql={advancedSql}
+          field={field}
+          item={item}
+          profiles={profiles}
+          setSeries={setSeries}
+          sourceKind={sourceKind}
+          store={store}
+          table={table}
+          tables={tables}
+          xField={xField}
+          yField={yField}
+          onAdvancedSqlChange={onAdvancedSqlChange}
+          onProfileFieldSelect={onProfileFieldSelect}
+          onSqlSourceSelect={onSqlSourceSelect}
         />
         <SeriesActions
           field={field}
           index={index}
           item={item}
           setSeries={setSeries}
+          onRename={() => setRenameOpen(true)}
+          onResetName={() => updateSeries(setSeries, item.id, { name: "" })}
         />
       </div>
-      <div className="space-y-2">
-        <ProfileSelect
-          item={item}
-          profiles={profiles}
-          setSeries={setSeries}
-        />
-        <FieldSelect
-          fields={fields}
-          item={item}
-          setSeries={setSeries}
-        />
-        <AggregationSelect
-          item={item}
-          setSeries={setSeries}
-        />
-        <FieldSummary field={field} />
+      <div className="mt-3 space-y-2">
+        <AggregationSelect item={item} setSeries={setSeries} />
+        <FieldSummary field={sourceKind === "profile" ? field : undefined} />
       </div>
+      <RenameSeriesDialog
+        defaultName={field?.display_name || `Series ${index + 1}`}
+        open={renameOpen}
+        value={customSeriesName(item, field)}
+        onOpenChange={setRenameOpen}
+        onRename={(name) => updateSeries(setSeries, item.id, { name })}
+      />
     </div>
   );
 }
@@ -241,11 +337,15 @@ function SeriesActions({
   index,
   item,
   setSeries,
+  onRename,
+  onResetName,
 }: {
   field: DataProfileField | undefined;
   index: number;
   item: BuilderSeries;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+  onRename: () => void;
+  onResetName: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -255,6 +355,11 @@ function SeriesActions({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[180px]">
+        <DropdownMenuItem onClick={onRename}>Rename</DropdownMenuItem>
+        {customSeriesName(item, field) ? (
+          <DropdownMenuItem onClick={onResetName}>Reset name</DropdownMenuItem>
+        ) : null}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() =>
             setSeries((current) => duplicateSeries(current, item, field, index))
@@ -275,6 +380,60 @@ function SeriesActions({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function RenameSeriesDialog({
+  defaultName,
+  open,
+  value,
+  onOpenChange,
+  onRename,
+}: {
+  defaultName: string;
+  open: boolean;
+  value: string;
+  onOpenChange: (value: boolean) => void;
+  onRename: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value || defaultName);
+
+  useEffect(() => {
+    if (open) setDraft(value || defaultName);
+  }, [defaultName, open, value]);
+
+  const save = () => {
+    const trimmed = draft.trim();
+    onRename(trimmed === defaultName ? "" : trimmed);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename series</DialogTitle>
+        </DialogHeader>
+        <Input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button type="button" onClick={save}>
+            Rename
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -303,86 +462,632 @@ function duplicateSeries(
   ];
 }
 
-function ProfileSelect({
+function DataSourcePicker({
+  advancedSql,
+  field,
   item,
   profiles,
   setSeries,
+  sourceKind,
+  store,
+  table,
+  tables,
+  xField,
+  yField,
+  onAdvancedSqlChange,
+  onProfileFieldSelect,
+  onSqlSourceSelect,
 }: {
+  advancedSql: string;
+  field: DataProfileField | undefined;
   item: BuilderSeries;
   profiles: DataProfile[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+  sourceKind: QueryMode;
+  store: Store;
+  table: string;
+  tables: DatabaseTable[];
+  xField: string;
+  yField: string;
+  onAdvancedSqlChange?: (value: string) => void;
+  onProfileFieldSelect?: (selection: {
+    profileId: string;
+    fieldId: string;
+  }) => void;
+  onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<SourceTab>("profiles");
+  const [search, setSearch] = useState("");
+  const [draftStore, setDraftStore] = useState<Store>(store);
+  const [draftTable, setDraftTable] = useState(table);
+  const [draftXField, setDraftXField] = useState(xField);
+  const [draftYField, setDraftYField] = useState(yField);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const selectedProfile = profiles.find(
+    (candidate) => candidate.data_profile_id === item.profileId,
+  );
+  const profileGroups = useMemo(
+    () => filterProfileGroups(profiles, search),
+    [profiles, search],
+  );
+  const profileOptions = useMemo(
+    () => flattenProfileOptions(profileGroups),
+    [profileGroups],
+  );
+  const [activeProfileOptionIndex, setActiveProfileOptionIndex] = useState(0);
+  const stores = useMemo(() => {
+    const unique = new Set<Store>(["analytics", "catalog"]);
+    for (const candidate of tables) unique.add(candidate.store);
+    return Array.from(unique);
+  }, [tables]);
+  const tablesForStore = tables.filter(
+    (candidate) => candidate.store === draftStore,
+  );
+  const filteredTablesForStore = filterSqlTables(tablesForStore, search);
+  const selectedTable =
+    tablesForStore.find((candidate) => candidate.name === draftTable) ??
+    tablesForStore[0];
+  const columns = selectedTable?.columns ?? [];
+  const filteredColumns = filterSqlColumns(columns, selectedTable?.name, search);
+  const sqlSummary =
+    table || advancedSql.trim()
+      ? `${store}.${table || "SQL query"}`
+      : "Choose SQL source";
+  const customName = customSeriesName(item, field);
+  const profileSourceLabel =
+    customName || field?.display_name || "Choose field";
+
+  useEffect(() => {
+    if (open) return;
+    setDraftStore(store);
+    setDraftTable(table);
+    setDraftXField(xField);
+    setDraftYField(yField);
+  }, [open, store, table, xField, yField]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  useEffect(() => {
+    setActiveProfileOptionIndex(0);
+  }, [search, tab]);
+
+  useEffect(() => {
+    if (profileOptions.length === 0) {
+      setActiveProfileOptionIndex(0);
+      return;
+    }
+    setActiveProfileOptionIndex((current) =>
+      Math.min(current, profileOptions.length - 1),
+    );
+  }, [profileOptions.length]);
+
+  const selectField = (profile: DataProfile, nextField: DataProfileField) => {
+    setSeries((current) =>
+      current.map((candidate) =>
+        candidate.id === item.id
+          ? {
+              ...candidate,
+              profileId: profile.data_profile_id,
+              fieldId: nextField.field_id,
+              name:
+                candidate.name && candidate.name !== field?.display_name
+                  ? candidate.name
+                  : "",
+            }
+          : candidate,
+      ),
+    );
+    onProfileFieldSelect?.({
+      profileId: profile.data_profile_id,
+      fieldId: nextField.field_id,
+    });
+    setOpen(false);
+  };
+
+  const selectProfileOption = (option: ProfileFieldOption) => {
+    selectField(option.profile, option.field);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (tab !== "profiles" || profileOptions.length === 0) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveProfileOptionIndex((current) =>
+        current + 1 >= profileOptions.length ? 0 : current + 1,
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveProfileOptionIndex((current) =>
+        current - 1 < 0 ? profileOptions.length - 1 : current - 1,
+      );
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const option = profileOptions[activeProfileOptionIndex];
+      if (option) selectProfileOption(option);
+    }
+  };
+
+  const changeDraftStore = (value: Store) => {
+    const nextTable = tables.find((candidate) => candidate.store === value);
+    setDraftStore(value);
+    setDraftTable(nextTable?.name ?? "");
+    setDraftXField(nextTable?.columns[0] ?? "");
+    setDraftYField(defaultYColumn(nextTable?.columns ?? []));
+  };
+
+  const changeDraftTable = (value: string) => {
+    const nextTable = tables.find(
+      (candidate) =>
+        candidate.store === draftStore && candidate.name === value,
+    );
+    setDraftTable(value);
+    setDraftXField(nextTable?.columns[0] ?? "");
+    setDraftYField(defaultYColumn(nextTable?.columns ?? []));
+  };
+
+  const useSqlSource = () => {
+    const nextTable =
+      selectedTable ??
+      tables.find((candidate) => candidate.store === draftStore) ??
+      tables[0];
+    const nextColumns = nextTable?.columns ?? [];
+    onSqlSourceSelect?.({
+      store: nextTable?.store ?? draftStore,
+      table: nextTable?.name ?? draftTable,
+      xField: draftXField || nextColumns[0] || "",
+      yField: draftYField || defaultYColumn(nextColumns),
+    });
+    setOpen(false);
+  };
+
   return (
-    <Select
-      value={item.profileId}
-      onValueChange={(value) =>
-        setSeries((current) =>
-          current.map((candidate) =>
-            candidate.id === item.id
-              ? profileSeries(value, profiles, candidate)
-              : candidate,
-          ),
-        )
-      }
-    >
-      <SelectTrigger>
-        <SelectValue placeholder="Data profile" />
-      </SelectTrigger>
-      <SelectContent>
-        {profiles.map((profile) => (
-          <SelectItem
-            key={profile.data_profile_id}
-            value={profile.data_profile_id}
-          >
-            {profile.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          className="h-auto w-full justify-between gap-3 px-3 py-1.5 text-left"
+          type="button"
+          variant="outline"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <Database className="h-4 w-4 shrink-0 text-[#657082]" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-[#1f2937]">
+                {sourceKind === "table"
+                  ? sqlSummary
+                  : profileSourceLabel}
+              </span>
+            </span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-[#657082]" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[min(560px,92vw)] p-3">
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+            <Input
+              className="pl-9 pr-[128px]"
+              placeholder={
+                tab === "profiles"
+                  ? "Search fields..."
+                  : "Search tables or columns..."
+              }
+              ref={searchInputRef}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+            />
+            <div className="absolute right-1 top-1/2 w-[118px] -translate-y-1/2">
+              <Select
+                value={tab}
+                onValueChange={(value) => setTab(value as SourceTab)}
+              >
+                <SelectTrigger className="h-8 border-transparent bg-[#eef2f6] px-2 text-sm shadow-none">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="profiles">Fields</SelectItem>
+                  <SelectItem value="sql">SQL</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {tab === "profiles" ? (
+            <ProfileSourceList
+              activeOptionId={profileOptions[activeProfileOptionIndex]?.id}
+              groups={profileGroups}
+              search={search}
+              selectedFieldId={item.fieldId}
+              selectedProfileId={item.profileId}
+              onActiveOptionChange={(optionId) => {
+                const index = profileOptions.findIndex(
+                  (option) => option.id === optionId,
+                );
+                if (index >= 0) setActiveProfileOptionIndex(index);
+              }}
+              onSelect={selectField}
+            />
+          ) : (
+            <SqlSourceForm
+              advancedSql={advancedSql}
+              columns={filteredColumns}
+              draftStore={draftStore}
+              draftTable={draftTable}
+              draftXField={draftXField}
+              draftYField={draftYField}
+              stores={stores}
+              tables={filteredTablesForStore}
+              onAdvancedSqlChange={onAdvancedSqlChange}
+              onDraftStoreChange={changeDraftStore}
+              onDraftTableChange={changeDraftTable}
+              onDraftXFieldChange={setDraftXField}
+              onDraftYFieldChange={setDraftYField}
+              onUseSqlSource={useSqlSource}
+            />
+          )}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-function FieldSelect({
-  fields,
-  item,
-  setSeries,
+function ProfileSourceList({
+  activeOptionId,
+  groups,
+  search,
+  selectedFieldId,
+  selectedProfileId,
+  onActiveOptionChange,
+  onSelect,
 }: {
-  fields: DataProfileField[];
-  item: BuilderSeries;
-  setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+  activeOptionId: string | undefined;
+  groups: ProfileFieldGroup[];
+  search: string;
+  selectedFieldId: string;
+  selectedProfileId: string;
+  onActiveOptionChange: (optionId: string) => void;
+  onSelect: (profile: DataProfile, field: DataProfileField) => void;
+}) {
+  useEffect(() => {
+    if (!activeOptionId) return;
+    document
+      .getElementById(profileOptionDomId(activeOptionId))
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeOptionId]);
+
+  return (
+    <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+      {groups.map(({ profile, fields }) => (
+        <section
+          className="rounded-md border border-[#d9e1ea] bg-white"
+          key={profile.data_profile_id}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-[#e8edf3] px-3 py-2">
+            <div className="group relative min-w-0">
+              <div className="truncate text-xs font-bold uppercase tracking-wide text-[#657082]">
+                {highlightSearchMatch(profile.name.toUpperCase(), search)}
+              </div>
+              <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-[300px] rounded-md border border-[#d6dee8] bg-white p-2 text-xs leading-5 text-[#526071] opacity-0 shadow-[0_12px_30px_rgb(0_0_0/0.14)] transition-opacity delay-700 group-hover:opacity-100">
+                <div className="font-semibold text-[#1f2937]">
+                  {profile.name}
+                </div>
+                <div>{profile.data_profile_id}</div>
+                {profile.data_type ? <div>{profile.data_type}</div> : null}
+              </div>
+            </div>
+            <div className="shrink-0 text-xs text-[#657082]">
+              {fields.length} fields
+            </div>
+          </div>
+          <div className="grid gap-1 p-2">
+            {fields.map((candidate) => {
+              const optionId = profileOptionId(profile, candidate);
+              const active = activeOptionId === optionId;
+              const selected =
+                selectedProfileId === profile.data_profile_id &&
+                selectedFieldId === candidate.field_id;
+              return (
+                <button
+                  className={[
+                    "group relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2.5 text-left text-sm transition-colors",
+                    selected
+                      ? "bg-[#e8f5ee] text-[#16784a]"
+                      : active
+                        ? "bg-[#f4f8fb] text-[#1f2937]"
+                        : "hover:bg-white",
+                  ].join(" ")}
+                  id={profileOptionDomId(optionId)}
+                  key={candidate.field_id}
+                  type="button"
+                  onClick={() => onSelect(profile, candidate)}
+                  onMouseEnter={() => onActiveOptionChange(optionId)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[15px] font-semibold">
+                      {highlightSearchMatch(
+                        candidate.display_name || candidate.field_id,
+                        search,
+                      )}
+                    </span>
+                  </span>
+                  <span className="rounded bg-[#eef3f7] px-2 py-1 text-xs text-[#526071]">
+                    {candidate.value_type}
+                  </span>
+                  <span className="pointer-events-none absolute left-2 top-full z-50 mt-1 w-[300px] rounded-md border border-[#d6dee8] bg-white p-2 text-xs leading-5 text-[#526071] opacity-0 shadow-[0_12px_30px_rgb(0_0_0/0.14)] transition-opacity delay-700 group-hover:opacity-100">
+                    <span className="block font-semibold text-[#1f2937]">
+                      {highlightSearchMatch(
+                        candidate.display_name || candidate.field_id,
+                        search,
+                      )}
+                    </span>
+                    <span className="block">
+                      {highlightSearchMatch(candidate.field_id, search)}
+                    </span>
+                    {candidate.description ? (
+                      <span className="block">
+                        {highlightSearchMatch(candidate.description, search)}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+      {groups.length === 0 ? (
+        <div className="rounded-md border border-dashed border-[#d6dee8] p-4 text-sm text-[#657082]">
+          No matching profile fields.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SqlSourceForm({
+  advancedSql,
+  columns,
+  draftStore,
+  draftTable,
+  draftXField,
+  draftYField,
+  stores,
+  tables,
+  onAdvancedSqlChange,
+  onDraftStoreChange,
+  onDraftTableChange,
+  onDraftXFieldChange,
+  onDraftYFieldChange,
+  onUseSqlSource,
+}: {
+  advancedSql: string;
+  columns: string[];
+  draftStore: Store;
+  draftTable: string;
+  draftXField: string;
+  draftYField: string;
+  stores: Store[];
+  tables: DatabaseTable[];
+  onAdvancedSqlChange?: (value: string) => void;
+  onDraftStoreChange: (value: Store) => void;
+  onDraftTableChange: (value: string) => void;
+  onDraftXFieldChange: (value: string) => void;
+  onDraftYFieldChange: (value: string) => void;
+  onUseSqlSource: () => void;
 }) {
   return (
-    <Select
-      value={item.fieldId}
-      onValueChange={(value) =>
-        setSeries((current) =>
-          current.map((candidate) =>
-            candidate.id === item.id
-              ? {
-                  ...candidate,
-                  fieldId: value,
-                  name:
-                    candidate.name ||
-                    fields.find((field) => field.field_id === value)
-                      ?.display_name ||
-                    candidate.name,
-                }
-              : candidate,
-          ),
-        )
-      }
-    >
-      <SelectTrigger>
-        <SelectValue placeholder="Field / measure" />
-      </SelectTrigger>
-      <SelectContent>
-        {fields.map((field) => (
-          <SelectItem key={field.field_id} value={field.field_id}>
-            {field.display_name || field.field_id}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Store</Label>
+          <Select
+            value={draftStore}
+            onValueChange={(value) => onDraftStoreChange(value as Store)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {stores.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value === "analytics" ? "DuckDB analytics" : "SQL catalog"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Table</Label>
+          <Select value={draftTable} onValueChange={onDraftTableChange}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose a table" />
+            </SelectTrigger>
+            <SelectContent>
+              {tables.map((candidate) => (
+                <SelectItem
+                  key={`${candidate.store}:${candidate.name}`}
+                  value={candidate.name}
+                >
+                  {candidate.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>X / group</Label>
+          <Select value={draftXField} onValueChange={onDraftXFieldChange}>
+            <SelectTrigger>
+              <SelectValue placeholder="Column" />
+            </SelectTrigger>
+            <SelectContent>
+              {columns.map((column) => (
+                <SelectItem key={column} value={column}>
+                  {column}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Y / value</Label>
+          <Select value={draftYField} onValueChange={onDraftYFieldChange}>
+            <SelectTrigger>
+              <SelectValue placeholder="Column" />
+            </SelectTrigger>
+            <SelectContent>
+              {columns.map((column) => (
+                <SelectItem key={column} value={column}>
+                  {column}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>SQL query</Label>
+        <textarea
+          className="min-h-[96px] w-full resize-y rounded-lg border border-[#cfd8e3] bg-white p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-[#21a66a]"
+          placeholder="SELECT ... (optional)"
+          value={advancedSql}
+          onChange={(event) => onAdvancedSqlChange?.(event.target.value)}
+        />
+      </div>
+      <Button className="w-full justify-center" onClick={onUseSqlSource}>
+        Use SQL source
+      </Button>
+    </div>
+  );
+}
+
+function filterProfileGroups(profiles: DataProfile[], search: string) {
+  const normalized = search.trim().toLowerCase();
+  return profiles
+    .map((profile) => {
+      const profileText = [
+        profile.name,
+        profile.data_profile_id,
+        profile.data_type,
+        profile.assay,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const profileMatches = normalized && profileText.includes(normalized);
+      const fields = normalized
+        ? profile.fields.filter((field) => {
+            if (profileMatches) return true;
+            return [
+              field.display_name,
+              field.field_id,
+              field.value_type,
+              field.description,
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase()
+              .includes(normalized);
+          })
+        : profile.fields;
+      return fields.length ? { profile, fields } : null;
+    })
+    .filter(
+      (group): group is { profile: DataProfile; fields: DataProfileField[] } =>
+        Boolean(group),
+    );
+}
+
+function flattenProfileOptions(groups: ProfileFieldGroup[]): ProfileFieldOption[] {
+  return groups.flatMap(({ profile, fields }) =>
+    fields.map((field) => ({
+      id: profileOptionId(profile, field),
+      profile,
+      field,
+    })),
+  );
+}
+
+function profileOptionId(profile: DataProfile, field: DataProfileField) {
+  return `${profile.data_profile_id}::${field.field_id}`;
+}
+
+function profileOptionDomId(optionId: string) {
+  return `profile-source-${optionId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function highlightSearchMatch(text: string, search: string) {
+  const query = search.trim();
+  if (!query) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) {
+      parts.push(text.slice(cursor, matchIndex));
+    }
+    const end = matchIndex + query.length;
+    parts.push(
+      <mark
+        className="rounded-sm bg-[#dff4e8] px-0.5 text-inherit"
+        key={`${matchIndex}-${end}`}
+      >
+        {text.slice(matchIndex, end)}
+      </mark>,
+    );
+    cursor = end;
+    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.length ? parts : text;
+}
+
+function filterSqlTables(tables: DatabaseTable[], search: string) {
+  const normalized = search.trim().toLowerCase();
+  if (!normalized) return tables;
+  return tables.filter((table) =>
+    [table.name, ...table.columns]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalized),
+  );
+}
+
+function filterSqlColumns(
+  columns: string[],
+  tableName: string | undefined,
+  search: string,
+) {
+  const normalized = search.trim().toLowerCase();
+  if (!normalized || tableName?.toLowerCase().includes(normalized)) {
+    return columns;
+  }
+  return columns.filter((column) => column.toLowerCase().includes(normalized));
+}
+
+function defaultYColumn(columns: string[]) {
+  return (
+    columns.find((column) => column === "value_numeric") ??
+    columns.find((column) => column !== "sample_id" && column !== "run_id") ??
+    columns[1] ??
+    columns[0] ??
+    ""
   );
 }
 

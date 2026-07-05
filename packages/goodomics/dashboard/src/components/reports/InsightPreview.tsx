@@ -101,8 +101,17 @@ function normalizeEChartsOption({
     visualization === "histogram"
       ? normalizeHistogramOption(option, result, colors)
       : { ...option };
-  normalized.xAxis = normalizeAxis(normalized.xAxis, 56);
-  normalized.yAxis = normalizeAxis(normalized.yAxis, 44);
+  normalized.xAxis = normalizeAxis(
+    normalized.xAxis,
+    56,
+    displayOptions.xAxisLabel,
+  );
+  normalized.yAxis = normalizeAxis(
+    normalized.yAxis,
+    44,
+    displayOptions.yAxisLabel,
+    displayOptions.yAxisScale,
+  );
   normalized.title = normalizeTitle(normalized.title);
   normalized.grid = {
     ...(isRecord(normalized.grid) ? normalized.grid : {}),
@@ -133,16 +142,33 @@ function normalizeTitle(title: unknown) {
   return title;
 }
 
-function normalizeAxis(axis: unknown, nameGap: number): unknown {
+function normalizeAxis(
+  axis: unknown,
+  nameGap: number,
+  label = "",
+  scale: DisplayOptions["yAxisScale"] = "linear",
+): unknown {
   // ECharts accepts either a single axis object or an array of axes. Normalize
   // both while preserving custom axis settings.
   if (Array.isArray(axis)) {
-    return axis.map((item) => normalizeAxis(item, nameGap));
+    return axis.map((item) => normalizeAxis(item, nameGap, label, scale));
   }
   if (!isRecord(axis)) return axis;
-  if (typeof axis.name !== "string" || axis.name.length === 0) return axis;
+  const name = label.trim() || (typeof axis.name === "string" ? axis.name : "");
+  const nextAxis = { ...axis };
+  const axisType = typeof axis.type === "string" ? axis.type : "";
+  const canUseNumericScale = !["category", "time"].includes(axisType);
+  if (scale === "log" && canUseNumericScale) {
+    nextAxis.type = "log";
+    nextAxis.logBase = nextAxis.logBase ?? 10;
+  } else if (axis.type === "log") {
+    nextAxis.type = "value";
+    delete nextAxis.logBase;
+  }
+  if (!name) return nextAxis;
   return {
-    ...axis,
+    ...nextAxis,
+    name,
     nameLocation: "middle",
     nameGap,
   };
@@ -380,8 +406,17 @@ function safeAlias(value: string) {
 function InsightTable({ result }: { result: InsightResult }) {
   // Rows from the server are plain objects. Add a synthetic row key for
   // react-data-grid without mutating the original result.
-  const columns = Array.isArray(result.columns) ? result.columns.map(String) : [];
-  const rawRows = Array.isArray(result.rows) ? result.rows : [];
+  const plotTable = isRecord(result.plot_table) ? result.plot_table : null;
+  const columns = Array.isArray(plotTable?.columns)
+    ? plotTable.columns.map(String)
+    : Array.isArray(result.columns)
+      ? result.columns.map(String)
+      : [];
+  const rawRows = Array.isArray(plotTable?.rows)
+    ? plotTable.rows
+    : Array.isArray(result.rows)
+      ? result.rows
+      : [];
   const gridColumns = useMemo<Column<GridRow>[]>(
     () =>
       columns.map((column) => ({

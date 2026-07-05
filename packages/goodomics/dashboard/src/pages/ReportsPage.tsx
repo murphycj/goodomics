@@ -22,10 +22,12 @@ import {
   getProject,
   listInsights,
   listReports,
+  listSampleSets,
   patchProject,
   patchReport,
   type SavedInsight,
   type SavedReport,
+  type SampleSet,
 } from "../api";
 import { InsightListTable } from "../components/reports/InsightListTable";
 import { InsightPreview } from "../components/reports/InsightPreview";
@@ -52,12 +54,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Label,
   Page,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
 import { cn } from "../lib/utils";
 
 type ReportMode = "list" | "detail";
+type ReportContextKind = "cohort" | "sample";
 
 /** Report index and grid-layout builder for composing saved insights. */
 export function ReportsPage({
@@ -79,6 +88,10 @@ export function ReportsPage({
     queryKey: ["insights", projectId],
     queryFn: () => listInsights(projectId),
   });
+  const sampleSets = useQuery({
+    queryKey: ["sample-sets", projectId, "cohort"],
+    queryFn: () => listSampleSets(projectId, "cohort"),
+  });
   const [mode, setMode] = useState<ReportMode>(initialReportId ? "detail" : "list");
   const [search, setSearch] = useState("");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(
@@ -92,6 +105,11 @@ export function ReportsPage({
   const [addSearch, setAddSearch] = useState("");
   const [name, setName] = useState("Project report");
   const [description, setDescription] = useState("");
+  const [contextKind, setContextKind] =
+    useState<ReportContextKind>("cohort");
+  const [sampleSetId, setSampleSetId] = useState("");
+  const [sampleId, setSampleId] = useState("");
+  const [runSampleId, setRunSampleId] = useState("");
   const [items, setItems] = useState<ReportItem[]>([]);
 
   useEffect(() => {
@@ -104,8 +122,20 @@ export function ReportsPage({
     if (!selectedReport) return;
     setName(selectedReport.name);
     setDescription(selectedReport.description ?? "");
+    const context = isRecord(selectedReport.config.context)
+      ? selectedReport.config.context
+      : {};
+    setContextKind(context.kind === "sample" ? "sample" : "cohort");
+    setSampleSetId(stringValue(context.sample_set_id));
+    setSampleId(stringValue(context.sample_id));
+    setRunSampleId(stringValue(context.run_sample_id));
     setItems(readReportItems(selectedReport.config));
   }, [selectedReport]);
+
+  useEffect(() => {
+    if (sampleSetId || (sampleSets.data ?? []).length === 0) return;
+    setSampleSetId(sampleSets.data?.[0]?.sample_set_id ?? "");
+  }, [sampleSetId, sampleSets.data]);
 
   const result = useQuery({
     queryKey: ["report-result", projectId, selectedReportId],
@@ -119,6 +149,12 @@ export function ReportsPage({
         version: 1,
         title: name,
         description,
+        context: buildReportContext({
+          contextKind,
+          runSampleId,
+          sampleId,
+          sampleSetId,
+        }),
         layout: { columns: 12 },
         items,
         filters: [],
@@ -175,6 +211,9 @@ export function ReportsPage({
     setSelectedReportId(null);
     setName("Project report");
     setDescription("");
+    setContextKind("cohort");
+    setSampleId("");
+    setRunSampleId("");
     setItems([]);
     setEditMode(true);
     setMode("detail");
@@ -319,6 +358,17 @@ export function ReportsPage({
           value={description}
           onChange={(event) => setDescription(event.target.value)}
         />
+        <ReportContextControls
+          contextKind={contextKind}
+          runSampleId={runSampleId}
+          sampleId={sampleId}
+          sampleSetId={sampleSetId}
+          sampleSets={sampleSets.data ?? []}
+          onContextKindChange={setContextKind}
+          onRunSampleIdChange={setRunSampleId}
+          onSampleIdChange={setSampleId}
+          onSampleSetIdChange={setSampleSetId}
+        />
       </section>
 
       <div className="min-h-0 flex-1">
@@ -451,6 +501,112 @@ function filterReports(reports: SavedReport[], search: string) {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(normalized)),
   );
+}
+
+function ReportContextControls({
+  contextKind,
+  runSampleId,
+  sampleId,
+  sampleSetId,
+  sampleSets,
+  onContextKindChange,
+  onRunSampleIdChange,
+  onSampleIdChange,
+  onSampleSetIdChange,
+}: {
+  contextKind: ReportContextKind;
+  runSampleId: string;
+  sampleId: string;
+  sampleSetId: string;
+  sampleSets: SampleSet[];
+  onContextKindChange: (value: ReportContextKind) => void;
+  onRunSampleIdChange: (value: string) => void;
+  onSampleIdChange: (value: string) => void;
+  onSampleSetIdChange: (value: string) => void;
+}) {
+  return (
+    <div className="mt-3 grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid grid-cols-2 gap-2">
+        {(["cohort", "sample"] as const).map((kind) => (
+          <Button
+            className="justify-center"
+            key={kind}
+            type="button"
+            variant={contextKind === kind ? "secondary" : "outline"}
+            onClick={() => onContextKindChange(kind)}
+          >
+            {kind === "cohort" ? "Cohort" : "Sample"}
+          </Button>
+        ))}
+      </div>
+      {contextKind === "cohort" ? (
+        <div className="space-y-1.5">
+          <Label>Cohort</Label>
+          <Select value={sampleSetId} onValueChange={onSampleSetIdChange}>
+            <SelectTrigger>
+              <SelectValue placeholder="All samples" />
+            </SelectTrigger>
+            <SelectContent>
+              {sampleSets.map((sampleSet) => (
+                <SelectItem
+                  key={sampleSet.sample_set_id}
+                  value={sampleSet.sample_set_id}
+                >
+                  {sampleSet.name} ({sampleSet.member_count})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Sample ID</Label>
+            <Input
+              placeholder="S1"
+              value={sampleId}
+              onChange={(event) => onSampleIdChange(event.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Processed sample</Label>
+            <Input
+              placeholder="run:S1"
+              value={runSampleId}
+              onChange={(event) => onRunSampleIdChange(event.target.value)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildReportContext({
+  contextKind,
+  runSampleId,
+  sampleId,
+  sampleSetId,
+}: {
+  contextKind: ReportContextKind;
+  runSampleId: string;
+  sampleId: string;
+  sampleSetId: string;
+}) {
+  return contextKind === "sample"
+    ? {
+        kind: "sample",
+        sample_id: sampleId.trim() || undefined,
+        run_sample_id: runSampleId.trim() || undefined,
+      }
+    : {
+        kind: "cohort",
+        sample_set_id: sampleSetId || undefined,
+      };
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function filterInsights(insights: SavedInsight[], search: string) {
