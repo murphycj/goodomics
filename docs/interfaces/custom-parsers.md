@@ -4,16 +4,16 @@ Use a custom parser when your lab has a table, dataframe, notebook object, or
 internal result format that Goodomics does not parse yet.
 
 Users write parsers. Goodomics handles ingestion: creating runs, samples,
-processed samples, data imports, data profiles, and DuckDB analytical records.
+processed samples, data imports, data contracts, and DuckDB analytical records.
 
 ## Minimal notebook parser
 
 ```python
 from pathlib import Path
 
-from goodomics import ParserOutput, parser, profile
+from goodomics import ParserOutput, parser, contract
 
-rnaseq_tpm = profile(
+rnaseq_tpm = contract(
     "user:rnaseq:tpm",
     name="RNA-seq TPM values",
     data_type="feature_matrix",
@@ -24,7 +24,7 @@ rnaseq_tpm = profile(
 )
 
 
-@parser(key="lab-rnaseq", label="Lab RNA-seq table", profiles=[rnaseq_tpm])
+@parser(key="lab-rnaseq", label="Lab RNA-seq table", contracts=[rnaseq_tpm])
 def parse_rnaseq_table(path: Path, out: ParserOutput) -> None:
     import csv
 
@@ -39,7 +39,7 @@ def parse_rnaseq_table(path: Path, out: ParserOutput) -> None:
                     sample_id=sample_id,
                     feature_id=gene,
                     value=float(row[sample_id]),
-                    profile=rnaseq_tpm,
+                    contract=rnaseq_tpm,
                     feature_type="gene",
                     value_semantics="tpm",
                 )
@@ -68,40 +68,40 @@ out.feature_value(
     sample_id="S1",
     feature_id="TP53",
     value=41.5,
-    profile="user:rnaseq:tpm",
+    contract="user:rnaseq:tpm",
 )
 
 out.feature_call(
     sample_id="S1",
     feature_id="EGFR",
     call_code="AMP",
-    profile="cbioportal:copy_number:discrete_calls",
+    contract="cbioportal:copy_number:discrete_calls",
 )
 
 out.payload(
     "source_table",
     [{"sample": "S1", "qc_status": "pass"}],
-    profile="user:lab:payloads",
+    contract="user:lab:payloads",
 )
 
 out.file("results/source.tsv", role="source")
 ```
 
-Calling `out.metric(...)` without a profile creates a default
-`user:<parser-key>:metrics` profile. For richer data, define a profile inline or
-reuse a built-in profile ID.
+Calling `out.metric(...)` without a contract creates a default
+`user:<parser-key>:metrics` contract. For richer data, define a contract inline or
+reuse a built-in contract ID.
 
-## Profiles
+## Contracts
 
-A data profile is the semantic contract for a logical dataset. It says what kind
+A data contract is the semantic contract for a logical dataset. It says what kind
 of data the parser emits and how Goodomics tools should query it.
 
-Use a custom profile when the data shape is specific to your dataset or lab:
+Use a custom contract when the data shape is specific to your dataset or lab:
 
 ```python
-from goodomics import profile
+from goodomics import contract
 
-gene_tpm = profile(
+gene_tpm = contract(
     "user:rnaseq:tpm",
     name="RNA-seq TPM values",
     data_type="feature_matrix",
@@ -112,13 +112,13 @@ gene_tpm = profile(
 )
 ```
 
-Reuse a built-in profile ID when your custom parser emits the same semantic
+Reuse a built-in contract ID when your custom parser emits the same semantic
 contract as an existing Goodomics parser:
 
 ```python
-from goodomics.profiles.cbioportal import CBIOPORTAL_MUTATIONS_MAF
+from goodomics.contracts.cbioportal import CBIOPORTAL_MUTATIONS_MAF
 
-out.metric("variant_count", 12, sample_id="S1", profile=CBIOPORTAL_MUTATIONS_MAF)
+out.metric("variant_count", 12, sample_id="S1", contract=CBIOPORTAL_MUTATIONS_MAF)
 ```
 
 ## Authoring paths

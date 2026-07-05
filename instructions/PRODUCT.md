@@ -16,7 +16,7 @@ context over time.
 ## Related Source Of Truth
 
 Use `instructions/DATA_MODEL.md` for detailed data model terminology, SQL
-control table direction, DuckDB analytical table direction, data profiles,
+control table direction, DuckDB analytical table direction, data contracts,
 processed samples, files, and MCP/data-query concepts. Keep this file focused
 on product direction, user-facing framing, adoption path, boundaries, and
 priorities.
@@ -214,7 +214,7 @@ outputs, BAM/VCF files, notebooks, plots, and other evidence.
 
 The analytical model should be modular rather than one universal table. Generic
 metrics should remain the lowest-friction target for arbitrary QC and pipeline
-outputs, while richer data profiles can unlock typed storage, validation, query
+outputs, while richer data contracts can unlock typed storage, validation, query
 performance, UI behavior, and MCP/agent understanding for variants, expression,
 copy-number calls, genomic intervals, methylation, annotations, and future data
 families.
@@ -232,7 +232,7 @@ The ingestion and analytical storage hierarchy should stay explicit:
   gene-centric lookup, or region-centric lookup.
 
 Use `instructions/DATA_MODEL.md` as the canonical reference for data model terms
-and table direction, including processed samples, data profiles, observations,
+and table direction, including processed samples, data contracts, observations,
 SQL control tables, DuckDB analytical tables, and derived query layouts.
 
 ## Core Concepts
@@ -243,13 +243,13 @@ The user-facing model should stay approachable:
 Sample = what was processed.
 Run = what happened.
 Processed sample = that sample in that run.
-Data profile = what kind of data was produced.
-Observation = a value, call, or measurement inside that profile.
+Data contract = what kind of data was produced.
+Observation = a value, call, or measurement inside that contract.
 Cohort or reference set = selected processed samples.
 ```
 
 Goodomics should expose bioinformatics-shaped concepts without becoming a LIMS.
-Projects, runs, samples, optional subjects, files, data profiles, cohorts,
+Projects, runs, samples, optional subjects, files, data contracts, cohorts,
 reference sets, QC policies, report templates, review decisions, parser plugins,
 and MCP tools should work together as one product surface. Detailed terminology
 and schema direction live in `instructions/DATA_MODEL.md`.

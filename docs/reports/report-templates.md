@@ -21,7 +21,7 @@ self-contained HTML file and print it with a local browser renderer, with print
 CSS and chart export behavior tuned for stable output.
 
 Large payloads should not be embedded blindly. Template authors and built-in
-profiles should prefer summarized data, downsampling, binned distributions,
+contracts should prefer summarized data, downsampling, binned distributions,
 static SVG or PNG chart output, or explicit opt-in expansion when full raw data
 would make the report unwieldy.
 
@@ -42,7 +42,7 @@ insights:
     context:
       kind: cohort
       sample_set_id: production-rnaseq
-    mode: profile_metrics
+    mode: contract_metrics
     visualization: bar
     linker:
       kind: run_sample
@@ -51,12 +51,12 @@ insights:
       limit: 1000
     query:
       source:
-        kind: data_profile
-        data_profile_id: salmon:metrics
+        kind: data_contract
+        data_contract_id: salmon:metrics
       fields: [general_stats.salmon_percent_mapped]
       entity: run_sample
     series:
-      - profile_id: salmon:metrics
+      - contract_id: salmon:metrics
         field_id: general_stats.salmon_percent_mapped
         name: Percent mapped
         aggregation: avg
@@ -108,8 +108,8 @@ name: Insert size distribution
 visualization: histogram
 query:
   source:
-    kind: data_profile
-    data_profile_id: picard:insert_size:metrics
+    kind: data_contract
+    data_contract_id: picard:insert_size:metrics
   fields: [multiqc_picard.insert_size]
   y: multiqc_picard.insert_size
   bins: 30

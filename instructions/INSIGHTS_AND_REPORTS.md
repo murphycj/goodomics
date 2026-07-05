@@ -12,7 +12,7 @@ policies, report inheritance, and AI-created insight guardrails.
   Do not expand the legacy lightweight `cohorts` placeholder for new builder
   behavior.
 - The mode-first v1 builder supports:
-  - `profile_metrics`: cohort-level metric panels and “add all numeric fields”.
+  - `contract_metrics`: cohort-level metric panels and “add all numeric fields”.
     The cohort selector appears below the series constructor as the first
     advanced filter option in this mode.
   - `sample_detail`: sample or processed-sample inspection.
@@ -46,9 +46,9 @@ policies, report inheritance, and AI-created insight guardrails.
 - Functional query examples:
   - RNA expression of two genes across samples: two feature-value series,
     gene filters, linker `sample` or `run_sample`.
-  - Protein expression vs RNA expression: two profiles, two feature filters,
+  - Protein expression vs RNA expression: two contracts, two feature filters,
     shared linker `sample`.
-  - All KRAS mutations: `variant_table` mode, mutations profile, gene filter
+  - All KRAS mutations: `variant_table` mode, mutations contract, gene filter
     `KRAS`, table output.
 
 ## Plot Rules
@@ -65,7 +65,7 @@ policies, report inheritance, and AI-created insight guardrails.
 - `boxplot`: numeric only, grouped by sample set, sample, run, or category.
 - `pie` / `donut`: exactly one series.
 - `table`: any supported fields.
-- `profile_metrics`: supports adding all numeric fields from a profile.
+- `contract_metrics`: supports adding all numeric fields from a contract.
 
 ## Data Size
 
@@ -82,7 +82,7 @@ policies, report inheritance, and AI-created insight guardrails.
 ## AI Readiness
 
 - AI-created insights must produce a draft validated config plus a plain
-  language explanation of profiles, filters, linker, result policy, and chart.
+  language explanation of contracts, filters, linker, result policy, and chart.
 - AI-created insights should open in the same builder UI for review and
   adjustment. They must not bypass catalog validation or linker/result-size
   guardrails.
