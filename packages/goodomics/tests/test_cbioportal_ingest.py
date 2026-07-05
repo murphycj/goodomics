@@ -187,6 +187,85 @@ def test_parse_cbioportal_study_creates_sample_runs(
     )
 
 
+def test_parse_cbioportal_tcga_sample_suffixes_share_subject_ids(
+    tmp_path: Path,
+) -> None:
+    study = write_cbioportal_fixture(tmp_path / "study")
+    (study / "data_clinical_patient.txt").write_text(
+        "\r\n".join(
+            [
+                "#Patient Identifier\tSex\tAge",
+                "#Identifier\tSex\tAge at diagnosis",
+                "#STRING\tSTRING\tNUMBER",
+                "#1\t1\t1",
+                "PATIENT_ID\tSEX\tAGE",
+                "TCGA-3X-AAV9\tFemale\t45",
+                "TCGA-4Y-BBC1\tMale\t52",
+            ]
+        )
+        + "\r\n",
+        encoding="utf-8",
+    )
+    (study / "data_clinical_sample.txt").write_text(
+        "\n".join(
+            [
+                "#Sample Identifier\tPatient Identifier\tCancer Type\tTMB",
+                "#Identifier\tPatient\tCancer type\tTumor mutation burden",
+                "#STRING\tSTRING\tSTRING\tNUMBER",
+                "#1\t1\t1\t1",
+                "SAMPLE_ID\tPATIENT_ID\tCANCER_TYPE\tTMB",
+                "TCGA-3X-AAV9-01\tTCGA-3X-AAV9\tLung Cancer\t12.5",
+                "TCGA-3X-AAV9-02\tTCGA-3X-AAV9\tLung Cancer\t10.1",
+                "TCGA-4Y-BBC1-TA\tTCGA-4Y-BBC1\tBreast Cancer\t3.2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (study / "data_gene_panel_matrix.txt").write_text(
+        "\n".join(
+            [
+                "SAMPLE_ID\tmutations\tcna\tstructural_variants",
+                "TCGA-3X-AAV9-01\tWXS\tWXS\tWXS",
+                "TCGA-3X-AAV9-02\tWXS\tWXS\tWXS",
+                "TCGA-4Y-BBC1-TA\tWXS\tWXS\tWXS",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (study / "case_lists" / "cases_all.txt").write_text(
+        "\n".join(
+            [
+                "cancer_study_identifier: demo_cbio",
+                "stable_id: demo_all",
+                "case_list_name: All samples",
+                "case_list_category: all_cases_in_study",
+                ("case_list_ids: TCGA-3X-AAV9-01\tTCGA-3X-AAV9-02\tTCGA-4Y-BBC1-TA"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_cbioportal_study(study, project_id="project-1")
+
+    assert {subject.subject_id for subject in parsed.subjects} == {
+        "TCGA-3X-AAV9",
+        "TCGA-4Y-BBC1",
+    }
+    assert {sample.sample_id for sample in parsed.samples} == {
+        "TCGA-3X-AAV9-01",
+        "TCGA-3X-AAV9-02",
+        "TCGA-4Y-BBC1-TA",
+    }
+    assert {sample.sample_id: sample.subject_id for sample in parsed.samples} == {
+        "TCGA-3X-AAV9-01": "TCGA-3X-AAV9",
+        "TCGA-3X-AAV9-02": "TCGA-3X-AAV9",
+        "TCGA-4Y-BBC1-TA": "TCGA-4Y-BBC1",
+    }
+
+
 def test_parse_cbioportal_studies_reuse_semantic_profiles(tmp_path: Path) -> None:
     first = parse_cbioportal_study(
         write_cbioportal_fixture(tmp_path / "study-1"),
