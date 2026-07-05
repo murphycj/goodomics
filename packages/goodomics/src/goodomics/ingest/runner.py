@@ -1,3 +1,5 @@
+"""Routing helpers for dispatching ingest calls and formatting CLI output."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,6 +14,8 @@ from goodomics.storage.database import resolve_database_url
 
 @dataclass(frozen=True)
 class IngestRouteResult:
+    """Resolved ingest route and payload returned by the selected source handler."""
+
     ingest_type: str
     source: SourceSpec
     payload: Any
@@ -30,6 +34,8 @@ def run_ingest(
     console: Console | None = None,
     show_progress: bool = False,
 ) -> IngestRouteResult:
+    """Resolve and execute the configured ingest source for provided results path."""
+
     source = get_source(str(ingest_type))
     resolved_database_url = resolve_database_url(database_url)
     # SourceSpec owns the callable's keyword contract, which lets built-ins keep
@@ -56,6 +62,8 @@ def run_ingest(
 
 
 def print_ingest_result(result: IngestRouteResult, console: Console) -> None:
+    """Render ingest output with source printer or generic structured fallback."""
+
     printer = result.source.load_result_printer()
     if printer is None:
         # Third-party sources can omit custom printers and still get a useful
@@ -66,6 +74,8 @@ def print_ingest_result(result: IngestRouteResult, console: Console) -> None:
 
 
 def print_multiqc_ingest_results(results_ingested: Any, console: Console) -> None:
+    """Print a human-readable summary for one or many MultiQC ingest results."""
+
     if len(results_ingested) == 1:
         result = results_ingested[0]
         console.print(f"Ingested run [bold]{result.run_id}[/bold]")
@@ -88,6 +98,8 @@ def print_multiqc_ingest_results(results_ingested: Any, console: Console) -> Non
 
 
 def print_cbioportal_ingest_result(result: Any, console: Console) -> None:
+    """Print a human-readable summary for a completed cBioPortal ingest result."""
+
     if result.runs_ingested == 1:
         console.print(
             f"Ingested cBioPortal import [bold]{result.data_import_id}[/bold]"

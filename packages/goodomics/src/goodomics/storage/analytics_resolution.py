@@ -1,3 +1,5 @@
+"""Catalog identifier resolution helpers for analytics ingest record batches."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -64,6 +66,8 @@ def resolve_catalog_id(
     value: Any,
     catalog_id_maps: Mapping[str, Mapping[Any, int]],
 ) -> int | None:
+    """Resolve a catalog identifier from label form to SQL integer id."""
+
     if value is None or isinstance(value, int):
         return value
     column_map = catalog_id_maps.get(column, {})

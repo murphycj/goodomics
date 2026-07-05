@@ -1,3 +1,5 @@
+"""FastAPI application factory for API, MCP transport, and dashboard serving."""
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -45,6 +47,8 @@ def _dashboard_dev_redirect(
 
 
 def create_app() -> FastAPI:
+    """Build the Goodomics server app with API, MCP stream endpoint, and UI routes."""
+
     settings = Settings()
     store = create_store(settings.database_url)
     query_context = QueryToolContext(settings=settings, store=store)

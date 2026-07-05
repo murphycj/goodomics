@@ -1,3 +1,5 @@
+"""Ingest orchestration for cBioPortal studies into catalog and analytics stores."""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +36,8 @@ from goodomics.storage.sqlalchemy import (
 
 @dataclass(frozen=True)
 class CbioPortalIngestResult:
+    """Summary of one cBioPortal ingest execution across SQL and DuckDB writes."""
+
     data_import_id: str
     runs_ingested: int
     profiles_ingested: int
@@ -58,6 +62,8 @@ def ingest_cbioportal_study(
     show_progress: bool = False,
     console: Console | None = None,
 ) -> CbioPortalIngestResult:
+    """Parse a cBioPortal study and persist catalog plus analytical records."""
+
     progress = _new_progress(console) if show_progress else None
     task_id: TaskID | None = None
     if progress is not None:

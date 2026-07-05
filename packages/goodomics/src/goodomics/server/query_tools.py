@@ -1,3 +1,5 @@
+"""Read-only query tool surface bridging SQL catalog and DuckDB analytics."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,13 +40,21 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 @dataclass(frozen=True)
 class QueryToolContext:
-    # Query tools are deliberately thin: settings locate project DuckDB files,
-    # while the SQLModel store opens catalog sessions.
+    """Dependencies required by query-tool handlers."""
+
     settings: Settings
+    """Server settings used to locate project analytics databases."""
+
     store: SQLModelGoodomicsStore
+    """SQL catalog store used for schema checks and catalog reads."""
 
 
 class GoodomicsQueryTools:
+    """Public query helpers used by AI and MCP tooling."""
+
+    context: QueryToolContext
+    """Immutable dependencies shared across query-tool operations."""
+
     # Read-only helper surface for AI/MCP-style calls. Methods return plain
     # dictionaries so tool responses stay compact and JSON-native.
     def __init__(self, context: QueryToolContext) -> None:
@@ -53,6 +63,8 @@ class GoodomicsQueryTools:
     async def list_projects(
         self, query: str | None = None, limit: int = 20
     ) -> dict[str, Any]:
+        """List projects with optional text filtering over IDs, slugs, and names."""
+
         # Start from the catalog project list, then apply lightweight in-memory
         # filtering. Counts and dashboard links are added by _project_summary().
         projects = await self._all_projects()
@@ -77,6 +89,8 @@ class GoodomicsQueryTools:
         limit: int = 20,
         field_limit: int = 25,
     ) -> dict[str, Any]:
+        """List visible data profiles and a bounded set of field definitions."""
+
         # Project arguments may be IDs, slugs, or names. Resolve first so the
         # SQL query can filter by the integer project primary key.
         project_id, project_resolution = await self._optional_project_id(project)
@@ -160,6 +174,8 @@ class GoodomicsQueryTools:
             }
 
     async def resolve_project(self, reference: str, limit: int = 5) -> dict[str, Any]:
+        """Resolve a project reference into a match, ambiguity payload, or not-found."""
+
         # Resolution returns status/candidates instead of raising. That lets
         # callers surface ambiguity to users or agents in a structured way.
         reference = reference.strip()
@@ -259,6 +275,8 @@ class GoodomicsQueryTools:
         }
 
     async def get_project_summary(self, project: str) -> dict[str, Any]:
+        """Return a compact project overview with recent runs and sample examples."""
+
         # Compose a quick orientation payload: project counts plus a small set of
         # recent runs and sample examples. This is meant for "where am I?" agent
         # answers, not exhaustive browsing.
@@ -281,6 +299,8 @@ class GoodomicsQueryTools:
     async def list_recent_runs(
         self, project: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
+        """List recent runs globally or within one resolved project."""
+
         # Without a project argument this intentionally spans all projects. With
         # a project argument, failed resolution is returned alongside an empty
         # result so the caller can explain the issue.
@@ -302,6 +322,8 @@ class GoodomicsQueryTools:
         assay: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        """List runs for one required project with optional assay/status filters."""
+
         # Project-scoped run listing is stricter than list_recent_runs(): a
         # project reference is required and must resolve cleanly.
         project_id, resolution = await self._required_project_id(project)
@@ -324,6 +346,8 @@ class GoodomicsQueryTools:
         query: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        """List project samples with optional substring search."""
+
         # Samples live in the SQL catalog. Analytical rows in DuckDB reference
         # them by integer ID, but tool callers work with stable sample_id labels.
         project_id, resolution = await self._required_project_id(project)
@@ -354,6 +378,8 @@ class GoodomicsQueryTools:
         }
 
     async def get_run(self, run_id: str, project: str | None = None) -> dict[str, Any]:
+        """Fetch one run payload and optionally enforce project ownership."""
+
         # The store-level get_run returns the public Run schema, including
         # embedded samples. If a project is supplied, verify that the run belongs
         # to it before returning data.
@@ -378,6 +404,8 @@ class GoodomicsQueryTools:
     async def list_run_samples(
         self, run_id: str, project: str | None = None
     ) -> dict[str, Any]:
+        """List samples embedded in a run after optional project validation."""
+
         # Reuse get_run() for existence and optional project validation, then
         # fetch the full run model so we can expose its embedded sample list.
         run_result = await self.get_run(run_id, project=project)
@@ -400,6 +428,8 @@ class GoodomicsQueryTools:
         metric_query: str | None = None,
         limit: int = 30,
     ) -> dict[str, Any]:
+        """List run metrics from DuckDB, optionally filtered by metric text."""
+
         # Metrics are stored in DuckDB, but run lookup starts in SQL so we can
         # convert the public run_id label to the internal integer run primary key.
         run_result = await self.get_run(run_id, project=project)
@@ -445,6 +475,8 @@ class GoodomicsQueryTools:
         kind: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
+        """List run-linked and import-linked files with optional kind filtering."""
+
         # Files are catalog records with link rows that describe whether a file
         # belongs to a run, sample, import, or data profile.
         run_result = await self.get_run(run_id, project=project)
