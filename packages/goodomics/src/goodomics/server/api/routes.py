@@ -2357,6 +2357,7 @@ async def _list_project_sample_groups(
                     session,
                     row,
                     member_count=counts.get(int(row.id or 0), 0),
+                    project_id=project.project_id,
                 )
                 for row in rows
             ],
@@ -2371,6 +2372,7 @@ async def _sample_set_read(
     row: SampleSetRecord,
     *,
     member_count: int | None = None,
+    project_id: str | None = None,
 ) -> SampleSetRead:
     """Convert a sample-set catalog row into a dashboard/API response."""
 
@@ -2386,7 +2388,9 @@ async def _sample_set_read(
     metadata_json = row.metadata_json if isinstance(row.metadata_json, dict) else {}
     return SampleSetRead(
         sample_set_id=row.sample_set_id,
-        project_id=await _public_label(
+        project_id=project_id
+        if project_id is not None
+        else await _public_label(
             session,
             ProjectRecord,
             "project_id",
@@ -2490,17 +2494,23 @@ async def _sample_group_members_page(
     rows = (
         await session.exec(
             select(
-                SampleSetMemberRecord,
                 RunSampleRecord,
                 SampleRecord,
                 RunRecord,
+                cast(Any, SubjectRecord.subject_id),
             )
+            .select_from(SampleSetMemberRecord)
             .join(
                 RunSampleRecord,
                 cast(Any, RunSampleRecord.id) == SampleSetMemberRecord.run_sample_id,
             )
             .join(SampleRecord, cast(Any, SampleRecord.id) == RunSampleRecord.sample_id)
             .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+            .join(
+                SubjectRecord,
+                cast(Any, SubjectRecord.id) == SampleRecord.subject_id,
+                isouter=True,
+            )
             .where(*filters)
             .order_by(SampleRecord.sample_id, cast(Any, RunRecord.created_at).desc())
             .offset(offset)
@@ -2509,8 +2519,8 @@ async def _sample_group_members_page(
     ).all()
     return SampleGroupMemberPageRead(
         items=[
-            await _sample_group_member_read(session, run_sample, sample, run)
-            for _member, run_sample, sample, run in rows
+            _sample_group_member_read(run_sample, sample, run, subject_id)
+            for run_sample, sample, run, subject_id in rows
         ],
         total=total,
         limit=limit,
@@ -2518,11 +2528,11 @@ async def _sample_group_members_page(
     )
 
 
-async def _sample_group_member_read(
-    session: AsyncSession,
+def _sample_group_member_read(
     run_sample: RunSampleRecord,
     sample: SampleRecord,
     run: RunRecord,
+    subject_id: str | None,
 ) -> SampleGroupMemberRead:
     """Convert joined sample-group member rows to the public API shape."""
 
@@ -2530,12 +2540,7 @@ async def _sample_group_member_read(
         run_sample_id=run_sample.run_sample_id,
         sample_id=sample.sample_id,
         sample_name=sample.sample_name,
-        subject_id=await _public_label(
-            session,
-            SubjectRecord,
-            "subject_id",
-            sample.subject_id,
-        ),
+        subject_id=subject_id,
         run_id=run.run_id,
         run_name=run.name,
         status=run_sample.status,
