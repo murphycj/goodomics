@@ -106,12 +106,29 @@ def test_parse_multiqc_bundle_extracts_metrics_sources_versions_and_payloads(
     metric_ids = {metric.field_id for metric in parsed.metrics}
     assert "general_stats.salmon_percent_mapped" in metric_ids
     assert "multiqc_salmon.percent_mapped" in metric_ids
+    metrics_by_field = {metric.field_id: metric for metric in parsed.metrics}
+    assert (
+        metrics_by_field["general_stats.salmon_percent_mapped"].data_profile_id
+        == "salmon:metrics"
+    )
+    assert (
+        metrics_by_field["general_stats.fastqc_raw_percent_gc"].data_profile_id
+        == "fastqc:raw:metrics"
+    )
+    assert (
+        metrics_by_field["multiqc_salmon.percent_mapped"].data_profile_id
+        == "salmon:metrics"
+    )
+    assert {"salmon:metrics", "fastqc:raw:metrics"} <= {
+        profile.data_profile_id for profile in parsed.profiles
+    }
     assert parsed.data_sources[0].source_path == "/work/S1/libParams/flenDist.txt"
     assert {version.tool for version in parsed.tool_versions} == {"fastqc", "salmon"}
     salmon_payloads = [
         payload for payload in parsed.payloads if payload.payload_name == "salmon_plot"
     ]
     assert len(salmon_payloads) == 1
+    assert salmon_payloads[0].data_profile_id == "salmon:payloads"
     assert salmon_payloads[0].sample_id == "S1"
     assert salmon_payloads[0].columns == ["Sample", "0", "1", "2"]
 

@@ -3,28 +3,15 @@ from __future__ import annotations
 from goodomics.profiles.base import profile
 from goodomics.schemas.models import DataProfile
 
-MULTIQC_METRICS = "multiqc:qc_metrics"
 MULTIQC_PAYLOADS = "multiqc:payloads"
 
-# MultiQC emits both normalized metric observations and raw payload tables, so
-# the provider exposes separate contracts for those query modes.
+# MultiQC-owned profiles describe report-level payloads. Tool metrics parsed
+# from MultiQC exports use bare tool-owned profiles such as ``salmon:metrics``
+# and ``fastqc:raw:metrics`` so direct parsers can reuse the same contracts.
 STATIC_PROFILES: dict[str, DataProfile] = {
-    MULTIQC_METRICS: profile(
-        MULTIQC_METRICS,
-        name="MultiQC quality-control metrics",
-        data_type="generic_metrics",
-        producer_tool="multiqc",
-        feature_type="metric",
-        value_type="mixed",
-        entity_grain="run_sample",
-        primary_table="sample_metrics",
-        physical_tables=["sample_metrics"],
-        query_modes=["sample", "metric", "cohort"],
-        description="Sample-level quality-control metrics parsed from MultiQC outputs.",
-    ),
     MULTIQC_PAYLOADS: profile(
         MULTIQC_PAYLOADS,
-        name="MultiQC payload tables",
+        name="MultiQC report payload tables",
         data_type="profile_payload",
         producer_tool="multiqc",
         value_type="table",
@@ -32,7 +19,9 @@ STATIC_PROFILES: dict[str, DataProfile] = {
         primary_table="profile_payloads",
         physical_tables=["profile_payloads"],
         query_modes=["payload"],
-        description="Source tables and plot payloads parsed from MultiQC outputs.",
+        description=(
+            "Report-level source tables and plot payloads parsed from MultiQC outputs."
+        ),
     ),
 }
 

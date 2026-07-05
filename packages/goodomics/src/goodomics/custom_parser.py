@@ -11,6 +11,7 @@ from typing import Any
 from goodomics.ingest.base import NormalizedIngestResult
 from goodomics.profiles.base import profile as make_profile
 from goodomics.profiles.registry import built_in_data_profile
+from goodomics.profiles.tool import tool_profile_from_id
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
@@ -596,6 +597,9 @@ def _profile_from_id(value: str, parser_key: str) -> DataProfile:
         return built_in_data_profile(value)
     except KeyError:
         pass
+    tool_profile = tool_profile_from_id(value)
+    if tool_profile is not None:
+        return tool_profile
     return make_profile(
         value,
         name=value,

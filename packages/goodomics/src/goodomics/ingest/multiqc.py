@@ -18,8 +18,6 @@ from goodomics.parsers.multiqc import (
     parse_multiqc_bundle,
     parse_multiqc_outputs,
 )
-from goodomics.profiles.multiqc import MULTIQC_METRICS, MULTIQC_PAYLOADS
-from goodomics.profiles.registry import built_in_data_profile
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     DataImport,
@@ -261,12 +259,10 @@ def _save_multiqc_parse_result(
             data_import=data_import,
             run_samples=run_samples,
             data_profiles=[
-                built_in_data_profile(MULTIQC_METRICS).model_copy(
+                data_profile.model_copy(
                     update={"project_id": project_record.project_id}
-                ),
-                built_in_data_profile(MULTIQC_PAYLOADS).model_copy(
-                    update={"project_id": project_record.project_id}
-                ),
+                )
+                for data_profile in parsed.profiles
             ],
             data_profile_fields=parsed.profile_fields,
             files=files,

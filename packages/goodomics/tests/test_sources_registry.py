@@ -9,12 +9,14 @@ from typing import Any
 import pytest
 from fixtures import write_multiqc_fixture
 from goodomics.custom_parser import ParserOutput, parser
-from goodomics.profiles import all_built_in_data_profiles, profile
+from goodomics.ingest.multiqc import ingest_multiqc
+from goodomics.profiles import all_built_in_data_profiles, profile, tool_metrics_profile
 from goodomics.profiles.cbioportal import profile_for_meta
 from goodomics.sources import SourceSpec, get_source, list_sources, register_source
 from goodomics.sources import registry as source_registry
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataProfileFieldRecord,
     DataProfileRecord,
     RunRecord,
     SQLModelGoodomicsStore,
@@ -114,8 +116,9 @@ def test_fake_entry_point_source_is_discovered(monkeypatch: pytest.MonkeyPatch) 
 def test_profile_providers_cover_built_in_contracts() -> None:
     built_ins = {item.data_profile_id for item in all_built_in_data_profiles()}
 
-    assert "multiqc:qc_metrics" in built_ins
+    assert "multiqc:payloads" in built_ins
     assert "goodomics:sdk_metrics" in built_ins
+    assert tool_metrics_profile("salmon").data_profile_id == "salmon:metrics"
     assert (
         profile_for_meta(
             {
@@ -131,12 +134,6 @@ def test_profile_providers_cover_built_in_contracts() -> None:
         source_meta_file="meta_custom.txt",
     )
     assert custom.data_profile_id == "cbioportal:custom:unknown:weird_custom_profile"
-
-    from goodomics.profiles.multiqc import MULTIQC_METRICS
-    from goodomics.profiles.registry import built_in_data_profile
-
-    assert MULTIQC_METRICS == "multiqc:qc_metrics"
-    assert built_in_data_profile(MULTIQC_METRICS).name
 
 
 def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> None:
@@ -209,12 +206,10 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
     assert analytics.row_counts()["feature_value_numeric"] == 1
 
 
-def test_custom_parser_reuses_builtin_profile_id(tmp_path: Path) -> None:
-    from goodomics.profiles.multiqc import MULTIQC_METRICS
-
-    @parser(key="builtin-profile-parser", profiles=[MULTIQC_METRICS])
+def test_custom_parser_reuses_tool_profile_id(tmp_path: Path) -> None:
+    @parser(key="tool-profile-parser", profiles=["salmon:metrics"])
     def parse_metrics(path: object, out: ParserOutput) -> None:
-        out.metric("pct_mapped", 99.0, sample_id="S1", profile=MULTIQC_METRICS)
+        out.metric("pct_mapped", 99.0, sample_id="S1", profile="salmon:metrics")
 
     analytics_path = tmp_path / "analytics.duckdb"
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
@@ -229,5 +224,56 @@ def test_custom_parser_reuses_builtin_profile_id(tmp_path: Path) -> None:
     values = DuckDBAnalyticsStore(analytics_path).list_metric_values(
         _run_pk(database_url, "builtin-profile-run")
     )
-    metrics_profile_id = _data_profile_pk(database_url, MULTIQC_METRICS)
+    metrics_profile_id = _data_profile_pk(database_url, "salmon:metrics")
     assert values[0].data_profile_id == metrics_profile_id
+
+
+def test_tool_profile_reuse_preserves_existing_fields(tmp_path: Path) -> None:
+    salmon_metrics = tool_metrics_profile("salmon")
+    analytics_path = tmp_path / "analytics.duckdb"
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
+    ingest_multiqc(
+        write_multiqc_fixture(tmp_path / "results"),
+        run_id="multiqc-run",
+        project="demo",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+
+    @parser(key="salmon-direct-parser", profiles=[salmon_metrics])
+    def parse_salmon(path: object, out: ParserOutput) -> None:
+        out.metric(
+            "direct_percent_mapped", 98.0, sample_id="S1", profile=salmon_metrics
+        )
+
+    parse_salmon.ingest(
+        tmp_path / "salmon.tsv",
+        project="demo",
+        run_id="direct-run",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+
+    async def load_salmon_fields() -> set[str]:
+        catalog_store = SQLModelGoodomicsStore(database_url)
+        async with AsyncSession(catalog_store._get_engine()) as session:
+            profile = (
+                await session.exec(
+                    select(DataProfileRecord).where(
+                        DataProfileRecord.data_profile_id == "salmon:metrics"
+                    )
+                )
+            ).one()
+            assert profile.id is not None
+            rows = (
+                await session.exec(
+                    select(DataProfileFieldRecord).where(
+                        DataProfileFieldRecord.data_profile_id == profile.id
+                    )
+                )
+            ).all()
+        return {row.field_id for row in rows}
+
+    fields = asyncio.run(load_salmon_fields())
+    assert "general_stats.salmon_percent_mapped" in fields
+    assert "salmon:metrics:direct_percent_mapped" in fields

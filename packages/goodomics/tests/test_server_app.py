@@ -776,7 +776,8 @@ def test_run_analytics_and_file_content_endpoints(
         file_root=file_root,
     )
     profile_projects = _profile_project_ids(database_url)
-    assert profile_projects["multiqc:qc_metrics"] == DEFAULT_PROJECT_ID
+    assert profile_projects["salmon:metrics"] == DEFAULT_PROJECT_ID
+    assert profile_projects["fastqc:raw:metrics"] == DEFAULT_PROJECT_ID
     assert profile_projects["multiqc:payloads"] == DEFAULT_PROJECT_ID
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
@@ -946,7 +947,7 @@ def test_profile_browser_and_profile_first_insight_execution(
             "/api/v1/profiles",
         )
         profile = test_client.get(
-            "/api/v1/profiles/multiqc:qc_metrics",
+            "/api/v1/profiles/salmon:metrics",
         )
         result = test_client.post(
             "/api/v1/insights/execute",
@@ -958,7 +959,7 @@ def test_profile_browser_and_profile_first_insight_execution(
                     "query": {
                         "source": {
                             "kind": "data_profile",
-                            "data_profile_id": "multiqc:qc_metrics",
+                            "data_profile_id": "salmon:metrics",
                         },
                         "fields": ["general_stats.salmon_percent_mapped"],
                         "entity": "run_sample",
@@ -974,9 +975,7 @@ def test_profile_browser_and_profile_first_insight_execution(
             },
         )
     assert profiles.status_code == 200
-    assert any(
-        item["data_profile_id"] == "multiqc:qc_metrics" for item in profiles.json()
-    )
+    assert any(item["data_profile_id"] == "salmon:metrics" for item in profiles.json())
     assert profile.status_code == 200
     field = next(
         item
@@ -1017,7 +1016,7 @@ def test_profile_series_charts_match_catalog_field_ids(
         "query": {
             "source": {
                 "kind": "data_profile",
-                "data_profile_id": "multiqc:qc_metrics",
+                "data_profile_id": "salmon:metrics",
             },
             "fields": [field_id],
             "entity": "run_sample",
@@ -1027,7 +1026,7 @@ def test_profile_series_charts_match_catalog_field_ids(
         "series": [
             {
                 "series_id": "series-0",
-                "profile_id": "multiqc:qc_metrics",
+                "profile_id": "salmon:metrics",
                 "field_id": field_id,
                 "name": "Percent mapped",
                 "aggregation": "avg",
@@ -1544,11 +1543,11 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
                 "mode": "comparison",
                 "series": [
                     {
-                        "profile_id": "multiqc:qc_metrics",
+                        "profile_id": "salmon:metrics",
                         "field_id": "general_stats.salmon_percent_mapped",
                     },
                     {
-                        "profile_id": "multiqc:qc_metrics",
+                        "profile_id": "fastqc:raw:metrics",
                         "field_id": "general_stats.fastqc_raw_percent_gc",
                     },
                 ],

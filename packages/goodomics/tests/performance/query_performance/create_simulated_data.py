@@ -718,7 +718,7 @@ def _insert_sample_metric_numeric(connection: duckdb.DuckDBPyConnection) -> None
         """
         INSERT INTO sample_metric_numeric
         SELECT
-            'multiqc:qc_metrics',
+            'fastqc:raw:metrics',
             rs.run_id,
             rs.run_sample_id,
             rs.sample_id,
@@ -743,7 +743,7 @@ def _insert_sample_metric_string(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO sample_metric_string
         SELECT
-            'multiqc:qc_metrics',
+            'fastqc:raw:metrics',
             run_id,
             run_sample_id,
             sample_id,
@@ -764,7 +764,7 @@ def _insert_sample_metric_json(connection: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO sample_metric_json
         SELECT
-            'multiqc:qc_metrics',
+            'fastqc:raw:metrics',
             run_id,
             run_sample_id,
             sample_id,
@@ -1019,7 +1019,7 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
                 (
                     'multiqc_general_stats_preview',
                     'table',
-                    'multiqc:qc_metrics',
+                    'fastqc:raw:metrics',
                     json_object('columns', ['metric_id', 'value']),
                     ?,
                     ['metric_id', 'value'],
@@ -1048,7 +1048,7 @@ def _insert_cohort_summaries(connection: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO cohort_summaries
         SELECT
             'all_samples',
-            'multiqc:qc_metrics',
+            'fastqc:raw:metrics',
             metric_id,
             NULL,
             count(*),
