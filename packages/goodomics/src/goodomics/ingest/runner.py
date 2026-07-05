@@ -34,7 +34,7 @@ def run_ingest(
     console: Console | None = None,
     show_progress: bool = False,
 ) -> IngestRouteResult:
-    """Resolve and execute the configured ingest source for the provided results path."""
+    """Resolve and execute the configured ingest source for provided results path."""
 
     source = get_source(str(ingest_type))
     resolved_database_url = resolve_database_url(database_url)
@@ -62,7 +62,7 @@ def run_ingest(
 
 
 def print_ingest_result(result: IngestRouteResult, console: Console) -> None:
-    """Render ingest output using the source printer or a generic structured fallback."""
+    """Render ingest output with source printer or generic structured fallback."""
 
     printer = result.source.load_result_printer()
     if printer is None:
