@@ -40,7 +40,7 @@ class CbioPortalIngestResult:
 
     data_import_id: str
     runs_ingested: int
-    profiles_ingested: int
+    contracts_ingested: int
     subjects_ingested: int
     samples_ingested: int
     run_samples_ingested: int
@@ -103,8 +103,8 @@ def ingest_cbioportal_study(
                 subjects=parsed.subjects,
                 samples=parsed.samples,
                 run_samples=parsed.run_samples,
-                data_profiles=parsed.data_profiles,
-                data_profile_fields=parsed.data_profile_fields,
+                data_contracts=parsed.data_contracts,
+                data_contract_fields=parsed.data_contract_fields,
                 files=parsed.files,
                 file_links=parsed.file_links,
                 sample_sets=parsed.sample_sets,
@@ -158,7 +158,7 @@ def ingest_cbioportal_study(
         return CbioPortalIngestResult(
             data_import_id=resolved_data_import_id,
             runs_ingested=len(parsed.all_runs),
-            profiles_ingested=len(parsed.data_profiles),
+            contracts_ingested=len(parsed.data_contracts),
             subjects_ingested=len(parsed.subjects),
             samples_ingested=len(parsed.samples),
             run_samples_ingested=len(parsed.run_samples),
@@ -197,11 +197,11 @@ class _ClippedDescriptionColumn(ProgressColumn):
 
 
 def _bulk_load_label(bulk_load: Any) -> str:
-    profile = getattr(bulk_load, "profile", None)
-    profile_name = getattr(profile, "name", None)
+    contract = getattr(bulk_load, "contract", None)
+    contract_name = getattr(contract, "name", None)
     path = getattr(bulk_load, "path", None)
     path_name = Path(path).name if path is not None else type(bulk_load).__name__
-    return f"{profile_name or type(bulk_load).__name__} ({path_name})"
+    return f"{contract_name or type(bulk_load).__name__} ({path_name})"
 
 
 def _study_identifier(root: Path) -> str:

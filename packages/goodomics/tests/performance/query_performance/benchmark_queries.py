@@ -134,7 +134,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     """,
     """
     SELECT *
-    FROM profile_payloads
+    FROM contract_payloads
     WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
@@ -195,7 +195,7 @@ QUERIES: tuple[QueryCase, ...] = (
     #         quantile_cont(value, 0.95) AS p95_tpm,
     #         count(*) AS observations
     #     FROM feature_value_numeric_by_sample
-    #     WHERE data_profile_id = 'rna_expression'
+    #     WHERE data_contract_id = 'rna_expression'
     #     GROUP BY feature_id
     #     ORDER BY mean_tpm DESC
     #     LIMIT 25
@@ -354,37 +354,37 @@ QUERIES: tuple[QueryCase, ...] = (
         """,
     ),
     QueryCase(
-        "Observed profiles and payloads",
+        "Observed contracts and payloads",
         """
         WITH observed AS (
-            SELECT data_profile_id, run_sample_id FROM sample_metric_numeric
+            SELECT data_contract_id, run_sample_id FROM sample_metric_numeric
             UNION
-            SELECT data_profile_id, run_sample_id FROM sample_metric_string
+            SELECT data_contract_id, run_sample_id FROM sample_metric_string
             UNION
-            SELECT data_profile_id, run_sample_id FROM feature_value_numeric
+            SELECT data_contract_id, run_sample_id FROM feature_value_numeric
             UNION
-            SELECT data_profile_id, run_sample_id FROM feature_call
+            SELECT data_contract_id, run_sample_id FROM feature_call
             UNION
-            SELECT data_profile_id, run_sample_id FROM copy_number_segments
+            SELECT data_contract_id, run_sample_id FROM copy_number_segments
             UNION
-            SELECT data_profile_id, run_sample_id FROM sample_variant_calls
+            SELECT data_contract_id, run_sample_id FROM sample_variant_calls
             UNION
-            SELECT data_profile_id, run_sample_id
+            SELECT data_contract_id, run_sample_id
             FROM sample_structural_variant_calls
             UNION
-            SELECT data_profile_id, run_sample_id FROM profile_payloads
+            SELECT data_contract_id, run_sample_id FROM contract_payloads
         )
         SELECT
-            observed.data_profile_id,
+            observed.data_contract_id,
             count(DISTINCT observed.run_sample_id) AS samples,
             count(DISTINCT pp.payload_id) AS payloads,
             sum(coalesce(pp.row_count, 0)) AS declared_payload_rows
         FROM observed
-        LEFT JOIN profile_payloads pp
+        LEFT JOIN contract_payloads pp
             ON pp.run_sample_id IS NOT DISTINCT FROM observed.run_sample_id
-            AND pp.data_profile_id = observed.data_profile_id
-        GROUP BY observed.data_profile_id
-        ORDER BY observed.data_profile_id
+            AND pp.data_contract_id = observed.data_contract_id
+        GROUP BY observed.data_contract_id
+        ORDER BY observed.data_contract_id
         """,
     ),
     QueryCase("All data for one run", RUN_WIDE_QUERIES),

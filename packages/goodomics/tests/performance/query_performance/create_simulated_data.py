@@ -327,7 +327,7 @@ def _load_run_scoped_tables(connection: duckdb.DuckDBPyConnection) -> None:
             lambda: _insert_sample_structural_variant_calls(connection),
         ),
         ("timeline_events", lambda: _insert_timeline_events(connection)),
-        ("profile_payloads", lambda: _insert_profile_payloads(connection)),
+        ("contract_payloads", lambda: _insert_contract_payloads(connection)),
         ("cohort_summaries", lambda: _insert_cohort_summaries(connection)),
         ("tool_versions", lambda: _insert_tool_versions(connection)),
         ("data_sources", lambda: _insert_data_sources(connection)),
@@ -978,13 +978,13 @@ def _insert_timeline_events(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
+def _insert_contract_payloads(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         """
-        INSERT INTO profile_payloads
+        INSERT INTO contract_payloads
         SELECT
             printf('payload:%s:%s', run_sample_id, payload_name),
-            data_profile_id,
+            data_contract_id,
             run_id,
             run_sample_id,
             payload_name,
@@ -1031,7 +1031,7 @@ def _insert_profile_payloads(connection: duckdb.DuckDBPyConnection) -> None:
         ) AS payloads(
             payload_name,
             payload_kind,
-            data_profile_id,
+            data_contract_id,
             schema_json,
             row_count,
             columns_json,

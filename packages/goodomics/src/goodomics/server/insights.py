@@ -53,8 +53,8 @@ from goodomics.storage.duckdb import (
     DuckDBAnalyticsStore,
 )
 from goodomics.storage.sqlalchemy import (
-    DataProfileFieldRecord,
-    DataProfileRecord,
+    DataContractFieldRecord,
+    DataContractRecord,
     ProjectRecord,
     RunSampleRecord,
     SampleRecord,
@@ -187,7 +187,7 @@ def _default_mode(config: Mapping[str, Any]) -> str:
         return "variant_table"
     if visualization == "scatter":
         return "comparison"
-    return "profile_metrics"
+    return "contract_metrics"
 
 
 async def execute_insight(
@@ -399,13 +399,13 @@ async def execute_data_query(
 ) -> tuple[list[str], list[JsonObject]]:
     """Run the data query described by an insight config.
 
-    Profile-first queries are preferred because they use Goodomics semantic data
-    profiles. Generic table queries and read-only SQL are supported as escape
+    Contract-first queries are preferred because they use Goodomics semantic data
+    contracts. Generic table queries and read-only SQL are supported as escape
     hatches.
     """
 
     query_config = _query_config(config)
-    series_query = await _execute_profile_series_query(
+    series_query = await _execute_contract_series_query(
         session=session,
         analytics_store=analytics_store,
         project_id=project_id,
@@ -413,14 +413,14 @@ async def execute_data_query(
     )
     if series_query is not None:
         return series_query
-    profile_query = await _compile_profile_query(
+    contract_query = await _compile_contract_query(
         session=session,
         project_id=project_id,
         query_config=query_config,
         config=config,
     )
-    if profile_query is not None:
-        sql, parameters, columns = profile_query
+    if contract_query is not None:
+        sql, parameters, columns = contract_query
         return analytics_store.query_rows(
             sql, parameters=parameters, limit=_query_limit(query_config, config)
         )
@@ -449,17 +449,17 @@ async def execute_data_query(
     return await _execute_catalog_sql(session, sql, parameters=parameters, limit=limit)
 
 
-async def _execute_profile_series_query(
+async def _execute_contract_series_query(
     *,
     session: AsyncSession,
     analytics_store: DuckDBAnalyticsStore,
     project_id: str | None,
     config: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]] | None:
-    # New mode-first configs put profile identity on each series so different
-    # profiles can be aligned by sample/run_sample/feature without exposing a
+    # New mode-first configs put contract identity on each series so different
+    # contracts can be aligned by sample/run_sample/feature without exposing a
     # raw SQL join to the dashboard or future AI tooling.
-    series_items = _profile_series_items(config)
+    series_items = _contract_series_items(config)
     if not series_items:
         return None
     visualization = str(config.get("visualization") or "table")
@@ -483,7 +483,7 @@ async def _execute_profile_series_query(
             aliases=aliases,
             limit=limit,
         )
-    linker = await _resolve_profile_series_linker(
+    linker = await _resolve_contract_series_linker(
         session=session,
         project_id=project_id,
         config=config,
@@ -491,7 +491,7 @@ async def _execute_profile_series_query(
     )
     series_rows: list[list[JsonObject]] = []
     for series_item, alias in zip(series_items, aliases, strict=True):
-        sql, parameters = await _profile_series_sql(
+        sql, parameters = await _contract_series_sql(
             session=session,
             project_id=project_id,
             config=config,
@@ -530,7 +530,7 @@ async def _execute_histogram_series_query(
 ) -> tuple[list[str], list[JsonObject]]:
     series_rows: list[list[JsonObject]] = []
     for series_item, alias in zip(series_items, aliases, strict=True):
-        sql, parameters = await _profile_series_sql(
+        sql, parameters = await _contract_series_sql(
             session=session,
             project_id=project_id,
             config=config,
@@ -576,25 +576,25 @@ async def _execute_single_series_count_query(
     series_item: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]]:
     alias = "count"
-    profile = await _series_profile(session, project_id, series_item)
-    table = _profile_table(profile)
+    contract = await _series_contract(session, project_id, series_item)
+    table = _contract_table(contract)
     field_id = _series_field_id(series_item)
     field = await _series_field_record(
         session=session,
-        profile=profile,
+        contract=contract,
         table=table,
         field_id=field_id,
     )
     value_column = await _series_value_column(
         session=session,
-        profile=profile,
+        contract=contract,
         table=table,
         field_id=field_id,
     )
     source = _series_source_sql(table)
     columns = _columns_for_source("analytics", table)
-    parameters: list[Any] = [_record_pk(profile)]
-    where_parts = ["data_profile_id = ?"]
+    parameters: list[Any] = [_record_pk(contract)]
+    where_parts = ["data_contract_id = ?"]
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
@@ -608,7 +608,7 @@ async def _execute_single_series_count_query(
     where_parts.extend(
         _series_filters_sql(
             table=table,
-            profile_pk=_record_pk(profile),
+            contract_pk=_record_pk(contract),
             columns=columns,
             filters=_combined_filters(config, series_item),
             parameters=parameters,
@@ -639,7 +639,7 @@ async def _execute_single_series_count_query(
     return ["category", alias], rows
 
 
-async def _profile_series_sql(
+async def _contract_series_sql(
     *,
     session: AsyncSession,
     project_id: str | None,
@@ -648,18 +648,18 @@ async def _profile_series_sql(
     alias: str,
     linker_column: str | None,
 ) -> tuple[str, list[Any]]:
-    profile = await _series_profile(session, project_id, series_item)
-    table = _profile_table(profile)
+    contract = await _series_contract(session, project_id, series_item)
+    table = _contract_table(contract)
     field_id = _series_field_id(series_item)
     field = await _series_field_record(
         session=session,
-        profile=profile,
+        contract=contract,
         table=table,
         field_id=field_id,
     )
     value_column = await _series_value_column(
         session=session,
-        profile=profile,
+        contract=contract,
         table=table,
         field_id=field_id,
     )
@@ -672,8 +672,8 @@ async def _profile_series_sql(
     select_parts.append(
         f"{_quote_identifier(value_column)} AS {_quote_identifier(alias)}"
     )
-    parameters: list[Any] = [_record_pk(profile)]
-    where_parts = ["data_profile_id = ?"]
+    parameters: list[Any] = [_record_pk(contract)]
+    where_parts = ["data_contract_id = ?"]
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
@@ -687,7 +687,7 @@ async def _profile_series_sql(
     where_parts.extend(
         _series_filters_sql(
             table=table,
-            profile_pk=_record_pk(profile),
+            contract_pk=_record_pk(contract),
             columns=columns,
             filters=_combined_filters(config, series_item),
             parameters=parameters,
@@ -701,22 +701,22 @@ async def _profile_series_sql(
     return sql, parameters
 
 
-async def _series_profile(
+async def _series_contract(
     session: AsyncSession,
     project_id: str | None,
     series_item: Mapping[str, Any],
-) -> DataProfileRecord:
-    profile_id = _series_profile_id(series_item)
-    if not profile_id:
-        raise ValueError("Profile series require a data_profile_id.")
-    profile = await _get_profile_record(session, project_id, profile_id)
-    if profile is None:
-        raise ValueError(f"Unknown data profile: {profile_id}")
-    return profile
+) -> DataContractRecord:
+    contract_id = _series_contract_id(series_item)
+    if not contract_id:
+        raise ValueError("Contract series require a data_contract_id.")
+    contract = await _get_contract_record(session, project_id, contract_id)
+    if contract is None:
+        raise ValueError(f"Unknown data contract: {contract_id}")
+    return contract
 
 
-def _profile_table(profile: DataProfileRecord) -> str:
-    table = profile.primary_table
+def _contract_table(contract: DataContractRecord) -> str:
+    table = contract.primary_table
     if table not in {
         "sample_metrics",
         "entity_attributes",
@@ -725,11 +725,11 @@ def _profile_table(profile: DataProfileRecord) -> str:
         "copy_number_segments",
         "sample_variant_calls",
         "sample_structural_variant_calls",
-        "profile_payloads",
+        "contract_payloads",
         "gene_alteration_state",
     }:
         raise ValueError(
-            f"Profile series are not available for table: {table or 'unknown'}"
+            f"Contract series are not available for table: {table or 'unknown'}"
         )
     return table
 
@@ -737,58 +737,58 @@ def _profile_table(profile: DataProfileRecord) -> str:
 async def _series_value_column(
     *,
     session: AsyncSession,
-    profile: DataProfileRecord,
+    contract: DataContractRecord,
     table: str,
     field_id: str,
 ) -> str:
-    synthetic = _synthetic_profile_fields(table).get(table, {})
+    synthetic = _synthetic_contract_fields(table).get(table, {})
     if field_id in synthetic:
         return synthetic[field_id]
     if table == "feature_value_numeric":
         return "value"
     if table in {"sample_metrics", "entity_attributes"}:
         if not field_id:
-            raise ValueError("Metric and attribute profile series require a field_id.")
-        rows = await _get_profile_field_records(
-            session, profile_id=_record_pk(profile), field_ids=[field_id]
+            raise ValueError("Metric and attribute contract series require a field_id.")
+        rows = await _get_contract_field_records(
+            session, contract_id=_record_pk(contract), field_ids=[field_id]
         )
         if field_id not in rows:
-            raise ValueError(f"Unknown profile field: {field_id}")
-        return _profile_value_column(rows[field_id])
+            raise ValueError(f"Unknown contract field: {field_id}")
+        return _contract_value_column(rows[field_id])
     fallback = {
         "feature_call": "call_rank",
         "copy_number_segments": "segment_mean",
         "sample_variant_calls": "allele_fraction",
         "sample_structural_variant_calls": "split_read_count",
-        "profile_payloads": "payload_name",
+        "contract_payloads": "payload_name",
         "gene_alteration_state": "value_numeric",
     }.get(table)
     if fallback is None:
-        raise ValueError(f"No default value column for profile table: {table}")
+        raise ValueError(f"No default value column for contract table: {table}")
     return fallback
 
 
 async def _series_field_record(
     *,
     session: AsyncSession,
-    profile: DataProfileRecord,
+    contract: DataContractRecord,
     table: str,
     field_id: str,
-) -> DataProfileFieldRecord | None:
+) -> DataContractFieldRecord | None:
     if table not in {"sample_metrics", "entity_attributes"}:
         return None
     if not field_id:
-        raise ValueError("Metric and attribute profile series require a field_id.")
-    rows = await _get_profile_field_records(
-        session, profile_id=_record_pk(profile), field_ids=[field_id]
+        raise ValueError("Metric and attribute contract series require a field_id.")
+    rows = await _get_contract_field_records(
+        session, contract_id=_record_pk(contract), field_ids=[field_id]
     )
     field = rows.get(field_id)
     if field is None:
-        raise ValueError(f"Unknown profile field: {field_id}")
+        raise ValueError(f"Unknown contract field: {field_id}")
     return field
 
 
-async def _resolve_profile_series_linker(
+async def _resolve_contract_series_linker(
     *,
     session: AsyncSession,
     project_id: str | None,
@@ -797,8 +797,8 @@ async def _resolve_profile_series_linker(
 ) -> JsonObject:
     column_sets = []
     for series_item in series_items:
-        profile = await _series_profile(session, project_id, series_item)
-        table = _profile_table(profile)
+        contract = await _series_contract(session, project_id, series_item)
+        table = _contract_table(contract)
         column_sets.append(set(_columns_for_source("analytics", table)))
     valid = [
         linker_id
@@ -913,7 +913,7 @@ async def _context_where_sql(
 def _series_filters_sql(
     *,
     table: str,
-    profile_pk: int,
+    contract_pk: int,
     columns: Sequence[str],
     filters: Sequence[Any],
     parameters: list[Any],
@@ -925,7 +925,7 @@ def _series_filters_sql(
             continue
         if table == "sample_variant_calls" and normalized["field"] == "feature_id":
             where_parts.append(
-                _variant_feature_filter_sql(normalized, profile_pk, parameters)
+                _variant_feature_filter_sql(normalized, contract_pk, parameters)
             )
             continue
         where_parts.append(_filter_sql(columns, normalized, parameters))
@@ -933,7 +933,7 @@ def _series_filters_sql(
 
 
 def _variant_feature_filter_sql(
-    filter_config: Mapping[str, Any], profile_pk: int, parameters: list[Any]
+    filter_config: Mapping[str, Any], contract_pk: int, parameters: list[Any]
 ) -> str:
     value = filter_config.get("value")
     operator = str(filter_config.get("operator") or filter_config.get("op") or "eq")
@@ -946,19 +946,19 @@ def _variant_feature_filter_sql(
         )
         if not values:
             return "1 = 0"
-        parameters.extend([profile_pk, *values])
+        parameters.extend([contract_pk, *values])
         return (
             "variant_id IN ("
             f"SELECT variant_id FROM {annotation_source} "
-            "WHERE data_profile_id = ? "
+            "WHERE data_contract_id = ? "
             f"AND feature_id IN ({', '.join('?' for _ in values)})"
             ")"
         )
-    parameters.extend([profile_pk, value])
+    parameters.extend([contract_pk, value])
     return (
         "variant_id IN ("
         f"SELECT variant_id FROM {annotation_source} "
-        "WHERE data_profile_id = ? AND feature_id = ?"
+        "WHERE data_contract_id = ? AND feature_id = ?"
         ")"
     )
 
@@ -1085,7 +1085,7 @@ def _linker_diagnostics(
     }
 
 
-def _profile_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _contract_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     raw = config.get("series")
     if isinstance(raw, Mapping):
         raw_items = [raw]
@@ -1096,21 +1096,21 @@ def _profile_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     items = [
         item
         for item in raw_items
-        if _series_profile_id(item) and _series_field_id(item)
+        if _series_contract_id(item) and _series_field_id(item)
     ]
     return items
 
 
-def _series_profile_id(series_item: Mapping[str, Any]) -> str:
+def _series_contract_id(series_item: Mapping[str, Any]) -> str:
     source = series_item.get("source")
     if isinstance(source, Mapping):
-        value = source.get("data_profile_id") or source.get("id")
+        value = source.get("data_contract_id") or source.get("id")
         if isinstance(value, str):
             return value
     value = (
-        series_item.get("profile_id")
-        or series_item.get("data_profile_id")
-        or series_item.get("profileId")
+        series_item.get("contract_id")
+        or series_item.get("data_contract_id")
+        or series_item.get("contractId")
     )
     return str(value) if isinstance(value, str) else ""
 
@@ -1219,37 +1219,37 @@ async def _sample_set_run_sample_pks(
     return [int(row) for row in rows]
 
 
-async def _compile_profile_query(
+async def _compile_contract_query(
     *,
     session: AsyncSession,
     project_id: str | None,
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]] | None:
-    # Profile queries start from a stable semantic data_profile_id rather than a
+    # Contract queries start from a stable semantic data_contract_id rather than a
     # physical table name. That keeps insight configs portable across projects
-    # and lets the profile decide which analytical table is authoritative.
+    # and lets the contract decide which analytical table is authoritative.
 
     source = query_config.get("source")
-    if not isinstance(source, Mapping) or source.get("kind") != "data_profile":
+    if not isinstance(source, Mapping) or source.get("kind") != "data_contract":
         return None
 
-    profile_public_id = str(
-        source.get("data_profile_id")
+    contract_public_id = str(
+        source.get("data_contract_id")
         or source.get("id")
-        or query_config.get("data_profile_id")
+        or query_config.get("data_contract_id")
         or ""
     )
 
-    if not profile_public_id:
-        raise ValueError("Profile queries require source.data_profile_id.")
+    if not contract_public_id:
+        raise ValueError("Contract queries require source.data_contract_id.")
 
-    profile = await _get_profile_record(session, project_id, profile_public_id)
+    contract = await _get_contract_record(session, project_id, contract_public_id)
 
-    if profile is None:
-        raise ValueError(f"Unknown data profile: {profile_public_id}")
+    if contract is None:
+        raise ValueError(f"Unknown data contract: {contract_public_id}")
 
-    table = profile.primary_table
+    table = contract.primary_table
 
     if table not in {
         "sample_metrics",
@@ -1259,23 +1259,23 @@ async def _compile_profile_query(
         "copy_number_segments",
         "sample_variant_calls",
         "sample_structural_variant_calls",
-        "profile_payloads",
+        "contract_payloads",
     }:
         raise ValueError(
-            f"Profile-first queries are not available for table: {table or 'unknown'}"
+            f"Contract-first queries are not available for table: {table or 'unknown'}"
         )
 
-    requested_fields = _profile_requested_fields(query_config, config)
-    synthetic_fields = _synthetic_profile_fields(table)
+    requested_fields = _contract_requested_fields(query_config, config)
+    synthetic_fields = _synthetic_contract_fields(table)
 
     # Some analytical tables expose meaningful columns directly instead of
-    # catalog-backed data_profile_fields rows. Treat those as synthetic fields so
-    # users can still query them through the same profile-first grammar.
+    # catalog-backed data_contract_fields rows. Treat those as synthetic fields so
+    # users can still query them through the same contract-first grammar.
     if table in {"feature_value_numeric", *synthetic_fields} and not requested_fields:
         requested_fields = [next(iter(synthetic_fields.get(table, {"value": "value"})))]
 
     if not requested_fields:
-        raise ValueError("Profile queries require at least one field or measure.")
+        raise ValueError("Contract queries require at least one field or measure.")
 
     if table == "feature_value_numeric":
         # Feature matrices store the measured value in a single canonical value
@@ -1292,18 +1292,18 @@ async def _compile_profile_query(
         field_id = requested_fields[0]
         value_column = synthetic_fields[table][field_id]
     else:
-        field_rows = await _get_profile_field_records(
+        field_rows = await _get_contract_field_records(
             session,
-            profile_id=_record_pk(profile),
+            contract_id=_record_pk(contract),
             field_ids=requested_fields,
         )
         if any(field_id not in field_rows for field_id in requested_fields):
             # The dashboard often sends safe aliases for fields with punctuation.
             # If direct lookup misses, load all fields and map aliases back to
             # canonical field IDs.
-            field_rows = await _get_all_profile_field_records(
+            field_rows = await _get_all_contract_field_records(
                 session,
-                profile_id=_record_pk(profile),
+                contract_id=_record_pk(contract),
             )
         field_aliases = {
             _safe_alias(row.field_id, fallback="value"): field_id
@@ -1316,10 +1316,10 @@ async def _compile_profile_query(
         )
         missing = [field for field in requested_fields if field not in field_rows]
         if missing:
-            raise ValueError(f"Unknown profile field(s): {', '.join(missing)}")
+            raise ValueError(f"Unknown contract field(s): {', '.join(missing)}")
         field = field_rows[requested_fields[0]]
         field_id = field.field_id
-        value_column = _profile_value_column(field)
+        value_column = _contract_value_column(field)
 
     field_alias = _safe_alias(field_id, fallback="value")
     dimensions = _string_list(
@@ -1334,7 +1334,7 @@ async def _compile_profile_query(
             dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
         elif table == "entity_attributes":
             dimensions = ["entity_id"]
-        elif table != "profile_payloads":
+        elif table != "contract_payloads":
             dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
 
     columns = _columns_for_source("analytics", table)
@@ -1361,7 +1361,7 @@ async def _compile_profile_query(
         ]
         for requested_field in requested_fields:
             row = field_rows[requested_field]
-            value_column = _profile_value_column(row)
+            value_column = _contract_value_column(row)
             alias = _safe_alias(row.field_id, fallback="value")
             # Each field is stored as its own row in sample_metrics. CASE/MAX
             # pivots those sparse rows into a compact entity-wide row.
@@ -1371,14 +1371,14 @@ async def _compile_profile_query(
                 f"THEN {_quote_identifier(value_column)} END) "
                 f"AS {_quote_identifier(alias)}"
             )
-        parameters.append(_record_pk(profile))
+        parameters.append(_record_pk(contract))
         field_predicates = [
             _field_id_match_sql(parameters, field_rows[field_id])
             for field_id in requested_fields
         ]
         sql = (
             f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)} "
-            f"WHERE data_profile_id = ? AND ({' OR '.join(field_predicates)}) "
+            f"WHERE data_contract_id = ? AND ({' OR '.join(field_predicates)}) "
             f"GROUP BY {_quote_identifier(dimension)}"
         )
         output_columns = [
@@ -1396,7 +1396,7 @@ async def _compile_profile_query(
     for dimension in dimensions:
         if dimension in {field_id, field_alias, "value"}:
             # Allow the selected value field itself to be used as a grouping
-            # dimension, for example counting categorical values in a profile.
+            # dimension, for example counting categorical values in a contract.
             expression = _quote_identifier(value_column)
             alias = field_alias
         else:
@@ -1427,8 +1427,8 @@ async def _compile_profile_query(
 
     if not select_parts:
         # Without explicit dimensions or measures, return raw values with the
-        # profile's natural entity dimensions.
-        default_dimensions = _default_profile_dimensions(table)
+        # contract's natural entity dimensions.
+        default_dimensions = _default_contract_dimensions(table)
         for column in default_dimensions:
             if column in columns:
                 select_parts.append(
@@ -1439,8 +1439,8 @@ async def _compile_profile_query(
         )
         exposed_columns.add(field_alias)
 
-    parameters: list[Any] = [_record_pk(profile)]
-    where_parts = ["data_profile_id = ?"]
+    parameters: list[Any] = [_record_pk(contract)]
+    where_parts = ["data_contract_id = ?"]
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     for filter_config in [
@@ -1450,7 +1450,7 @@ async def _compile_profile_query(
         # Filters can live either inside query or at top-level config. Supporting
         # both keeps saved JSON compatible with dashboard and template shapes.
         where_parts.append(
-            _profile_filter_sql(
+            _contract_filter_sql(
                 columns=columns,
                 value_column=value_column,
                 field_aliases={field_id, field_alias, "value"},
@@ -1717,54 +1717,57 @@ async def fingerprint_source(
 ) -> str:
     """Return a cache fingerprint for an insight/report data source."""
 
-    if source.get("kind") == "data_profile":
-        profile_id = str(source.get("data_profile_id") or "")
-        profile = await _get_profile_record(session, project_id, profile_id)
+    if source.get("kind") == "data_contract":
+        contract_id = str(source.get("data_contract_id") or "")
+        contract = await _get_contract_record(session, project_id, contract_id)
         field_count = 0
-        if profile is not None:
-            # Profile summaries/fingerprints capture data updates, while field
+        if contract is not None:
+            # Contract summaries/fingerprints capture data updates, while field
             # count captures schema changes that affect available measures.
             field_count = int(
                 (
                     await session.exec(
                         select(func.count())
-                        .select_from(DataProfileFieldRecord)
-                        .where(DataProfileFieldRecord.data_profile_id == profile.id)
+                        .select_from(DataContractFieldRecord)
+                        .where(DataContractFieldRecord.data_contract_id == contract.id)
                     )
                 ).one()
             )
         return canonical_hash(
             {
-                "kind": "data_profile",
-                "data_profile_id": profile_id,
+                "kind": "data_contract",
+                "data_contract_id": contract_id,
                 "source_fingerprint": (
-                    profile.source_fingerprint if profile is not None else None
+                    contract.source_fingerprint if contract is not None else None
                 ),
                 "last_profiled_at": (
-                    profile.last_profiled_at.isoformat()
-                    if profile is not None and profile.last_profiled_at is not None
+                    contract.last_profiled_at.isoformat()
+                    if contract is not None and contract.last_profiled_at is not None
                     else None
                 ),
                 "fields": field_count,
             }
         )
-    if source.get("kind") == "profile_series":
-        profile_ids = [
+    if source.get("kind") == "contract_series":
+        contract_ids = [
             str(value)
-            for value in source.get("data_profile_ids", [])
+            for value in source.get("data_contract_ids", [])
             if isinstance(value, str)
         ]
         return canonical_hash(
             {
-                "kind": "profile_series",
-                "profiles": [
+                "kind": "contract_series",
+                "contracts": [
                     await fingerprint_source(
                         session=session,
                         analytics_store=analytics_store,
                         project_id=project_id,
-                        source={"kind": "data_profile", "data_profile_id": profile_id},
+                        source={
+                            "kind": "data_contract",
+                            "data_contract_id": contract_id,
+                        },
                     )
-                    for profile_id in profile_ids
+                    for contract_id in contract_ids
                 ],
             }
         )
@@ -1811,7 +1814,7 @@ async def _compile_builder_query(
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]]:
     # Generic builder queries target a physical catalog/analytics table. They
-    # are less semantic than profile-first queries but useful for database
+    # are less semantic than contract-first queries but useful for database
     # previews and advanced dashboard workflows.
     columns = _columns_for_source(store, table)
     dimensions = _string_list(
@@ -2064,20 +2067,20 @@ def _query_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
 def _query_source(config: Mapping[str, Any]) -> JsonObject:
     # Extract only the source identity used for fingerprinting. Query shape,
     # filters, and visualization are already part of the config hash.
-    profile_series = _profile_series_items(config)
-    if profile_series:
+    contract_series = _contract_series_items(config)
+    if contract_series:
         return {
-            "kind": "profile_series",
-            "data_profile_ids": sorted(
-                {_series_profile_id(series_item) for series_item in profile_series}
+            "kind": "contract_series",
+            "data_contract_ids": sorted(
+                {_series_contract_id(series_item) for series_item in contract_series}
             ),
         }
     query = _query_config(config)
     source = query.get("source")
-    if isinstance(source, Mapping) and source.get("kind") == "data_profile":
+    if isinstance(source, Mapping) and source.get("kind") == "data_contract":
         return {
-            "kind": "data_profile",
-            "data_profile_id": source.get("data_profile_id") or source.get("id"),
+            "kind": "data_contract",
+            "data_contract_id": source.get("data_contract_id") or source.get("id"),
         }
     store, table = _parse_source(query.get("source"))
     return {"store": store, "table": table}
@@ -2103,28 +2106,28 @@ def _parse_source(value: Any) -> tuple[StoreName, str | None]:
     return cast(StoreName, store), str(table) if table else None
 
 
-async def _get_profile_record(
+async def _get_contract_record(
     session: AsyncSession,
     project_id: str | None,
-    data_profile_id: str,
-) -> DataProfileRecord | None:
-    statement = select(DataProfileRecord).where(
-        DataProfileRecord.data_profile_id == data_profile_id
+    data_contract_id: str,
+) -> DataContractRecord | None:
+    statement = select(DataContractRecord).where(
+        DataContractRecord.data_contract_id == data_contract_id
     )
     if project_id is not None:
         project_pk = await _project_pk(session, project_id)
         if project_pk is None:
             return None
         if project_id == DEFAULT_PROJECT_ID:
-            profile_project_id = cast(Any, DataProfileRecord.project_id)
+            contract_project_id = cast(Any, DataContractRecord.project_id)
             statement = statement.where(
                 or_(
-                    profile_project_id == project_pk,
-                    profile_project_id.is_(None),
+                    contract_project_id == project_pk,
+                    contract_project_id.is_(None),
                 )
             )
         else:
-            statement = statement.where(DataProfileRecord.project_id == project_pk)
+            statement = statement.where(DataContractRecord.project_id == project_pk)
     rows = list((await session.exec(statement)).all())
     if project_id == DEFAULT_PROJECT_ID:
         for row in rows:
@@ -2133,38 +2136,38 @@ async def _get_profile_record(
     return rows[0] if rows else None
 
 
-async def _get_profile_field_records(
+async def _get_contract_field_records(
     session: AsyncSession,
     *,
-    profile_id: int,
+    contract_id: int,
     field_ids: Sequence[str],
-) -> dict[str, DataProfileFieldRecord]:
+) -> dict[str, DataContractFieldRecord]:
     rows = (
         await session.exec(
-            select(DataProfileFieldRecord)
-            .where(DataProfileFieldRecord.data_profile_id == profile_id)
-            .where(cast(Any, DataProfileFieldRecord.field_id).in_(list(field_ids)))
+            select(DataContractFieldRecord)
+            .where(DataContractFieldRecord.data_contract_id == contract_id)
+            .where(cast(Any, DataContractFieldRecord.field_id).in_(list(field_ids)))
         )
     ).all()
     return {row.field_id: row for row in rows}
 
 
-async def _get_all_profile_field_records(
+async def _get_all_contract_field_records(
     session: AsyncSession,
     *,
-    profile_id: int,
-) -> dict[str, DataProfileFieldRecord]:
+    contract_id: int,
+) -> dict[str, DataContractFieldRecord]:
     rows = (
         await session.exec(
-            select(DataProfileFieldRecord).where(
-                DataProfileFieldRecord.data_profile_id == profile_id
+            select(DataContractFieldRecord).where(
+                DataContractFieldRecord.data_contract_id == contract_id
             )
         )
     ).all()
     return {row.field_id: row for row in rows}
 
 
-def _profile_requested_fields(
+def _contract_requested_fields(
     query_config: Mapping[str, Any], config: Mapping[str, Any]
 ) -> list[str]:
     # Fields can be declared explicitly, implied by measures, or used as
@@ -2182,7 +2185,7 @@ def _profile_requested_fields(
     return list(dict.fromkeys(fields))
 
 
-def _profile_value_column(field: DataProfileFieldRecord) -> str:
+def _contract_value_column(field: DataContractFieldRecord) -> str:
     # Field definitions can override the physical value column. Otherwise choose
     # the column from the declared value_type.
     query_ref = field.query_ref_json if isinstance(field.query_ref_json, dict) else {}
@@ -2204,7 +2207,7 @@ def _profile_value_column(field: DataProfileFieldRecord) -> str:
     }.get(field.value_type, "value_string")
 
 
-def _field_id_match_sql(parameters: list[Any], field: DataProfileFieldRecord) -> str:
+def _field_id_match_sql(parameters: list[Any], field: DataContractFieldRecord) -> str:
     # DuckDB may store field_id as the SQL integer ID, while readable views can
     # expose field labels through dim_fields. Match both forms.
     parameters.extend([_record_pk(field), field.field_id])
@@ -2215,9 +2218,9 @@ def _field_id_match_sql(parameters: list[Any], field: DataProfileFieldRecord) ->
     )
 
 
-def _synthetic_profile_fields(table: str | None) -> dict[str, dict[str, str]]:
-    # Tables without data_profile_fields rows still expose important queryable
-    # columns. These synthetic fields let the profile grammar address them by
+def _synthetic_contract_fields(table: str | None) -> dict[str, dict[str, str]]:
+    # Tables without data_contract_fields rows still expose important queryable
+    # columns. These synthetic fields let the contract grammar address them by
     # stable names.
     fields = {
         "feature_call": {
@@ -2238,7 +2241,7 @@ def _synthetic_profile_fields(table: str | None) -> dict[str, dict[str, str]]:
             "split_read_count": "split_read_count",
             "paired_end_read_count": "paired_end_read_count",
         },
-        "profile_payloads": {
+        "contract_payloads": {
             "payload_kind": "payload_kind",
             "payload_name": "payload_name",
         },
@@ -2263,12 +2266,12 @@ def _normalize_synthetic_requested_fields(
     ]
     if not normalized:
         unknown = ", ".join(requested_fields)
-        raise ValueError(f"Unknown profile field(s): {unknown}")
+        raise ValueError(f"Unknown contract field(s): {unknown}")
     return list(dict.fromkeys(normalized))
 
 
-def _default_profile_dimensions(table: str | None) -> list[str]:
-    # Raw profile previews should include the natural entity columns users need
+def _default_contract_dimensions(table: str | None) -> list[str]:
+    # Raw contract previews should include the natural entity columns users need
     # to understand what each value belongs to.
     if table in {"sample_metrics", "feature_value_numeric", "feature_call"}:
         return ["run_sample_id", "sample_id"]
@@ -2280,12 +2283,12 @@ def _default_profile_dimensions(table: str | None) -> list[str]:
         "sample_structural_variant_calls",
     }:
         return ["run_sample_id", "sample_id"]
-    if table == "profile_payloads":
+    if table == "contract_payloads":
         return ["run_id", "payload_name"]
     return []
 
 
-def _profile_filter_sql(
+def _contract_filter_sql(
     *,
     columns: Sequence[str],
     value_column: str,
@@ -2293,7 +2296,7 @@ def _profile_filter_sql(
     filter_config: Any,
     parameters: list[Any],
 ) -> str:
-    # Filters may use the profile field alias ("value", field_id, safe alias) or
+    # Filters may use the contract field alias ("value", field_id, safe alias) or
     # a physical table column. Rewrite field-value filters to the value column.
     if not isinstance(filter_config, Mapping):
         raise ValueError("Filters must be objects.")

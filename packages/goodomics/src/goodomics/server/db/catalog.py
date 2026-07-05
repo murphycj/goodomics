@@ -24,9 +24,9 @@ from goodomics.server.db.models import (
     ReportRevisionRecord,
 )
 from goodomics.storage.sqlalchemy import (
+    DataContractFieldRecord,
+    DataContractRecord,
     DataImportRecord,
-    DataProfileFieldRecord,
-    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
@@ -93,8 +93,8 @@ CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
         ),
         CatalogTable(RunSampleRecord, "run_sample_id", queryable=True),
         CatalogTable(DataImportRecord, "data_import_id", queryable=True),
-        CatalogTable(DataProfileRecord, "data_profile_id", queryable=True),
-        CatalogTable(DataProfileFieldRecord, "id", queryable=True),
+        CatalogTable(DataContractRecord, "data_contract_id", queryable=True),
+        CatalogTable(DataContractFieldRecord, "id", queryable=True),
         CatalogTable(
             FileRecord,
             "file_id",

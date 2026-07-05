@@ -60,9 +60,9 @@ from goodomics.server.insights import (
 )
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataContractFieldRecord,
+    DataContractRecord,
     DataImportRecord,
-    DataProfileFieldRecord,
-    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
@@ -205,7 +205,7 @@ class FileRead(BaseModel):
     run_id: str | None = None
     run_sample_id: str | None = None
     sample_id: str | None = None
-    data_profile_id: str | None = None
+    data_contract_id: str | None = None
     association_scope: str = "direct_run"
     association_reason: str | None = None
     kind: str = "file"
@@ -437,8 +437,8 @@ class DatabaseTablePageRead(BaseModel):
     sort_direction: str | None = None
 
 
-class DataProfileFieldRead(BaseModel):
-    """Queryable field exposed by a data profile."""
+class DataContractFieldRead(BaseModel):
+    """Queryable field exposed by a data contract."""
 
     field_id: str
     field_role: str
@@ -454,10 +454,10 @@ class DataProfileFieldRead(BaseModel):
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class DataProfileRead(BaseModel):
-    """Data profile contract plus fields available to insight builders."""
+class DataContractRead(BaseModel):
+    """Data contract contract plus fields available to insight builders."""
 
-    data_profile_id: str
+    data_contract_id: str
     name: str
     data_type: str
     assay: str | None = None
@@ -471,14 +471,14 @@ class DataProfileRead(BaseModel):
     query_modes: dict[str, JsonValue] = Field(default_factory=dict)
     mcp_description: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
-    fields: list[DataProfileFieldRead] = Field(default_factory=list)
+    fields: list[DataContractFieldRead] = Field(default_factory=list)
 
 
 class AnalyticsMetricRead(BaseModel):
     """Scalar analytical metric read from the DuckDB analytics store."""
 
     run_id: int | str
-    data_profile_id: int | str
+    data_contract_id: int | str
     run_sample_id: int | str | None = None
     sample_id: int | str | None = None
     field_id: int | str
@@ -491,7 +491,7 @@ class AnalyticsPayloadRead(BaseModel):
     """Tabular analytical payload read from the DuckDB analytics store."""
 
     run_id: int | str
-    data_profile_id: int | str
+    data_contract_id: int | str
     run_sample_id: int | str | None = None
     payload_name: str
     payload_kind: str
@@ -677,7 +677,7 @@ async def list_project_run_analytics_payloads(
 
     run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_payload_reads(
-        _analytics_store_for_project(request, project_id).list_profile_payloads(run.id)
+        _analytics_store_for_project(request, project_id).list_contract_payloads(run.id)
     )
 
 
@@ -1173,15 +1173,15 @@ async def list_run_analytics_payloads(
     run = await _get_run_record(request, run_id)
     project_id = await _project_public_id_for_pk(request, run.project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
-    return _analytics_payload_reads(analytics_store.list_profile_payloads(run.id))
+    return _analytics_payload_reads(analytics_store.list_contract_payloads(run.id))
 
 
-@router.get("/profiles", response_model=list[DataProfileRead])
-async def list_data_profiles(
+@router.get("/contracts", response_model=list[DataContractRead])
+async def list_data_contracts(
     request: Request,
     project_id: str | None = Query(default=None),
-) -> list[DataProfileRead]:
-    """List data profiles for a project, or all profiles when unscoped."""
+) -> list[DataContractRead]:
+    """List data contracts for a project, or all contracts when unscoped."""
 
     project: ProjectRecord | None = None
     if project_id is not None:
@@ -1189,36 +1189,36 @@ async def list_data_profiles(
     await _ensure_schema(request)
     async with _session(request) as session:
         project_pk = project.id if project is not None else None
-        statement = select(DataProfileRecord)
+        statement = select(DataContractRecord)
         if project_pk is not None:
             if project and project.project_id == DEFAULT_PROJECT_ID:
-                profile_project_id = cast(Any, DataProfileRecord.project_id)
+                contract_project_id = cast(Any, DataContractRecord.project_id)
                 statement = statement.where(
                     or_(
-                        profile_project_id == project_pk,
-                        profile_project_id.is_(None),
+                        contract_project_id == project_pk,
+                        contract_project_id.is_(None),
                     )
                 )
             else:
-                statement = statement.where(DataProfileRecord.project_id == project_pk)
-        statement = statement.order_by(DataProfileRecord.name)
-        profiles = list((await session.exec(statement)).all())
+                statement = statement.where(DataContractRecord.project_id == project_pk)
+        statement = statement.order_by(DataContractRecord.name)
+        contracts = list((await session.exec(statement)).all())
         if project_pk is not None:
-            profiles = _prefer_project_profile_rows(profiles, project_pk)
-        fields_by_profile = await _fields_by_profile(session, profiles)
+            contracts = _prefer_project_contract_rows(contracts, project_pk)
+        fields_by_contract = await _fields_by_contract(session, contracts)
     return [
-        _data_profile_read(profile, fields_by_profile.get(profile.id, []))
-        for profile in profiles
+        _data_contract_read(contract, fields_by_contract.get(contract.id, []))
+        for contract in contracts
     ]
 
 
-@router.get("/profiles/{data_profile_id:path}", response_model=DataProfileRead)
-async def get_data_profile(
-    data_profile_id: str,
+@router.get("/contracts/{data_contract_id:path}", response_model=DataContractRead)
+async def get_data_contract(
+    data_contract_id: str,
     request: Request,
     project_id: str | None = Query(default=None),
-) -> DataProfileRead:
-    """Return one data profile for a project, or an unscoped match."""
+) -> DataContractRead:
+    """Return one data contract for a project, or an unscoped match."""
 
     project: ProjectRecord | None = None
     if project_id is not None:
@@ -1226,28 +1226,28 @@ async def get_data_profile(
     await _ensure_schema(request)
     async with _session(request) as session:
         project_pk = project.id if project is not None else None
-        statement = select(DataProfileRecord).where(
-            DataProfileRecord.data_profile_id == data_profile_id
+        statement = select(DataContractRecord).where(
+            DataContractRecord.data_contract_id == data_contract_id
         )
         if project_pk is not None:
             if project and project.project_id == DEFAULT_PROJECT_ID:
-                profile_project_id = cast(Any, DataProfileRecord.project_id)
+                contract_project_id = cast(Any, DataContractRecord.project_id)
                 statement = statement.where(
                     or_(
-                        profile_project_id == project_pk,
-                        profile_project_id.is_(None),
+                        contract_project_id == project_pk,
+                        contract_project_id.is_(None),
                     )
                 )
             else:
-                statement = statement.where(DataProfileRecord.project_id == project_pk)
-        profiles = list((await session.exec(statement)).all())
+                statement = statement.where(DataContractRecord.project_id == project_pk)
+        contracts = list((await session.exec(statement)).all())
         if project_pk is not None:
-            profiles = _prefer_project_profile_rows(profiles, project_pk)
-        profile = profiles[0] if profiles else None
-        if profile is None:
-            raise HTTPException(status_code=404, detail="Data profile not found")
-        fields_by_profile = await _fields_by_profile(session, [profile])
-    return _data_profile_read(profile, fields_by_profile.get(profile.id, []))
+            contracts = _prefer_project_contract_rows(contracts, project_pk)
+        contract = contracts[0] if contracts else None
+        if contract is None:
+            raise HTTPException(status_code=404, detail="Data contract not found")
+        fields_by_contract = await _fields_by_contract(session, [contract])
+    return _data_contract_read(contract, fields_by_contract.get(contract.id, []))
 
 
 @router.get("/files/{file_id}/content")
@@ -1875,7 +1875,7 @@ async def get_database_summary(
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
         total_scalar_metrics=analytics_counts.get("sample_metrics", 0),
-        total_payloads=analytics_counts.get("profile_payloads", 0),
+        total_payloads=analytics_counts.get("contract_payloads", 0),
         control_tables=[
             TableCountRead(name=name, rows=count)
             for name, count in sorted(control_counts.items())
@@ -2463,7 +2463,7 @@ def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
     return [
         AnalyticsMetricRead(
             run_id=metric.run_id,
-            data_profile_id=metric.data_profile_id,
+            data_contract_id=metric.data_contract_id,
             run_sample_id=metric.run_sample_id,
             sample_id=metric.sample_id,
             field_id=metric.field_id,
@@ -2491,7 +2491,7 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
     return [
         AnalyticsPayloadRead(
             run_id=payload.run_id,
-            data_profile_id=payload.data_profile_id,
+            data_contract_id=payload.data_contract_id,
             run_sample_id=payload.run_sample_id,
             payload_name=payload.payload_name,
             payload_kind=payload.payload_kind,
@@ -2646,7 +2646,7 @@ async def _catalog_table_page(
     # explicitly instead of assuming a universal schema.
     if (
         project_pk is not None
-        and table_name == "data_profiles"
+        and table_name == "data_contracts"
         and "project_id" in model.model_fields
     ):
         count_statement = count_statement.where(
@@ -2699,7 +2699,7 @@ async def _control_table_counts(
             # database summary and browser rows agree.
             if (
                 project_pk is not None
-                and name == "data_profiles"
+                and name == "data_contracts"
                 and "project_id" in model.model_fields
             ):
                 statement = statement.where(
@@ -2894,77 +2894,81 @@ def _jsonable_row(row: SQLModel) -> dict[str, Any]:
     return data
 
 
-async def _fields_by_profile(
+async def _fields_by_contract(
     session: AsyncSession,
-    profiles: list[DataProfileRecord],
-) -> dict[int | None, list[DataProfileFieldRecord]]:
-    """Load data-profile fields grouped by profile primary key."""
+    contracts: list[DataContractRecord],
+) -> dict[int | None, list[DataContractFieldRecord]]:
+    """Load data-contract fields grouped by contract primary key."""
 
-    profile_ids = [profile.id for profile in profiles if profile.id is not None]
-    if not profile_ids:
+    contract_ids = [contract.id for contract in contracts if contract.id is not None]
+    if not contract_ids:
         return {}
     rows = (
         await session.exec(
-            select(DataProfileFieldRecord)
-            .where(cast(Any, DataProfileFieldRecord.data_profile_id).in_(profile_ids))
+            select(DataContractFieldRecord)
+            .where(
+                cast(Any, DataContractFieldRecord.data_contract_id).in_(contract_ids)
+            )
             .order_by(
-                DataProfileFieldRecord.field_role, DataProfileFieldRecord.field_id
+                DataContractFieldRecord.field_role, DataContractFieldRecord.field_id
             )
         )
     ).all()
-    grouped: dict[int | None, list[DataProfileFieldRecord]] = {}
+    grouped: dict[int | None, list[DataContractFieldRecord]] = {}
     for row in rows:
-        grouped.setdefault(row.data_profile_id, []).append(row)
+        grouped.setdefault(row.data_contract_id, []).append(row)
     return grouped
 
 
-def _prefer_project_profile_rows(
-    profiles: list[DataProfileRecord],
+def _prefer_project_contract_rows(
+    contracts: list[DataContractRecord],
     project_pk: int,
-) -> list[DataProfileRecord]:
-    """Deduplicate profile labels, preferring project-owned rows over legacy nulls."""
+) -> list[DataContractRecord]:
+    """Deduplicate contract labels, preferring project-owned rows over legacy nulls."""
 
-    by_label: dict[str, DataProfileRecord] = {}
-    for profile in profiles:
-        existing = by_label.get(profile.data_profile_id)
-        if existing is None or profile.project_id == project_pk:
-            by_label[profile.data_profile_id] = profile
+    by_label: dict[str, DataContractRecord] = {}
+    for contract in contracts:
+        existing = by_label.get(contract.data_contract_id)
+        if existing is None or contract.project_id == project_pk:
+            by_label[contract.data_contract_id] = contract
     return list(by_label.values())
 
 
-def _data_profile_read(
-    profile: DataProfileRecord,
-    fields: list[DataProfileFieldRecord],
-) -> DataProfileRead:
-    """Convert a data profile catalog row into its API response model."""
+def _data_contract_read(
+    contract: DataContractRecord,
+    fields: list[DataContractFieldRecord],
+) -> DataContractRead:
+    """Convert a data contract catalog row into its API response model."""
 
-    field_reads = [_data_profile_field_read(field) for field in fields]
+    field_reads = [_data_contract_field_read(field) for field in fields]
     if not field_reads:
         # Some analytics tables are queryable even when no field rows were
         # materialized. Surface synthetic fields so the insight builder can
         # still present usable metric/attribute choices.
-        field_reads = _synthetic_profile_fields(profile)
-    return DataProfileRead(
-        data_profile_id=profile.data_profile_id,
-        name=profile.name,
-        data_type=profile.data_type,
-        assay=profile.assay,
-        entity_grain=profile.entity_grain,
-        value_semantics=profile.value_semantics,
-        primary_table=profile.primary_table,
-        physical_tables=dict(profile.physical_tables_json),
-        summary=dict(profile.summary_json),
-        last_profiled_at=profile.last_profiled_at,
-        source_fingerprint=profile.source_fingerprint,
-        query_modes=dict(profile.query_modes_json),
-        mcp_description=profile.mcp_description,
-        metadata_json=dict(profile.metadata_json),
+        field_reads = _synthetic_contract_fields(contract)
+    return DataContractRead(
+        data_contract_id=contract.data_contract_id,
+        name=contract.name,
+        data_type=contract.data_type,
+        assay=contract.assay,
+        entity_grain=contract.entity_grain,
+        value_semantics=contract.value_semantics,
+        primary_table=contract.primary_table,
+        physical_tables=dict(contract.physical_tables_json),
+        summary=dict(contract.summary_json),
+        last_profiled_at=contract.last_profiled_at,
+        source_fingerprint=contract.source_fingerprint,
+        query_modes=dict(contract.query_modes_json),
+        mcp_description=contract.mcp_description,
+        metadata_json=dict(contract.metadata_json),
         fields=field_reads,
     )
 
 
-def _synthetic_profile_fields(profile: DataProfileRecord) -> list[DataProfileFieldRead]:
-    """Return field descriptors for profile tables without field rows."""
+def _synthetic_contract_fields(
+    contract: DataContractRecord,
+) -> list[DataContractFieldRead]:
+    """Return field descriptors for contract tables without field rows."""
 
     fields = {
         "feature_value_numeric": [
@@ -3006,38 +3010,38 @@ def _synthetic_profile_fields(profile: DataProfileRecord) -> list[DataProfileFie
                 "paired_end_read_count",
             ),
         ],
-        "profile_payloads": [
+        "contract_payloads": [
             ("payload_kind", "attribute", "Payload kind", "string", "payload_kind"),
             ("payload_name", "attribute", "Payload name", "string", "payload_name"),
         ],
-    }.get(profile.primary_table or "", [])
+    }.get(contract.primary_table or "", [])
     return [
-        DataProfileFieldRead(
+        DataContractFieldRead(
             field_id=field_id,
             field_role=field_role,
-            entity_scope=profile.entity_grain,
+            entity_scope=contract.entity_grain,
             display_name=display_name,
             value_type=value_type,
-            unit=profile.unit if value_type == "numeric" else None,
+            unit=contract.unit if value_type == "numeric" else None,
             direction=None,
-            description=profile.mcp_description,
+            description=contract.mcp_description,
             priority=None,
             query_ref={
-                "table": profile.primary_table,
+                "table": contract.primary_table,
                 "value_column": value_column,
                 "synthetic": True,
             },
-            summary=dict(profile.summary_json),
+            summary=dict(contract.summary_json),
             metadata_json={"synthetic": True},
         )
         for field_id, field_role, display_name, value_type, value_column in fields
     ]
 
 
-def _data_profile_field_read(field: DataProfileFieldRecord) -> DataProfileFieldRead:
-    """Convert a data profile field catalog row into its API response model."""
+def _data_contract_field_read(field: DataContractFieldRecord) -> DataContractFieldRead:
+    """Convert a data contract field catalog row into its API response model."""
 
-    return DataProfileFieldRead(
+    return DataContractFieldRead(
         field_id=field.field_id,
         field_role=field.field_role,
         entity_scope=field.entity_scope,
@@ -3081,8 +3085,8 @@ async def _file_from_rows_public(
         session, RunSampleRecord, "run_sample_id", link.run_sample_id
     )
     sample_id = await _public_label(session, SampleRecord, "sample_id", link.sample_id)
-    data_profile_id = await _public_label(
-        session, DataProfileRecord, "data_profile_id", link.data_profile_id
+    data_contract_id = await _public_label(
+        session, DataContractRecord, "data_contract_id", link.data_contract_id
     )
     # source_path is parser/ingest provenance stored inside metadata_json; keep
     # it as a first-class response field because the dashboard displays it often.
@@ -3096,7 +3100,7 @@ async def _file_from_rows_public(
         run_id=run_id,
         run_sample_id=run_sample_id,
         sample_id=sample_id,
-        data_profile_id=data_profile_id,
+        data_contract_id=data_contract_id,
         association_scope=association_scope,
         association_reason=association_reason,
         kind=file.file_role,
@@ -3159,9 +3163,9 @@ def _file_from_rows(
             if link is not None and link.sample_id is not None
             else None
         ),
-        data_profile_id=(
-            str(link.data_profile_id)
-            if link is not None and link.data_profile_id is not None
+        data_contract_id=(
+            str(link.data_contract_id)
+            if link is not None and link.data_contract_id is not None
             else None
         ),
         association_scope=association_scope,
@@ -3188,14 +3192,14 @@ def _dedupe_file_reads(files: list[FileRead]) -> list[FileRead]:
 
 
 def _file_read_rank(file: FileRead) -> tuple[int, int]:
-    """Rank file associations so direct/profile-aware links win deduping."""
+    """Rank file associations so direct/contract-aware links win deduping."""
 
     scope_rank = {"direct_run": 3, "direct_sample": 3, "data_import": 2}.get(
         file.association_scope,
         1,
     )
-    profile_rank = 1 if file.data_profile_id is not None else 0
-    return scope_rank, profile_rank
+    contract_rank = 1 if file.data_contract_id is not None else 0
+    return scope_rank, contract_rank
 
 
 def _model_field_name(model: type[SQLModel], requested_name: str) -> str:

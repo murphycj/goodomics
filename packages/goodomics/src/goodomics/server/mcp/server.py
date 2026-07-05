@@ -45,22 +45,22 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
         )
 
     @mcp.tool()
-    async def list_data_profiles(
+    async def list_data_contracts(
         project: str | None = None,
         query: str | None = None,
         limit: int = 20,
         field_limit: int = 25,
     ) -> dict[str, Any]:
-        """List semantic data profiles and their queryable fields."""
+        """List semantic data contracts and their queryable fields."""
         return await _logged_tool_call(
-            "list_data_profiles",
+            "list_data_contracts",
             {
                 "project": project,
                 "query": query,
                 "limit": limit,
                 "field_limit": field_limit,
             },
-            tools.list_data_profiles(
+            tools.list_data_contracts(
                 project=project,
                 query=query,
                 limit=limit,

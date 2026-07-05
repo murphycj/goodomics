@@ -232,7 +232,7 @@ keep per-field labels, units, directions, query refs, and compact summaries in
 | `primary_table`         | Default analytical table for contract-first queries                                                            |
 | `physical_tables_json`  | Physical tables/views used by the contract                                                                     |
 | `summary_json`          | Compact contract-level summary                                                                                 |
-| `last_contractd_at`      | Last time field/contract summaries were computed                                                               |
+| `last_profiled_at`      | Last time field/contract summaries were computed                                                               |
 | `source_fingerprint`    | Fingerprint for invalidating derived summaries/cache rows                                                     |
 | `query_modes_json`      | Supported query modes, such as sample, metric, gene, region                                                   |
 | `mcp_description`       | Agent-readable description                                                                                    |

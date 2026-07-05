@@ -23,12 +23,12 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from goodomics.profiles.registry import built_in_data_profile
-from goodomics.profiles.sdk import GOODOMICS_SDK_METRICS
+from goodomics.contracts.registry import built_in_data_contract
+from goodomics.contracts.sdk import GOODOMICS_SDK_METRICS
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    DataProfileField,
+    DataContractField,
     Run,
     RunSample,
     Sample,
@@ -85,7 +85,7 @@ class GoodomicsRun:
     """Project ID, slug, display-ish name, or ``None`` for the default workspace."""
 
     assay: str | None = None
-    """Optional assay label copied onto run, run-sample, and profile records."""
+    """Optional assay label copied onto run, run-sample, and contract records."""
 
     database_url: str | None = None
     """Optional SQL catalog database URL override."""
@@ -193,7 +193,7 @@ class GoodomicsRun:
         self,
         *,
         run_id: str | None = None,
-        data_profile_id: str | None = None,
+        data_contract_id: str | None = None,
     ) -> AnalyticsIngestBatch:
         """Convert buffered metrics into an unresolved analytics batch.
 
@@ -206,15 +206,15 @@ class GoodomicsRun:
         # public labels like run_id/sample_id/field_id; flush() resolves those
         # labels to SQL-owned integer IDs after the catalog write.
         resolved_run_id = run_id or self.name
-        resolved_profile_id = data_profile_id or GOODOMICS_SDK_METRICS
+        resolved_contract_id = data_contract_id or GOODOMICS_SDK_METRICS
         metrics: list[UnresolvedAnalyticalRecord] = []
 
         for metric in self.metrics:
-            # Each SDK metric name becomes a stable profile field scoped to
-            # the SDK data profile.
-            metric_id = f"{resolved_profile_id}:{metric.name}"
+            # Each SDK metric name becomes a stable contract field scoped to
+            # the SDK data contract.
+            metric_id = f"{resolved_contract_id}:{metric.name}"
             common: dict[str, Any] = {
-                "data_profile_id": resolved_profile_id,
+                "data_contract_id": resolved_contract_id,
                 "run_id": resolved_run_id,
                 "run_sample_id": (
                     f"{resolved_run_id}:{metric.sample_id}"
@@ -268,7 +268,7 @@ class GoodomicsRun:
         )
 
         # SQL owns the catalog shape: project, run, samples, run-samples, and
-        # the data profile that says where queryable observations live.
+        # the data contract that says where queryable observations live.
         # resolve_database_url() honors the explicit SDK argument, environment
         # variables, and Goodomics defaults.
         database_url = resolve_database_url(self.database_url)
@@ -306,13 +306,13 @@ class GoodomicsRun:
             )
             for sample_id in sample_ids
         ]
-        data_profile_id = GOODOMICS_SDK_METRICS
-        # Metrics are queryable through a data profile. The built-in profile
+        data_contract_id = GOODOMICS_SDK_METRICS
+        # Metrics are queryable through a data contract. The built-in contract
         # provides the stable semantic contract; SDK-specific metric names become
-        # profile fields below.
-        data_profiles = (
+        # contract fields below.
+        data_contracts = (
             [
-                built_in_data_profile(data_profile_id).model_copy(
+                built_in_data_contract(data_contract_id).model_copy(
                     update={"assay": self.assay, "project_id": project.project_id}
                 )
             ]
@@ -331,16 +331,16 @@ class GoodomicsRun:
             metadata_json={"source": "goodomics-sdk"},
         )
         # Replace the catalog slice for this run so repeated SDK writes update
-        # the run, samples/run_samples, profile, and field definitions together.
+        # the run, samples/run_samples, contract, and field definitions together.
         catalog_result = asyncio.run(
             store.replace_run_catalog(
                 catalog_run,
                 samples=samples,
                 run_samples=run_samples,
-                data_profiles=data_profiles,
-                data_profile_fields=_metric_profile_fields(
+                data_contracts=data_contracts,
+                data_contract_fields=_metric_contract_fields(
                     self.metrics,
-                    data_profile_id=data_profile_id,
+                    data_contract_id=data_contract_id,
                 ),
             )
         )
@@ -357,7 +357,7 @@ class GoodomicsRun:
             resolved_batch = resolve_analytics_batch_catalog_ids(
                 self.to_analytics_batch(
                     run_id=run_id,
-                    data_profile_id=data_profile_id,
+                    data_contract_id=data_contract_id,
                 ),
                 catalog_id_maps,
             )
@@ -401,26 +401,26 @@ def _is_numeric_metric(value: JsonMetricValue) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _metric_profile_fields(
+def _metric_contract_fields(
     metrics: list[LoggedMetric],
     *,
-    data_profile_id: str,
-) -> list[DataProfileField]:
-    """Build data profile field definitions for buffered SDK metrics."""
+    data_contract_id: str,
+) -> list[DataContractField]:
+    """Build data contract field definitions for buffered SDK metrics."""
 
-    # The SDK profile is stable, but each metric name becomes a field inside
-    # that profile. Field definitions let report/query builders discover units,
+    # The SDK contract is stable, but each metric name becomes a field inside
+    # that contract. Field definitions let report/query builders discover units,
     # labels, value types, and the analytical column that stores the value.
-    fields: dict[str, DataProfileField] = {}
+    fields: dict[str, DataContractField] = {}
     for metric in metrics:
-        field_id = f"{data_profile_id}:{metric.name}"
+        field_id = f"{data_contract_id}:{metric.name}"
         value_type = "numeric" if _is_numeric_metric(metric.value) else "string"
         # Multiple samples may log the same metric. setdefault keeps the first
         # field definition and prevents duplicate field rows for the run.
         fields.setdefault(
             field_id,
-            DataProfileField(
-                data_profile_id=data_profile_id,
+            DataContractField(
+                data_contract_id=data_contract_id,
                 field_id=field_id,
                 field_role="metric",
                 entity_scope="run_sample",
@@ -428,7 +428,7 @@ def _metric_profile_fields(
                 value_type=value_type,
                 unit=metric.unit,
                 query_ref_json={
-                    # query_ref_json tells profile-first query compilation how
+                    # query_ref_json tells contract-first query compilation how
                     # to find this field in the generic sample_metrics table.
                     "table": "sample_metrics",
                     "field_column": "field_id",
@@ -459,7 +459,7 @@ def run(
         name: Public run label used as the SDK run ID.
         project: Project ID, slug, display-ish name, or ``None`` for the default
             workspace.
-        assay: Optional assay label copied onto run, run-sample, and profile
+        assay: Optional assay label copied onto run, run-sample, and contract
             records.
         database_url: Optional SQL catalog database URL override.
         analytics_path: Optional direct DuckDB analytics file override.

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from importlib import metadata
 from typing import Any
 
-from goodomics.schemas.models import DataProfile
+from goodomics.schemas.models import DataContract
 
 ENTRY_POINT_GROUP = "goodomics.sources"
 
@@ -40,7 +40,7 @@ class SourceSpec:
     ingest: CallableLike
     parser: CallableLike | None = None
     detector: CallableLike | None = None
-    data_profile_provider: CallableLike | Iterable[DataProfile] | None = None
+    data_contract_provider: CallableLike | Iterable[DataContract] | None = None
     result_printer: CallableLike | None = None
     # SourceSpec filters kwargs before dispatch so registry routing can support
     # built-ins, notebook parsers, and third-party plugins with one call path.
@@ -58,20 +58,20 @@ class SourceSpec:
             return None
         return _load_callable(self.result_printer)
 
-    def profiles(self) -> list[DataProfile]:
-        provider = self.data_profile_provider
+    def contracts(self) -> list[DataContract]:
+        provider = self.data_contract_provider
         if provider is None:
             return []
         if isinstance(provider, Iterable) and not isinstance(provider, str):
             return sorted(
                 list(provider),
-                key=lambda data_profile: data_profile.data_profile_id,
+                key=lambda data_contract: data_contract.data_contract_id,
             )
         loaded = _load_callable(provider)
         value = loaded()
         if isinstance(value, dict):
             value = value.values()
-        return sorted(list(value), key=lambda profile: profile.data_profile_id)
+        return sorted(list(value), key=lambda contract: contract.data_contract_id)
 
 
 _IN_PROCESS_SOURCES: dict[str, SourceSpec] = {}

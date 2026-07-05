@@ -93,10 +93,10 @@ class RunSample(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
-class DataProfile(GoodomicsModel):
+class DataContract(GoodomicsModel):
     """Describes a stable semantic analytical data layer."""
 
-    data_profile_id: str
+    data_contract_id: str
     project_id: str | None = None
     name: str
     data_type: str
@@ -120,10 +120,10 @@ class DataProfile(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
-class DataProfileField(GoodomicsModel):
-    """Queryable field exposed by a semantic data profile."""
+class DataContractField(GoodomicsModel):
+    """Queryable field exposed by a semantic data contract."""
 
-    data_profile_id: str
+    data_contract_id: str
     field_id: str
     field_role: str = "metric"
     entity_scope: str | None = None
@@ -173,7 +173,7 @@ class FileAsset(GoodomicsModel):
 
 
 class FileLink(GoodomicsModel):
-    """Associates a file with imports, runs, samples, or data profiles."""
+    """Associates a file with imports, runs, samples, or data contracts."""
 
     file_id: str
     project_id: str | None = None
@@ -181,7 +181,7 @@ class FileLink(GoodomicsModel):
     run_id: str | None = None
     run_sample_id: str | None = None
     sample_id: str | None = None
-    data_profile_id: str | None = None
+    data_contract_id: str | None = None
     link_role: str
 
 
@@ -261,7 +261,7 @@ class EntityAttribute(AnalyticalRecord):
     entity_scope: str
     entity_id: str
     field_id: int
-    data_profile_id: int | None = None
+    data_contract_id: int | None = None
     source_file_id: int | None = None
     value_type: Literal["numeric", "string", "boolean", "date", "json"]
     value_numeric: float | None = None
@@ -274,7 +274,7 @@ class EntityAttribute(AnalyticalRecord):
 class SampleMetric(AnalyticalRecord):
     """Unified metric value measured for a sample or processed sample."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int | None = None
     sample_id: int | None = None
@@ -327,9 +327,9 @@ class FeatureSetMember(AnalyticalRecord):
 
 
 class FeatureValueNumeric(AnalyticalRecord):
-    """Numeric value for a feature in a processed sample and data profile."""
+    """Numeric value for a feature in a processed sample and data contract."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -341,7 +341,7 @@ class FeatureValueNumeric(AnalyticalRecord):
 class FeatureCall(AnalyticalRecord):
     """Categorical feature-level call for a processed sample."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -372,7 +372,7 @@ class GenomicInterval(AnalyticalRecord):
 class SampleIntervalValue(AnalyticalRecord):
     """Numeric value assigned to a genomic interval for a processed sample."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -384,7 +384,7 @@ class SampleIntervalValue(AnalyticalRecord):
 class CopyNumberSegment(AnalyticalRecord):
     """Copy-number segment call for a processed sample."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -416,9 +416,9 @@ class Variant(AnalyticalRecord):
 
 
 class VariantAnnotation(AnalyticalRecord):
-    """Profile-level annotation describing a variant and optional feature."""
+    """Contract-level annotation describing a variant and optional feature."""
 
-    data_profile_id: int | None = None
+    data_contract_id: int | None = None
     variant_id: int
     feature_id: int | None = None
     consequence: str | None = None
@@ -431,7 +431,7 @@ class VariantAnnotation(AnalyticalRecord):
 class VariantTranscriptAnnotation(AnalyticalRecord):
     """Transcript-specific annotation for a variant."""
 
-    data_profile_id: int | None = None
+    data_contract_id: int | None = None
     variant_id: int
     transcript_feature_id: int
     gene_feature_id: int | None = None
@@ -448,7 +448,7 @@ class VariantTranscriptAnnotation(AnalyticalRecord):
 class SampleVariantCall(AnalyticalRecord):
     """Per-sample call and sequencing evidence for a variant."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -485,7 +485,7 @@ class StructuralVariantEvent(AnalyticalRecord):
 class SampleStructuralVariantCall(AnalyticalRecord):
     """Per-sample call and evidence for a structural variant event."""
 
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -516,11 +516,11 @@ class TimelineEvent(AnalyticalRecord):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
-class ProfilePayload(AnalyticalRecord):
-    """Stored payload attached to a data profile, such as a table or blob."""
+class ContractPayload(AnalyticalRecord):
+    """Stored payload attached to a data contract, such as a table or blob."""
 
     payload_id: int
-    data_profile_id: int
+    data_contract_id: int
     run_id: int
     run_sample_id: int | None = None
     payload_name: str
@@ -575,7 +575,7 @@ class GeneAlterationState(AnalyticalRecord):
     sample_id: int | None = None
     subject_id: int | None = None
     feature_id: int
-    data_profile_id: int
+    data_contract_id: int
     alteration_type: str
     alteration_subtype: str | None = None
     is_altered: bool
@@ -587,10 +587,10 @@ class GeneAlterationState(AnalyticalRecord):
 
 
 class CohortSummary(AnalyticalRecord):
-    """Precomputed summary statistics for a sample set and profile feature."""
+    """Precomputed summary statistics for a sample set and contract feature."""
 
     sample_set_id: int
-    data_profile_id: int
+    data_contract_id: int
     field_id: int | None = None
     feature_id: int | None = None
     n: int
@@ -646,7 +646,7 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     structural_variant_events: list[Any] = Field(default_factory=list)
     sample_structural_variant_calls: list[Any] = Field(default_factory=list)
     timeline_events: list[Any] = Field(default_factory=list)
-    profile_payloads: list[Any] = Field(default_factory=list)
+    contract_payloads: list[Any] = Field(default_factory=list)
     gene_alteration_state: list[Any] = Field(default_factory=list)
     cohort_summaries: list[Any] = Field(default_factory=list)
     tool_versions: list[Any] = Field(default_factory=list)
