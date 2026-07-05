@@ -42,14 +42,18 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 class QueryToolContext:
     """Dependencies required by query-tool handlers."""
 
-    # Query tools are deliberately thin: settings locate project DuckDB files,
-    # while the SQLModel store opens catalog sessions.
     settings: Settings
+    """Server settings used to locate project analytics databases."""
+
     store: SQLModelGoodomicsStore
+    """SQL catalog store used for schema checks and catalog reads."""
 
 
 class GoodomicsQueryTools:
     """Public query helpers used by AI and MCP tooling."""
+
+    context: QueryToolContext
+    """Immutable dependencies shared across query-tool operations."""
 
     # Read-only helper surface for AI/MCP-style calls. Methods return plain
     # dictionaries so tool responses stay compact and JSON-native.

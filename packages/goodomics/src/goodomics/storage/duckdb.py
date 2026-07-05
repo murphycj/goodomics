@@ -47,22 +47,26 @@ RecordT = TypeVar("RecordT", bound=BaseModel)
 class AnalyticalTableSerializer:
     """Mapping between one analytical batch field, model schema, and DuckDB table."""
 
-    # One serializer is the complete adapter between an AnalyticsIngestBatch
-    # field, a Pydantic record model, and a physical DuckDB table.
     table_name: str
+    """Physical DuckDB table name for this analytical record type."""
+
     model_type: type[BaseModel]
+    """Pydantic model class that defines public columns and value types."""
+
     order_by: str
-    # Defaults to the table name because AnalyticsIngestBatch uses matching
-    # field names for almost every analytical table.
+    """Default sort expression used when creating deterministic sorted views."""
+
     batch_field: str | None = None
-    # Tables with a run column can be replaced one run at a time during ingest.
+    """Optional `AnalyticsIngestBatch` field name; defaults to `table_name`."""
+
     run_column: str | None = None
-    # Dimension/reference tables use natural keys so repeated imports update by
-    # deleting matching rows before inserting the latest records.
+    """Run-scoped column used for replace-by-run writes, if applicable."""
+
     unique_columns: tuple[str, ...] = ()
-    # Escape hatch for physical storage choices that Pydantic annotations do not
-    # fully express, such as keeping call_rank as INTEGER instead of BIGINT.
+    """Natural-key columns used to upsert non-run-scoped reference data."""
+
     column_types: dict[str, str] = field(default_factory=dict)
+    """Optional per-column SQL type overrides for physical table creation."""
 
     @property
     def resolved_batch_field(self) -> str:
@@ -409,9 +413,16 @@ class DuckDBDimension:
     """Dimension table metadata for converting public labels to integer IDs."""
 
     table_name: str
+    """Dimension table name."""
+
     id_column: str
+    """Integer identifier column stored by fact tables."""
+
     label_column: str
+    """Public label column resolved from and to API-facing IDs."""
+
     storage_column: str | None = None
+    """Optional fact-table column name when it differs from `id_column`."""
 
     @property
     def physical_column(self) -> str:
@@ -483,9 +494,16 @@ class IntegerKeyedTableDefinition:
     """Configuration for a fact table that stores integer foreign-key columns."""
 
     table_name: str
+    """Physical table name."""
+
     serializer: AnalyticalTableSerializer
+    """Serializer describing public schema and write behavior for this table."""
+
     dimensions: Mapping[str, DuckDBDimension]
+    """Public columns resolved through dimension tables."""
+
     catalog_columns: frozenset[str] = frozenset()
+    """Public columns already resolved to SQL integer catalog IDs before write."""
 
     @property
     def physical_columns(self) -> tuple[str, ...]:
@@ -726,6 +744,9 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
 
 class DuckDBAnalyticsStore:
     """DuckDB-backed analytical store with replace-oriented ingest operations."""
+
+    path: Path
+    """Path to the project analytics DuckDB file."""
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
