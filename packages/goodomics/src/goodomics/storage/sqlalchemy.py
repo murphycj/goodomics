@@ -52,7 +52,7 @@ async def _repair_current_schema(connection: Any) -> None:
     column_names = {str(row[1]) for row in sample_set_columns}
     if "updated_at" not in column_names:
         await connection.exec_driver_sql(
-            "ALTER TABLE sample_sets ADD COLUMN updated_at"
+            "ALTER TABLE sample_sets ADD COLUMN updated_at DATETIME"
         )
         await connection.exec_driver_sql(
             "UPDATE sample_sets SET updated_at = created_at WHERE updated_at IS NULL"
