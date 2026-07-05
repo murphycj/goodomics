@@ -711,6 +711,11 @@ def test_control_tables_use_integer_primary_keys(
         "files": "file_id",
         "sample_sets": "sample_set_id",
     }
+    expected_unique_key_columns = {
+        table_name: [readable_column]
+        for table_name, readable_column in readable_id_columns.items()
+    }
+    expected_unique_key_columns["data_profiles"] = ["project_id", "data_profile_id"]
     with sqlite3.connect(database_path) as connection:
         for table_name, readable_column in readable_id_columns.items():
             columns = {
@@ -733,7 +738,9 @@ def test_control_tables_use_integer_primary_keys(
             assert columns["id"]["pk"] == 1
             assert columns["id"]["type"] == "INTEGER"
             assert columns[readable_column]["pk"] == 0
-            assert [readable_column] in unique_index_columns.values()
+            assert (
+                expected_unique_key_columns[table_name] in unique_index_columns.values()
+            )
 
 
 def test_runs_endpoint_paginates_results(client: TestClient) -> None:
@@ -1074,9 +1081,10 @@ def test_profile_series_charts_match_catalog_field_ids(
     histogram_result = histogram_response.json()["result"]
     assert histogram_result["rows"]
     assert histogram_result["columns"] == ["percent_mapped"]
-    assert histogram_result["rows"][0]["percent_mapped"] == table_result["rows"][0][
-        "percent_mapped"
-    ]
+    assert (
+        histogram_result["rows"][0]["percent_mapped"]
+        == table_result["rows"][0]["percent_mapped"]
+    )
     assert histogram_result["echarts_options"]["series"][0]["data"]
 
 
@@ -1203,17 +1211,15 @@ def test_profile_browser_keeps_legacy_default_project_profiles_visible(
 
     assert default_profiles.status_code == 200
     assert any(
-        item["data_profile_id"] == "multiqc:legacy"
-        for item in default_profiles.json()
+        item["data_profile_id"] == "multiqc:legacy" for item in default_profiles.json()
     )
     assert default_profile.status_code == 200
-    assert {
-        field["field_id"] for field in default_profile.json()["fields"]
-    } == {"legacy_metric"}
+    assert {field["field_id"] for field in default_profile.json()["fields"]} == {
+        "legacy_metric"
+    }
     assert other_profiles.status_code == 200
     assert all(
-        item["data_profile_id"] != "multiqc:legacy"
-        for item in other_profiles.json()
+        item["data_profile_id"] != "multiqc:legacy" for item in other_profiles.json()
     )
 
 

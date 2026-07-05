@@ -2161,7 +2161,7 @@ async def _list_samples(
         .subquery()
     )
     async with _session(request) as session:
-        sample_filters = [SampleRecord.project_id == project_pk]
+        sample_filters: list[Any] = [SampleRecord.project_id == project_pk]
         term = search.strip().lower()
         if term:
             pattern = f"%{term}%"
