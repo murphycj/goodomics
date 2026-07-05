@@ -1,4 +1,13 @@
-import { ArrowLeft, BarChart3, ChevronDown, Save } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  BarChart3,
+  ChevronDown,
+  Pencil,
+  Plus,
+  Save,
+  X,
+} from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -27,6 +36,15 @@ export function InsightBuilderHeader({
   onSaveContinue: () => void;
   onTitleChange: (value: string) => void;
 }) {
+  const hasDescription = Boolean(description.trim());
+  const [showDescription, setShowDescription] = useState(
+    hasDescription,
+  );
+
+  useEffect(() => {
+    if (description.trim()) setShowDescription(true);
+  }, [description]);
+
   return (
     <section className="shrink-0 border-b border-[#dce3eb] pb-4">
       <div className="flex items-center gap-3">
@@ -39,6 +57,22 @@ export function InsightBuilderHeader({
           value={title}
           onChange={(event) => onTitleChange(event.target.value)}
         />
+        <Button
+          className="bg-[#eef2f6] text-[#526071] hover:bg-[#e3e9f0] hover:text-[#1f2937]"
+          type="button"
+          variant="ghost"
+          onClick={() => setShowDescription(true)}
+        >
+          {hasDescription ? (
+            <>
+              <Pencil className="h-4 w-4" /> Description
+            </>
+          ) : (
+            <>
+              <Plus className="h-4 w-4" /> Description
+            </>
+          )}
+        </Button>
         <div className="flex overflow-hidden rounded-lg shadow-sm">
           <Button
             className="rounded-r-none"
@@ -65,12 +99,27 @@ export function InsightBuilderHeader({
           </DropdownMenu>
         </div>
       </div>
-      <Input
-        className="mt-3"
-        placeholder="Enter description (optional)"
-        value={description}
-        onChange={(event) => onDescriptionChange(event.target.value)}
-      />
+      {showDescription ? (
+        <div className="mt-3 flex items-start gap-2">
+          <textarea
+            className="h-10 min-h-10 flex-1 resize-y rounded-md border border-[#d6dee8] bg-white px-3 py-2 text-sm text-[#1f2937] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#16784a] focus:ring-2 focus:ring-[#16784a]/15"
+            placeholder="Enter description (optional)"
+            rows={1}
+            value={description}
+            onChange={(event) => onDescriptionChange(event.target.value)}
+          />
+          <Button
+            aria-label="Hide description"
+            className="mt-1 shrink-0 text-[#657082] hover:text-[#1f2937]"
+            size="icon"
+            type="button"
+            variant="ghost"
+            onClick={() => setShowDescription(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }

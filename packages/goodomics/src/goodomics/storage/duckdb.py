@@ -973,7 +973,7 @@ class DuckDBAnalyticsStore:
         bounded_query = f"SELECT * FROM ({query}) AS goodomics_query LIMIT ?"
         with self._connect() as connection:
             cursor = connection.execute(
-                bounded_query, [*parameters, min(max(limit, 1), 5000)]
+                bounded_query, [*parameters, min(max(limit, 1), 100000)]
             )
             columns = [description[0] for description in cursor.description or []]
             rows = cursor.fetchall()

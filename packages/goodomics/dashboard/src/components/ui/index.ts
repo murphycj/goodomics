@@ -4,6 +4,7 @@ export { Button, buttonVariants } from "./button";
 export { Card, CardContent, CardHeader, CardTitle } from "./card";
 export { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 export { CopyButton } from "./CopyButton";
+export { DelayedHoverPopover } from "./DelayedHoverPopover";
 export { Detail } from "./Detail";
 export {
   Dialog,
@@ -28,6 +29,10 @@ export { Label } from "./label";
 export { Page } from "./Page";
 export { PaginationBar } from "./PaginationBar";
 export { SearchBox } from "./SearchBox";
+export {
+  SearchSuggestionInput,
+  type SearchSuggestionOption,
+} from "./SearchSuggestionInput";
 export {
   Select,
   SelectContent,

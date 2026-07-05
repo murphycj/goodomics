@@ -249,8 +249,12 @@ def _save_multiqc_parse_result(
             data_import=data_import,
             run_samples=run_samples,
             data_profiles=[
-                built_in_data_profile(MULTIQC_METRICS),
-                built_in_data_profile(MULTIQC_PAYLOADS),
+                built_in_data_profile(MULTIQC_METRICS).model_copy(
+                    update={"project_id": project_record.project_id}
+                ),
+                built_in_data_profile(MULTIQC_PAYLOADS).model_copy(
+                    update={"project_id": project_record.project_id}
+                ),
             ],
             data_profile_fields=parsed.profile_fields,
             files=files,

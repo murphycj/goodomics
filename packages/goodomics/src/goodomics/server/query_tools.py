@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -91,19 +91,29 @@ class GoodomicsQueryTools:
                 project_row = await get_record_by_field(
                     session, ProjectRecord, ProjectRecord.project_id, project_id
                 )
-                project_pk = project_row.id if project_row is not None else None
+                if project_row is None:
+                    return {"profiles": []}
+                project_pk = project_row.id
             statement = select(DataProfileRecord)
             if project_pk is not None:
-                # Profiles can be project-local or global built-ins; include both
-                # so agents can discover core contracts and imported project data.
-                statement = statement.where(
-                    (cast(Any, DataProfileRecord.project_id) == project_pk)
-                    | (cast(Any, DataProfileRecord.project_id).is_(None))
-                )
+                if project_id == DEFAULT_PROJECT_ID:
+                    profile_project_id = cast(Any, DataProfileRecord.project_id)
+                    statement = statement.where(
+                        or_(
+                            profile_project_id == project_pk,
+                            profile_project_id.is_(None),
+                        )
+                    )
+                else:
+                    statement = statement.where(
+                        DataProfileRecord.project_id == project_pk
+                    )
             statement = statement.order_by(DataProfileRecord.name).limit(
                 _bounded_limit(limit)
             )
             profiles = list((await session.exec(statement)).all())
+            if project_pk is not None:
+                profiles = _prefer_project_profile_rows(profiles, project_pk)
             if term:
                 # The SQL query has already handled project visibility. This
                 # second pass keeps text search simple across a few profile
@@ -731,6 +741,18 @@ def _bounded_limit(limit: int, *, maximum: int = 50) -> int:
     # Keep tool responses compact and prevent accidental huge catalog/analytics
     # reads from being returned to an agent.
     return max(1, min(limit, maximum))
+
+
+def _prefer_project_profile_rows(
+    profiles: list[DataProfileRecord],
+    project_pk: int,
+) -> list[DataProfileRecord]:
+    by_label: dict[str, DataProfileRecord] = {}
+    for profile in profiles:
+        existing = by_label.get(profile.data_profile_id)
+        if existing is None or profile.project_id == project_pk:
+            by_label[profile.data_profile_id] = profile
+    return list(by_label.values())
 
 
 async def _run_record_payload_public(

@@ -1,16 +1,23 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createInsight,
   executeInsight,
+  getInsightCatalog,
   listInsights,
   listProjectDatabaseTables,
   listProjectDataProfiles,
+  listProjectSamples,
   listReports,
+  listSampleSets,
   patchInsight,
+  validateInsightConfig,
   type DataProfile,
   type DatabaseTable,
+  type InsightCatalog,
+  type InsightValidation,
+  type SampleListItem,
   type SavedInsight,
 } from "../api";
 import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
@@ -22,6 +29,7 @@ import {
   profileSeries,
   seriesDisplayName,
   type BuilderSeries,
+  type SqlSourceSelection,
 } from "../components/insights/InsightSeriesEditor";
 import { InsightListTable } from "../components/reports/InsightListTable";
 import { isRecord, readReportItems } from "../components/reports/reportUtils";
@@ -30,9 +38,12 @@ import {
   Button,
   Card,
   CardContent,
+  DelayedHoverPopover,
   Input,
   Label,
   Page,
+  SearchSuggestionInput,
+  type SearchSuggestionOption,
   Select,
   SelectContent,
   SelectItem,
@@ -45,11 +56,25 @@ import {
   readDisplayOptions,
   type DisplayOptions,
 } from "../lib/insightDisplayOptions";
+import { CHART_COLORS } from "../lib/chartColors";
 import { queryClient } from "../lib/queryClient";
 
 type Store = DatabaseTable["store"];
 type InsightMode = "list" | "detail";
 type QueryMode = "profile" | "table";
+type ContextKind = "cohort" | "sample";
+type BuilderMode =
+  | "profile_metrics"
+  | "comparison"
+  | "sample_detail"
+  | "variant_table";
+type LinkerKind = "auto" | "sample" | "run_sample" | "run" | "feature" | "entity";
+type ResultPolicyMode =
+  | "preview"
+  | "more_rows"
+  | "random_sample"
+  | "all_rows"
+  | "export_full_data";
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
 export function InsightsPage({ projectId }: { projectId: string }) {
@@ -71,6 +96,14 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     queryKey: ["reports", projectId],
     queryFn: () => listReports(projectId),
   });
+  const catalog = useQuery({
+    queryKey: ["insight-catalog"],
+    queryFn: getInsightCatalog,
+  });
+  const sampleSets = useQuery({
+    queryKey: ["sample-sets", projectId, "cohort"],
+    queryFn: () => listSampleSets(projectId, "cohort"),
+  });
   const [mode, setMode] = useState<InsightMode>("list");
   const [search, setSearch] = useState("");
   const [selectedInsightId, setSelectedInsightId] = useState<string | null>(
@@ -81,6 +114,12 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   );
   const [title, setTitle] = useState("New insight");
   const [description, setDescription] = useState("");
+  const [contextKind, setContextKind] = useState<ContextKind>("cohort");
+  const [sampleSetId, setSampleSetId] = useState("");
+  const [sampleId, setSampleId] = useState("");
+  const [runSampleId, setRunSampleId] = useState("");
+  const [builderMode, setBuilderMode] =
+    useState<BuilderMode>("profile_metrics");
   const [queryMode, setQueryMode] = useState<QueryMode>("profile");
   const [profileId, setProfileId] = useState("");
   const [fieldId, setFieldId] = useState("");
@@ -90,6 +129,11 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const [store, setStore] = useState<Store>("analytics");
   const [table, setTable] = useState("");
   const [visualization, setVisualization] = useState("bar");
+  const [linkerKind, setLinkerKind] = useState<LinkerKind>("auto");
+  const [resultPolicyMode, setResultPolicyMode] =
+    useState<ResultPolicyMode>("preview");
+  const [resultLimit, setResultLimit] = useState(5000);
+  const [randomSeed, setRandomSeed] = useState("goodomics");
   const [displayOptions, setDisplayOptions] = useState<DisplayOptions>(
     DEFAULT_DISPLAY_OPTIONS,
   );
@@ -117,6 +161,41 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     }
     return counts;
   }, [reports.data]);
+  const selectBuilderMode = (next: BuilderMode) => {
+    setBuilderMode(next);
+    setContextKind(next === "sample_detail" ? "sample" : "cohort");
+    setQueryMode("profile");
+    if (next === "sample_detail" || next === "variant_table") {
+      setVisualization("table");
+      return;
+    }
+    if (next === "comparison") {
+      setVisualization("scatter");
+      return;
+    }
+    setVisualization("bar");
+  };
+  const selectProfileField = ({
+    fieldId: nextFieldId,
+    profileId: nextProfileId,
+  }: {
+    profileId: string;
+    fieldId: string;
+  }) => {
+    setQueryMode("profile");
+    setProfileId(nextProfileId);
+    setFieldId(nextFieldId);
+  };
+  const selectSqlSource = (selection: SqlSourceSelection) => {
+    setBuilderMode("variant_table");
+    setContextKind("cohort");
+    setQueryMode("table");
+    setVisualization("table");
+    setStore(selection.store);
+    setTable(selection.table);
+    setXField(selection.xField);
+    setYField(selection.yField);
+  };
 
   useEffect(() => {
     // URL parameters are only an entry affordance from other dashboard pages.
@@ -127,7 +206,16 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       setSelectedInsightId(null);
       setTitle("New insight");
       setDescription("");
+      setContextKind("cohort");
+      setSampleSetId("");
+      setSampleId("");
+      setRunSampleId("");
+      setBuilderMode("profile_metrics");
       setVisualization("bar");
+      setLinkerKind("auto");
+      setResultPolicyMode("preview");
+      setResultLimit(5000);
+      setRandomSeed("goodomics");
       setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
       setAdvancedSql("");
       setQueryMode("profile");
@@ -142,6 +230,11 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setMode("detail");
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
+
+  useEffect(() => {
+    if (sampleSetId || (sampleSets.data ?? []).length === 0) return;
+    setSampleSetId(sampleSets.data?.[0]?.sample_set_id ?? "");
+  }, [sampleSetId, sampleSets.data]);
 
   useEffect(() => {
     // Seed a profile-first insight with the first useful data profile. The
@@ -164,10 +257,6 @@ export function InsightsPage({ projectId }: { projectId: string }) {
               ...item,
               profileId: preferred.data_profile_id,
               fieldId: defaultField,
-              name:
-                preferred.fields.find(
-                  (field) => field.field_id === defaultField,
-                )?.display_name ?? item.name,
             }
           : item,
       ),
@@ -242,21 +331,45 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     const config = selectedInsight.config;
     const query = isRecord(config.query) ? config.query : {};
     const source = parseSource(query.source);
+    const context = isRecord(config.context) ? config.context : {};
+    const linker = isRecord(config.linker) ? config.linker : {};
+    const resultPolicy = isRecord(config.result_policy)
+      ? config.result_policy
+      : {};
     setTitle(selectedInsight.name);
     setDescription(selectedInsight.description ?? "");
     setVisualization(String(config.visualization ?? "bar"));
+    setSampleSetId(stringConfig(context.sample_set_id));
+    setSampleId(stringConfig(context.sample_id));
+    setRunSampleId(stringConfig(context.run_sample_id));
+    const parsedBuilderMode = parseBuilderMode(config.mode, source.kind);
+    setBuilderMode(parsedBuilderMode);
+    setContextKind(
+      context.kind === "sample" || parsedBuilderMode === "sample_detail"
+        ? "sample"
+        : "cohort",
+    );
+    setLinkerKind(parseLinkerKind(linker.kind));
+    setResultPolicyMode(parseResultPolicyMode(resultPolicy.mode));
+    setResultLimit(numberConfig(resultPolicy.limit, 5000));
+    setRandomSeed(stringConfig(resultPolicy.seed) || "goodomics");
     setDisplayOptions(readDisplayOptions(config));
     setQueryMode(source.kind);
     if (source.kind === "profile") {
       setProfileId(source.dataProfileId);
       const selectedField = firstString(query.y, query.fields, "");
-      setFieldId(selectedField);
-      setSeries([
-        {
-          ...blankSeries(0, source.dataProfileId, selectedField),
-          aggregation,
-        },
-      ]);
+      const savedSeries = parseSavedSeries(config.series, source.dataProfileId);
+      setFieldId(selectedField || savedSeries[0]?.fieldId || "");
+      setSeries(
+        savedSeries.length
+          ? savedSeries
+          : [
+              {
+                ...blankSeries(0, source.dataProfileId, selectedField),
+                aggregation,
+              },
+            ],
+      );
     } else {
       setStore(source.store);
       setTable(source.table);
@@ -275,12 +388,22 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       buildConfig({
         title,
         description,
+        contextKind,
+        sampleSetId,
+        sampleId,
+        runSampleId,
+        builderMode,
         queryMode,
         seriesItems: series,
+        profiles: availableProfiles,
         selectedProfile,
         store,
         table,
         visualization,
+        linkerKind,
+        resultPolicyMode,
+        resultLimit,
+        randomSeed,
         displayOptions,
         xField,
         yField,
@@ -290,22 +413,38 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     [
       advancedSql,
       aggregation,
+      availableProfiles,
+      builderMode,
+      contextKind,
       description,
       displayOptions,
       fieldId,
+      linkerKind,
       profileId,
       queryMode,
+      randomSeed,
+      resultLimit,
+      resultPolicyMode,
       series,
       selectedProfile,
+      sampleId,
+      sampleSetId,
       store,
       table,
       title,
       visualization,
+      runSampleId,
       xField,
       yField,
     ],
   );
   const previewConfig = useMemo(() => executionConfig(config), [config]);
+  const validation = useQuery({
+    queryKey: ["insight-validation", previewConfig],
+    queryFn: () => validateInsightConfig(previewConfig),
+    enabled: mode === "detail",
+    retry: false,
+  });
   const preview = useQuery({
     // Preview executes the config as the user edits. React Query keys include
     // the generated config object so chart changes naturally refetch.
@@ -328,7 +467,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     queryMode,
     series,
     visualization,
-  });
+  }) ?? validationWarning(validation.data);
   const save = useMutation({
     // Saved insights keep the same config shape that report templates consume,
     // so the dashboard builder and portable YAML/JSON exports stay aligned.
@@ -358,7 +497,15 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setSelectedInsightId(null);
     setTitle("New insight");
     setDescription("");
+    setContextKind("cohort");
+    setSampleId("");
+    setRunSampleId("");
+    setBuilderMode("profile_metrics");
     setVisualization("bar");
+    setLinkerKind("auto");
+    setResultPolicyMode("preview");
+    setResultLimit(5000);
+    setRandomSeed("goodomics");
     setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
     setAdvancedSql("");
     setQueryMode("profile");
@@ -414,85 +561,88 @@ export function InsightsPage({ projectId }: { projectId: string }) {
         onSaveContinue={() => save.mutate(true)}
         onTitleChange={setTitle}
       />
+      <InsightContextTabs
+        builderMode={builderMode}
+        catalog={catalog.data}
+        contextKind={contextKind}
+        projectId={projectId}
+        runSampleId={runSampleId}
+        sampleId={sampleId}
+        onBuilderModeChange={selectBuilderMode}
+        onRunSampleIdChange={setRunSampleId}
+        onSampleIdChange={setSampleId}
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <Card className="mt-0 min-h-0 overflow-y-auto">
-          <CardContent className="space-y-4">
-            <Field label="Query mode">
-              <Select
-                value={queryMode}
-                onValueChange={(value) => setQueryMode(value as QueryMode)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="profile">Data profile</SelectItem>
-                  <SelectItem value="table">Advanced table</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            {queryMode === "profile" ? (
+        <div className="min-h-0 space-y-4 overflow-y-auto">
+          <Card className="mt-0">
+            <CardContent className="space-y-3">
               <InsightSeriesEditor
+                advancedSql={advancedSql}
                 profiles={availableProfiles}
                 series={series}
                 setSeries={setSeries}
+                sourceKind={queryMode}
+                store={store}
+                table={table}
+                tables={availableTables}
+                xField={xField}
+                yField={yField}
+                onAdvancedSqlChange={setAdvancedSql}
+                onProfileFieldSelect={selectProfileField}
+                onSqlSourceSelect={selectSqlSource}
               />
-            ) : (
-              <>
-                <Field label="Store">
-                  <Select
-                    value={store}
-                    onValueChange={(value) => setStore(value as Store)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="analytics">
-                        DuckDB analytics
-                      </SelectItem>
-                      <SelectItem value="catalog">SQL catalog</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Table">
-                  <Select value={table} onValueChange={setTable}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose a table" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableTables
-                        .filter((item) => item.store === store)
-                        .map((item) => (
-                          <SelectItem
-                            key={`${item.store}:${item.name}`}
-                            value={item.name}
-                          >
-                            {item.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="X / group">
-                    <ColumnSelect
-                      columns={selectedTable?.columns ?? []}
-                      value={xField}
-                      onChange={setXField}
-                    />
-                  </Field>
-                  <Field label="Y / value">
-                    <ColumnSelect
-                      columns={selectedTable?.columns ?? []}
-                      value={yField}
-                      onChange={setYField}
-                    />
-                  </Field>
+              {builderMode === "profile_metrics" && selectedProfile ? (
+                <Button
+                  className="w-full justify-center"
+                  variant="outline"
+                  onClick={() =>
+                    setSeries(
+                      selectedProfile.fields
+                        .filter((field) => field.value_type === "numeric")
+                        .map((field, index) => ({
+                          ...blankSeries(
+                            index,
+                            selectedProfile.data_profile_id,
+                            field.field_id,
+                          ),
+                        })),
+                    )
+                  }
+                >
+                  Add all numeric fields
+                </Button>
+              ) : null}
+              {queryMode === "profile" ? (
+                <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-3 text-xs text-[#657082]">
+                  {seriesGuidance(visualization)}
                 </div>
-              </>
-            )}
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-0">
+            <CardContent className="space-y-4">
+              <Label>Options</Label>
+            {builderMode === "profile_metrics" ? (
+              <Field label="Cohort">
+                <Select value={sampleSetId} onValueChange={setSampleSetId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All samples" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(sampleSets.data ?? []).map((sampleSet) => (
+                      <SelectItem
+                        key={sampleSet.sample_set_id}
+                        value={sampleSet.sample_set_id}
+                      >
+                        {sampleSet.name} ({sampleSet.member_count})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            ) : null}
             <Field label="Aggregation">
               <Select value={aggregation} onValueChange={setAggregation}>
                 <SelectTrigger>
@@ -507,25 +657,37 @@ export function InsightsPage({ projectId }: { projectId: string }) {
                 </SelectContent>
               </Select>
             </Field>
-            {queryMode === "profile" ? (
-              <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-3 text-xs text-[#657082]">
-                {seriesGuidance(visualization)}
-              </div>
-            ) : null}
-            {queryMode === "table" ? (
-              <Field label="Advanced SQL">
-                <textarea
-                  className="min-h-[96px] w-full resize-y rounded-lg border border-[#cfd8e3] bg-white p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-[#21a66a]"
-                  placeholder="SELECT ... (optional)"
-                  value={advancedSql}
-                  onChange={(event) => setAdvancedSql(event.target.value)}
-                />
-              </Field>
-            ) : null}
-          </CardContent>
-        </Card>
+            <Field label="Matched by">
+              <Select
+                value={linkerKind}
+                onValueChange={(value) => setLinkerKind(value as LinkerKind)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {linkersFromCatalog(catalog.data).map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <DataSizeControls
+              mode={resultPolicyMode}
+              randomSeed={randomSeed}
+              rowLimit={resultLimit}
+              onModeChange={setResultPolicyMode}
+              onRandomSeedChange={setRandomSeed}
+              onRowLimitChange={setResultLimit}
+            />
+            </CardContent>
+          </Card>
+        </div>
 
         <InsightPreviewPanel
+          catalog={catalog.data}
           config={previewConfig}
           displayOptions={displayOptions}
           error={preview.error instanceof Error ? preview.error : null}
@@ -601,11 +763,11 @@ function chartSetupWarning({
   return null;
 }
 
-function seriesColorMap(series: BuilderSeries[]) {
+function seriesColorMap(profiles: DataProfile[], series: BuilderSeries[]) {
   // Store colors under every label the renderer might see: raw field IDs, safe
   // field aliases, display labels, and the generated Count series.
   const entries = series.flatMap((item, index) => {
-    const label = item.name || `Series ${index + 1}`;
+    const label = seriesLabel(profiles, item, index);
     const values = [
       [item.fieldId, item.color],
       [safeFieldAlias(item.fieldId), item.color],
@@ -617,6 +779,19 @@ function seriesColorMap(series: BuilderSeries[]) {
     return values;
   });
   return Object.fromEntries(entries);
+}
+
+function seriesLabel(
+  profiles: DataProfile[],
+  item: BuilderSeries,
+  index: number,
+) {
+  return (
+    item.name ||
+    fieldForSeries(profiles, item)?.display_name ||
+    item.fieldId ||
+    `Series ${index + 1}`
+  );
 }
 
 /** Label-and-control wrapper used by the insight builder sidebar. */
@@ -635,29 +810,240 @@ function Field({
   );
 }
 
-/** Column picker bound to the currently selected data source table. */
-function ColumnSelect({
-  columns,
-  value,
-  onChange,
+function SampleSearchInput({
+  projectId,
+  sampleId,
+  onSampleIdChange,
 }: {
-  columns: string[];
-  value: string;
-  onChange: (value: string) => void;
+  projectId: string;
+  sampleId: string;
+  onSampleIdChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sampleInput, setSampleInput] = useState(sampleId);
+  const [sampleSearch, setSampleSearch] = useState("");
+  const lastSelectedIdRef = useRef("");
+  const pageSize = 50;
+  const samplePages = useInfiniteQuery({
+    queryKey: ["project-sample-suggestions", projectId, sampleSearch],
+    queryFn: ({ pageParam }) =>
+      listProjectSamples({
+        projectId,
+        limit: pageSize,
+        offset: pageParam,
+        search: sampleSearch,
+      }),
+    enabled: open,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => {
+      const nextOffset = lastPage.offset + lastPage.items.length;
+      return nextOffset < lastPage.total ? nextOffset : undefined;
+    },
+  });
+  const sampleOptions = useMemo(
+    () =>
+      (samplePages.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .map(sampleSuggestionOption),
+    [samplePages.data?.pages],
+  );
+
+  useEffect(() => {
+    if (sampleId === lastSelectedIdRef.current) return;
+    setSampleInput(sampleId);
+  }, [sampleId]);
+
+  return (
+    <SearchSuggestionInput
+      emptyText="No samples found."
+      hasMore={Boolean(samplePages.hasNextPage)}
+      inputValue={sampleInput}
+      isLoading={samplePages.isLoading || samplePages.isFetchingNextPage}
+      loadMoreText={
+        samplePages.isFetchingNextPage ? "Loading more samples..." : "Loading..."
+      }
+      options={sampleOptions}
+      placeholder="Search samples..."
+      searchValue={sampleSearch}
+      onInputValueChange={(value) => {
+        lastSelectedIdRef.current = "";
+        setSampleInput(value);
+        onSampleIdChange(value);
+      }}
+      onLoadMore={() => {
+        if (samplePages.hasNextPage && !samplePages.isFetchingNextPage) {
+          void samplePages.fetchNextPage();
+        }
+      }}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setSampleSearch("");
+      }}
+      onSearchValueChange={setSampleSearch}
+      onSelect={(option) => {
+        lastSelectedIdRef.current = option.id;
+        setSampleInput(option.label);
+        setSampleSearch(option.label);
+        onSampleIdChange(option.id);
+      }}
+    />
+  );
+}
+
+function sampleSuggestionOption(sample: SampleListItem): SearchSuggestionOption {
+  const label = sample.sample_name || sample.sample_id;
+  const subtitleParts = [
+    sample.sample_name && sample.sample_name !== sample.sample_id
+      ? sample.sample_id
+      : "",
+    sample.subject_id ? `Subject ${sample.subject_id}` : "",
+  ].filter(Boolean);
+  return {
+    id: sample.sample_id,
+    label,
+    subtitle: subtitleParts.join(" · ") || undefined,
+  };
+}
+
+function InsightContextTabs({
+  builderMode,
+  catalog,
+  contextKind,
+  projectId,
+  runSampleId,
+  sampleId,
+  onBuilderModeChange,
+  onRunSampleIdChange,
+  onSampleIdChange,
+}: {
+  builderMode: BuilderMode;
+  catalog: InsightCatalog | undefined;
+  contextKind: ContextKind;
+  projectId: string;
+  runSampleId: string;
+  sampleId: string;
+  onBuilderModeChange: (value: BuilderMode) => void;
+  onRunSampleIdChange: (value: string) => void;
+  onSampleIdChange: (value: string) => void;
+}) {
+  const tabs = builderTabsFromCatalog(catalog);
+  return (
+    <section className="shrink-0 border-b border-[#dce3eb]">
+      <div className="flex min-h-[46px] flex-wrap items-end gap-7 px-1">
+        {tabs.map((tab) => {
+          const active = tab.value === builderMode;
+          return (
+            <DelayedHoverPopover
+              content={
+                <>
+                  <div className="mb-1 font-semibold text-[#1f2937]">
+                    {tab.label}
+                  </div>
+                  {tab.description}
+                </>
+              }
+              key={tab.value}
+            >
+              <button
+                className={[
+                  "relative h-11 border-b-2 px-0 text-sm font-semibold tracking-normal transition-colors",
+                  active
+                    ? "border-[#16784a] text-[#16784a]"
+                    : "border-transparent text-[#657082] hover:text-[#1f2937]",
+                ].join(" ")}
+                type="button"
+                onClick={() => onBuilderModeChange(tab.value)}
+              >
+                {tab.label}
+              </button>
+            </DelayedHoverPopover>
+          );
+        })}
+      </div>
+      {contextKind === "sample" ? (
+        <div className="flex flex-wrap items-end gap-3 pb-3 pt-2">
+          <div className="w-full max-w-[260px] space-y-1.5">
+            <Label>Sample</Label>
+            <SampleSearchInput
+              projectId={projectId}
+              sampleId={sampleId}
+              onSampleIdChange={onSampleIdChange}
+            />
+          </div>
+          <div className="w-full max-w-[300px] space-y-1.5">
+            <Label>Processed sample</Label>
+            <Input
+              placeholder="run:S1"
+              value={runSampleId}
+              onChange={(event) => onRunSampleIdChange(event.target.value)}
+            />
+          </div>
+          <div className="pb-2 text-xs text-[#657082]">
+            Sample mode uses the same guardrails as sample detail.
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DataSizeControls({
+  mode,
+  randomSeed,
+  rowLimit,
+  onModeChange,
+  onRandomSeedChange,
+  onRowLimitChange,
+}: {
+  mode: ResultPolicyMode;
+  randomSeed: string;
+  rowLimit: number;
+  onModeChange: (value: ResultPolicyMode) => void;
+  onRandomSeedChange: (value: string) => void;
+  onRowLimitChange: (value: number) => void;
 }) {
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger>
-        <SelectValue placeholder="Column" />
-      </SelectTrigger>
-      <SelectContent>
-        {columns.map((column) => (
-          <SelectItem key={column} value={column}>
-            {column}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="grid grid-cols-1 gap-2">
+      <Field label="Data size">
+        <Select
+          value={mode}
+          onValueChange={(value) => onModeChange(value as ResultPolicyMode)}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="preview">Preview default</SelectItem>
+            <SelectItem value="more_rows">More rows</SelectItem>
+            <SelectItem value="random_sample">Random sample</SelectItem>
+            <SelectItem value="all_rows">All rows</SelectItem>
+            <SelectItem value="export_full_data">Export full data</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      {mode === "more_rows" || mode === "random_sample" ? (
+        <Field label={mode === "more_rows" ? "Row limit" : "Sample size"}>
+          <Input
+            inputMode="numeric"
+            min={1}
+            max={10000}
+            type="number"
+            value={rowLimit}
+            onChange={(event) =>
+              onRowLimitChange(clampNumber(event.target.value, 1, 10000))
+            }
+          />
+        </Field>
+      ) : null}
+      {mode === "random_sample" ? (
+        <Field label="Seed">
+          <Input
+            value={randomSeed}
+            onChange={(event) => onRandomSeedChange(event.target.value)}
+          />
+        </Field>
+      ) : null}
+    </div>
   );
 }
 
@@ -671,15 +1057,150 @@ function executionConfig(config: Record<string, unknown>) {
   return rest;
 }
 
+function builderTabsFromCatalog(catalog: InsightCatalog | undefined) {
+  const fallback = [
+    ["profile_metrics", "Cohort analysis"],
+    ["sample_detail", "Sample"],
+    ["comparison", "Comparison"],
+    ["variant_table", "Table"],
+  ] as const;
+  const items = catalog?.modes.length
+    ? fallback.map(([value, fallbackLabel]) => {
+        const mode = catalog.modes.find((item) => stringConfig(item.id) === value);
+        return [
+          value,
+          tabLabel(value, stringConfig(mode?.label) || fallbackLabel),
+          tabDescription(value, stringConfig(mode?.description)),
+        ] as const;
+      })
+    : fallback;
+  return items
+    .map((item) =>
+      item.length === 2
+        ? ([item[0], item[1], tabDescription(item[0], "")] as const)
+        : item,
+    )
+    .filter((item): item is readonly [BuilderMode, string, string] =>
+      isBuilderMode(item[0]),
+    )
+    .map(([value, label, description]) => ({
+      value,
+      label: label || value,
+      description,
+    }));
+}
+
+function tabLabel(value: string, fallback: string) {
+  if (value === "profile_metrics") return "Cohort analysis";
+  if (value === "sample_detail") return "Sample";
+  if (value === "variant_table") return "Table";
+  return fallback;
+}
+
+function tabDescription(value: string, fallback: string) {
+  if (value === "profile_metrics") {
+    return "Build cohort-level metric panels and distributions from profile fields.";
+  }
+  if (value === "sample_detail") {
+    return "Inspect one sample or processed sample with detail and table views.";
+  }
+  if (value === "comparison") {
+    return "Align two or more values by sample, processed sample, feature, or run.";
+  }
+  if (value === "variant_table") {
+    return "Create table-oriented outputs from profile fields or SQL-backed data.";
+  }
+  return fallback || "Configure an insight with catalog guardrails.";
+}
+
+function linkersFromCatalog(catalog: InsightCatalog | undefined) {
+  const fallback = [
+    ["auto", "Auto"],
+    ["sample", "Sample"],
+    ["run_sample", "Processed sample"],
+    ["run", "Run"],
+    ["feature", "Feature"],
+    ["entity", "Entity"],
+  ] as const;
+  const items = catalog?.linkers.length
+    ? catalog.linkers.map((linker) => [
+        stringConfig(linker.id),
+        stringConfig(linker.label),
+      ] as const)
+    : fallback;
+  return items
+    .filter((item): item is readonly [LinkerKind, string] =>
+      isLinkerKind(item[0]),
+    )
+    .map(([value, label]) => ({ value, label: label || value }));
+}
+
+function validationWarning(validation: InsightValidation | undefined) {
+  const message = validation?.messages.find(
+    (item) => stringConfig(item.level) === "error",
+  );
+  return message ? stringConfig(message.message) : null;
+}
+
+function buildContext({
+  contextKind,
+  runSampleId,
+  sampleId,
+  sampleSetId,
+}: {
+  contextKind: ContextKind;
+  runSampleId: string;
+  sampleId: string;
+  sampleSetId: string;
+}) {
+  return contextKind === "sample"
+    ? {
+        kind: "sample",
+        sample_id: sampleId.trim() || undefined,
+        run_sample_id: runSampleId.trim() || undefined,
+      }
+    : {
+        kind: "cohort",
+        sample_set_id: sampleSetId || undefined,
+      };
+}
+
+function buildResultPolicy({
+  mode,
+  randomSeed,
+  rowLimit,
+}: {
+  mode: ResultPolicyMode;
+  randomSeed: string;
+  rowLimit: number;
+}) {
+  const limit = mode === "preview" ? 1000 : rowLimit;
+  return {
+    mode,
+    limit,
+    seed: mode === "random_sample" ? randomSeed || "goodomics" : undefined,
+  };
+}
+
 function buildConfig({
   title,
   description,
+  contextKind,
+  sampleSetId,
+  sampleId,
+  runSampleId,
+  builderMode,
   queryMode,
   seriesItems,
+  profiles,
   selectedProfile,
   store,
   table,
   visualization,
+  linkerKind,
+  resultPolicyMode,
+  resultLimit,
+  randomSeed,
   displayOptions,
   xField,
   yField,
@@ -688,12 +1209,22 @@ function buildConfig({
 }: {
   title: string;
   description: string;
+  contextKind: ContextKind;
+  sampleSetId: string;
+  sampleId: string;
+  runSampleId: string;
+  builderMode: BuilderMode;
   queryMode: QueryMode;
   seriesItems: BuilderSeries[];
+  profiles: DataProfile[];
   selectedProfile: DataProfile | undefined;
   store: Store;
   table: string;
   visualization: string;
+  linkerKind: LinkerKind;
+  resultPolicyMode: ResultPolicyMode;
+  resultLimit: number;
+  randomSeed: string;
   displayOptions: DisplayOptions;
   xField: string;
   yField: string;
@@ -702,6 +1233,17 @@ function buildConfig({
 }) {
   // This is the main compiler from editable form state to the persisted
   // Goodomics insight template. Keep it in lockstep with server/insights.py.
+  const context = buildContext({
+    contextKind,
+    runSampleId,
+    sampleId,
+    sampleSetId,
+  });
+  const resultPolicy = buildResultPolicy({
+    mode: resultPolicyMode,
+    randomSeed,
+    rowLimit: resultLimit,
+  });
   if (queryMode === "profile") {
     const activeSeries = seriesItems.filter(
       (item) => item.profileId && item.fieldId,
@@ -719,9 +1261,9 @@ function buildConfig({
       measures: activeSeries.map((item, index) => ({
         field: item.fieldId,
         aggregation: item.aggregation || aggregation,
-        label: item.name || `Series ${index + 1}`,
+        label: seriesLabel(profiles, item, index),
       })),
-      limit: 1000,
+      limit: resultPolicy.limit,
     };
     if (visualization === "histogram") {
       // Histograms need raw numeric values, not an aggregate measure. The server
@@ -785,12 +1327,24 @@ function buildConfig({
       version: 1,
       title,
       description,
+      context,
+      mode: builderMode,
       visualization,
       query,
-      series: query.measures,
+      series: activeSeries.map((item, index) => ({
+        series_id: item.id,
+        profile_id: item.profileId,
+        field_id: item.fieldId,
+        name: seriesLabel(profiles, item, index),
+        aggregation: item.aggregation || aggregation,
+        color: item.color,
+        filters: [],
+      })),
+      linker: { kind: linkerKind },
       filters: [],
+      result_policy: resultPolicy,
       display: {
-        colors: seriesColorMap(activeSeries),
+        colors: seriesColorMap(profiles, activeSeries),
         ...displayOptionsConfig(displayOptions),
       },
     };
@@ -807,7 +1361,7 @@ function buildConfig({
         label: aggregation,
       },
     ],
-    limit: 1000,
+    limit: resultPolicy.limit,
   };
   if (advancedSql.trim()) query.sql = advancedSql.trim();
   if (visualization === "scatter" || visualization === "heatmap") {
@@ -833,12 +1387,95 @@ function buildConfig({
     version: 1,
     title,
     description,
+    context,
+    mode: builderMode,
     visualization,
     query,
     series: query.measures,
+    linker: { kind: linkerKind },
     filters: [],
+    result_policy: resultPolicy,
     display: displayOptionsConfig(displayOptions),
   };
+}
+
+function parseSavedSeries(value: unknown, fallbackProfileId: string) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item, index) => {
+      const profileId =
+        stringConfig(item.profile_id) ||
+        stringConfig(item.data_profile_id) ||
+        fallbackProfileId;
+      const fieldId = stringConfig(item.field_id) || stringConfig(item.field);
+      if (!profileId || !fieldId) return null;
+      return {
+        id: stringConfig(item.series_id) || `series-${index}`,
+        profileId,
+        fieldId,
+        aggregation: stringConfig(item.aggregation) || "avg",
+        name: stringConfig(item.name) || stringConfig(item.label),
+        color: stringConfig(item.color) || CHART_COLORS[index % CHART_COLORS.length],
+      } satisfies BuilderSeries;
+    })
+    .filter((item): item is BuilderSeries => Boolean(item));
+}
+
+function parseBuilderMode(value: unknown, sourceKind: QueryMode): BuilderMode {
+  const mode = stringConfig(value);
+  if (mode === "advanced_sql") return "variant_table";
+  if (isBuilderMode(mode)) return mode;
+  return sourceKind === "table" ? "variant_table" : "profile_metrics";
+}
+
+function parseLinkerKind(value: unknown): LinkerKind {
+  const kind = stringConfig(value);
+  return isLinkerKind(kind) ? kind : "auto";
+}
+
+function parseResultPolicyMode(value: unknown): ResultPolicyMode {
+  const mode = stringConfig(value);
+  return isResultPolicyMode(mode) ? mode : "preview";
+}
+
+function isBuilderMode(value: string): value is BuilderMode {
+  return [
+    "profile_metrics",
+    "comparison",
+    "sample_detail",
+    "variant_table",
+  ].includes(value);
+}
+
+function isLinkerKind(value: string): value is LinkerKind {
+  return ["auto", "sample", "run_sample", "run", "feature", "entity"].includes(
+    value,
+  );
+}
+
+function isResultPolicyMode(value: string): value is ResultPolicyMode {
+  return [
+    "preview",
+    "more_rows",
+    "random_sample",
+    "all_rows",
+    "export_full_data",
+  ].includes(value);
+}
+
+function clampNumber(value: string, min: number, max: number) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return min;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function stringConfig(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function numberConfig(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function filterInsights(insights: SavedInsight[], search: string) {

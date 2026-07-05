@@ -96,6 +96,7 @@ class ParserOutput:
                 producer_tool=self.parser_key,
                 **kwargs,
             )
+        resolved = resolved.model_copy(update={"project_id": self.project_id})
         self.data_profiles[resolved.data_profile_id] = resolved
         return resolved
 

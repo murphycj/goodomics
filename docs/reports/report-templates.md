@@ -39,22 +39,34 @@ title: RNA-seq QC Report
 insights:
   - insight_id: mapped_reads
     name: Mapped reads
-    visualization: stacked_bar
+    context:
+      kind: cohort
+      sample_set_id: production-rnaseq
+    mode: profile_metrics
+    visualization: bar
+    linker:
+      kind: run_sample
+    result_policy:
+      mode: preview
+      limit: 1000
     query:
       source:
         kind: data_profile
         data_profile_id: multiqc:qc_metrics
       fields: [general_stats.salmon_percent_mapped]
       entity: run_sample
-      dimensions: [sample_id]
-      measures:
-        - field: general_stats.salmon_percent_mapped
-          aggregation: sum
-          label: Reads
+    series:
+      - profile_id: multiqc:qc_metrics
+        field_id: general_stats.salmon_percent_mapped
+        name: Percent mapped
+        aggregation: avg
 
 report:
   report_id: rnaseq-qc
   name: RNA-seq QC
+  context:
+    kind: cohort
+    sample_set_id: production-rnaseq
   items:
     - insight_id: mapped_reads
       x: 0
@@ -75,6 +87,18 @@ the common MultiQC- and cBioPortal-like chart families Goodomics needs:
 stacked/grouped bars, lines, scatter plots, histograms, heatmaps, boxplots,
 matrix-like views, legends, tooltips, zooming, and custom series.
 
+Goodomics keeps chart selection behind a server-owned insight catalog. The
+catalog defines chart IDs, mode IDs, icons, series constraints, linker rules,
+result-size policies, and validation messages. The dashboard builder, API,
+report renderer, and future AI insight drafting path should use that catalog
+instead of exposing raw ECharts as the primary authoring model.
+
+Plots that align multiple values should include a visible `linker`, shown in the
+UI as **Matched by**. If `auto` has exactly one valid linker, Goodomics may
+select it. If multiple valid linkers exist, the user must choose one such as
+`sample`, `run_sample`, or `feature`. Executed insight payloads include linker
+diagnostics and a `plot_table` with the exact rows used for plotting.
+
 Histogram insights use a numeric raw-value column and can set `query.bins` or
 `display.bins` to control bin count:
 
@@ -90,6 +114,15 @@ query:
   y: multiqc_picard.insert_size
   bins: 30
 ```
+
+Result-size policies keep previews and reports responsive:
+
+- `preview`: embed up to 1,000 rows.
+- `more_rows`: embed a bounded user-selected number of rows.
+- `random_sample`: embed a deterministic sampled subset.
+- `all_rows`: embed all rows only below the configured threshold.
+- `export_full_data`: write full plot/table data to a file-backed artifact
+  instead of embedding every row in the API response.
 
 Goodomics should keep chart intent in its own schema and compile that schema to
 ECharts options internally. Additional charting libraries should only be added

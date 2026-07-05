@@ -134,6 +134,7 @@ def parse_cbioportal_study(
         meta.data_filename: _profile_from_meta(
             meta,
             assay=assay,
+            project_id=project_id,
         )
         for meta in metas
         if meta.data_filename
@@ -251,12 +252,16 @@ def _profile_from_meta(
     meta: CbioPortalMeta,
     *,
     assay: str | None,
+    project_id: str | None,
 ) -> DataProfile:
     profile = cbioportal_data_profile_for_meta(
         meta.values,
         source_meta_file=meta.path.name,
     )
-    updates: dict[str, Any] = {"assay": assay or profile.assay}
+    updates: dict[str, Any] = {
+        "assay": assay or profile.assay,
+        "project_id": project_id,
+    }
     if profile.primary_table == "feature_value_numeric":
         updates["value_semantics"] = _value_semantics_from_meta(meta.values, profile)
     return profile.model_copy(update=updates)
