@@ -195,6 +195,7 @@ class SampleSet(GoodomicsModel):
     description: str | None = None
     definition_json: JsonObject = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
