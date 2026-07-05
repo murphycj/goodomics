@@ -1900,9 +1900,7 @@ async def delete_project_sample_group(
         if row.id is not None:
             sample_set_member_id = cast(Any, SampleSetMemberRecord.sample_set_id)
             await session.exec(
-                delete(SampleSetMemberRecord).where(
-                    sample_set_member_id == row.id
-                )
+                delete(SampleSetMemberRecord).where(sample_set_member_id == row.id)
             )
         await session.delete(row)
         await session.commit()
