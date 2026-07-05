@@ -1,0 +1,36 @@
+source:
+  id: bbtools
+  kind: tool
+  name: BBTools
+contracts:
+  - data_contract_id: bbtools:bbsplit:metrics
+    name: BBTools BBSplit metrics
+    data_type: generic_metrics
+    producer_tool: bbtools
+    feature_type: metric
+    value_type: mixed
+    entity_grain: run_sample
+    primary_table: sample_metrics
+    physical_tables: [sample_metrics]
+    query_modes: [sample, metric, cohort]
+    mcp_description: Sample-level metrics from BBTools BBSplit outputs.
+    metadata_json:
+      contract_scope: semantic_contract
+      contract_family: tool_output
+      tool: bbtools
+      tool_context: bbsplit
+  - data_contract_id: bbtools:bbsplit:payloads
+    name: BBTools BBSplit payload tables
+    data_type: contract_payload
+    producer_tool: bbtools
+    value_type: table
+    entity_grain: run
+    primary_table: contract_payloads
+    physical_tables: [contract_payloads]
+    query_modes: [payload]
+    mcp_description: Source tables and plot payloads from BBTools BBSplit outputs.
+    metadata_json:
+      contract_scope: semantic_contract
+      contract_family: tool_output
+      tool: bbtools
+      tool_context: bbsplit

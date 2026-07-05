@@ -21,9 +21,9 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.schemas.models import (
+    DataContract,
+    DataContractField,
     DataImport,
-    DataProfile,
-    DataProfileField,
     FileAsset,
     FileLink,
     Project,
@@ -47,8 +47,8 @@ class CatalogWriteResult:
     subjects: list[SubjectRecord]
     samples: list[SampleRecord]
     run_samples: list[RunSampleRecord]
-    data_profiles: list[DataProfileRecord]
-    data_profile_fields: list[DataProfileFieldRecord]
+    data_contracts: list[DataContractRecord]
+    data_contract_fields: list[DataContractFieldRecord]
     files: list[FileRecord]
     file_links: list[FileLinkRecord]
     sample_sets: list[SampleSetRecord]
@@ -128,18 +128,18 @@ class RunSampleRecord(SQLModel, table=True):
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
-class DataProfileRecord(SQLModel, table=True):
-    __tablename__ = "data_profiles"
+class DataContractRecord(SQLModel, table=True):
+    __tablename__ = "data_contracts"
     __table_args__ = (
         UniqueConstraint(
             "project_id",
-            "data_profile_id",
-            name="uq_data_profiles_project_profile_id",
+            "data_contract_id",
+            name="uq_data_contracts_project_contract_id",
         ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    data_profile_id: str = Field(max_length=255, index=True)
+    data_contract_id: str = Field(max_length=255, index=True)
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
     data_type: str = Field(max_length=128, index=True)
@@ -163,11 +163,11 @@ class DataProfileRecord(SQLModel, table=True):
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
-class DataProfileFieldRecord(SQLModel, table=True):
-    __tablename__ = "data_profile_fields"
+class DataContractFieldRecord(SQLModel, table=True):
+    __tablename__ = "data_contract_fields"
 
     id: int | None = Field(default=None, primary_key=True)
-    data_profile_id: int = Field(foreign_key="data_profiles.id", index=True)
+    data_contract_id: int = Field(foreign_key="data_contracts.id", index=True)
     field_id: str = Field(max_length=255, index=True)
     field_role: str = Field(default="metric", max_length=64, index=True)
     entity_scope: str | None = Field(default=None, max_length=128)
@@ -221,7 +221,7 @@ class FileRecord(SQLModel, table=True):
 class FileLinkRecord(SQLModel, table=True):
     __tablename__ = "file_links"
 
-    # A file can be linked to a run, run sample, sample, or data profile without
+    # A file can be linked to a run, run sample, sample, or data contract without
     # duplicating the file asset row itself.
     id: int | None = Field(default=None, primary_key=True)
     file_id: int = Field(foreign_key="files.id", index=True)
@@ -234,8 +234,8 @@ class FileLinkRecord(SQLModel, table=True):
         default=None, foreign_key="run_samples.id", index=True
     )
     sample_id: int | None = Field(default=None, foreign_key="samples.id", index=True)
-    data_profile_id: int | None = Field(
-        default=None, foreign_key="data_profiles.id", index=True
+    data_contract_id: int | None = Field(
+        default=None, foreign_key="data_contracts.id", index=True
     )
     link_role: str = Field(max_length=255)
 
@@ -398,8 +398,8 @@ class SQLModelGoodomicsStore:
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
-        data_profiles: list[DataProfile] | None = None,
-        data_profile_fields: list[DataProfileField] | None = None,
+        data_contracts: list[DataContract] | None = None,
+        data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
@@ -417,8 +417,8 @@ class SQLModelGoodomicsStore:
             subjects=subjects,
             samples=samples or run.samples,
             run_samples=run_samples,
-            data_profiles=data_profiles,
-            data_profile_fields=data_profile_fields,
+            data_contracts=data_contracts,
+            data_contract_fields=data_contract_fields,
             files=files,
             file_links=normalized_links,
             sample_sets=sample_sets,
@@ -433,8 +433,8 @@ class SQLModelGoodomicsStore:
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
-        data_profiles: list[DataProfile] | None = None,
-        data_profile_fields: list[DataProfileField] | None = None,
+        data_contracts: list[DataContract] | None = None,
+        data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
@@ -524,14 +524,14 @@ class SQLModelGoodomicsStore:
             await session.flush()
             run_sample_pk_by_label = _id_map(run_sample_rows, "run_sample_id")
 
-            profile_rows = await _upsert_data_profiles(
-                session, data_profiles or [], project_pk
+            contract_rows = await _upsert_data_contracts(
+                session, data_contracts or [], project_pk
             )
-            profile_pk_by_label = _id_map(profile_rows, "data_profile_id")
-            profile_field_rows = await _upsert_data_profile_fields(
+            contract_pk_by_label = _id_map(contract_rows, "data_contract_id")
+            contract_field_rows = await _upsert_data_contract_fields(
                 session,
-                data_profile_fields or [],
-                profile_pk_by_label,
+                data_contract_fields or [],
+                contract_pk_by_label,
             )
 
             file_rows = await _upsert_files(session, files or [], project_pk)
@@ -549,8 +549,8 @@ class SQLModelGoodomicsStore:
                         run_sample_pk_by_label, link.run_sample_id
                     ),
                     sample_id=_optional_map_lookup(sample_pk_by_label, link.sample_id),
-                    data_profile_id=_optional_map_lookup(
-                        profile_pk_by_label, link.data_profile_id
+                    data_contract_id=_optional_map_lookup(
+                        contract_pk_by_label, link.data_contract_id
                     ),
                     link_role=link.link_role,
                 )
@@ -617,8 +617,8 @@ class SQLModelGoodomicsStore:
                 subjects=_snapshot_records(subject_rows),
                 samples=_snapshot_records(sample_rows),
                 run_samples=_snapshot_records(run_sample_rows),
-                data_profiles=_snapshot_records(profile_rows),
-                data_profile_fields=_snapshot_records(profile_field_rows),
+                data_contracts=_snapshot_records(contract_rows),
+                data_contract_fields=_snapshot_records(contract_field_rows),
                 files=_snapshot_records(file_rows),
                 file_links=_snapshot_records(file_link_rows),
                 sample_sets=_snapshot_records(sample_set_rows),
@@ -725,16 +725,16 @@ class SQLModelGoodomicsStore:
             SampleRecord.sample_id,
             [link.sample_id for link in file_links if link.sample_id],
         )
-        profile_rows = await _data_profile_records_by_label(
+        contract_rows = await _data_contract_records_by_label(
             session,
-            [link.data_profile_id for link in file_links if link.data_profile_id],
+            [link.data_contract_id for link in file_links if link.data_contract_id],
             project_id=project_pk,
         )
         data_import_map = _id_map(data_import_rows.values(), "data_import_id")
         run_map = _id_map(run_rows.values(), "run_id")
         run_sample_map = _id_map(run_sample_rows.values(), "run_sample_id")
         sample_map = _id_map(sample_rows.values(), "sample_id")
-        profile_map = _id_map(profile_rows.values(), "data_profile_id")
+        contract_map = _id_map(contract_rows.values(), "data_contract_id")
         session.add_all(
             [
                 FileLinkRecord(
@@ -748,8 +748,8 @@ class SQLModelGoodomicsStore:
                         run_sample_map, link.run_sample_id
                     ),
                     sample_id=_optional_map_lookup(sample_map, link.sample_id),
-                    data_profile_id=_optional_map_lookup(
-                        profile_map, link.data_profile_id
+                    data_contract_id=_optional_map_lookup(
+                        contract_map, link.data_contract_id
                     ),
                     link_role=link.link_role,
                 )
@@ -783,8 +783,8 @@ def catalog_id_maps_from_records(
 
     return {
         "project_id": _id_map([result.project], "project_id"),
-        "data_profile_id": _id_map(result.data_profiles, "data_profile_id"),
-        "field_id": _id_map(result.data_profile_fields, "field_id"),
+        "data_contract_id": _id_map(result.data_contracts, "data_contract_id"),
+        "field_id": _id_map(result.data_contract_fields, "field_id"),
         "run_id": _id_map(result.runs, "run_id"),
         "run_sample_id": _id_map(result.run_samples, "run_sample_id"),
         "sample_id": _id_map(result.samples, "sample_id"),
@@ -849,23 +849,23 @@ async def _records_by_field(
     return {str(getattr(row, field.key)): row for row in rows}
 
 
-async def _data_profile_records_by_label(
+async def _data_contract_records_by_label(
     session: AsyncSession,
     labels: Iterable[str],
     *,
     project_id: int,
-) -> dict[str, DataProfileRecord]:
+) -> dict[str, DataContractRecord]:
     unique_labels = sorted({label for label in labels if label})
     if not unique_labels:
         return {}
     rows = (
         await session.exec(
-            select(DataProfileRecord)
-            .where(cast(Any, DataProfileRecord.data_profile_id).in_(unique_labels))
-            .where(DataProfileRecord.project_id == project_id)
+            select(DataContractRecord)
+            .where(cast(Any, DataContractRecord.data_contract_id).in_(unique_labels))
+            .where(DataContractRecord.project_id == project_id)
         )
     ).all()
-    return {row.data_profile_id: row for row in rows}
+    return {row.data_contract_id: row for row in rows}
 
 
 async def _upsert_subjects(
@@ -937,95 +937,95 @@ async def _upsert_samples(
     return rows
 
 
-async def _upsert_data_profiles(
+async def _upsert_data_contracts(
     session: AsyncSession,
-    profiles: list[DataProfile],
+    contracts: list[DataContract],
     project_id: int,
-) -> list[DataProfileRecord]:
-    existing = await _data_profile_records_by_label(
+) -> list[DataContractRecord]:
+    existing = await _data_contract_records_by_label(
         session,
-        [profile.data_profile_id for profile in profiles],
+        [contract.data_contract_id for contract in contracts],
         project_id=project_id,
     )
-    rows: list[DataProfileRecord] = []
-    for profile in profiles:
-        row = existing.get(profile.data_profile_id)
-        profile_project_id = project_id
+    rows: list[DataContractRecord] = []
+    for contract in contracts:
+        row = existing.get(contract.data_contract_id)
+        contract_project_id = project_id
         if row is None:
-            row = DataProfileRecord(
-                data_profile_id=profile.data_profile_id,
-                project_id=profile_project_id,
-                name=profile.name,
-                data_type=profile.data_type,
-                assay=profile.assay,
-                producer_tool=profile.producer_tool,
-                producer_tool_version=profile.producer_tool_version,
-                producer_pipeline=profile.producer_pipeline,
-                genome_build=profile.genome_build,
-                feature_type=profile.feature_type,
-                value_type=profile.value_type,
-                unit=profile.unit,
-                entity_grain=profile.entity_grain,
-                value_semantics=profile.value_semantics,
-                primary_table=profile.primary_table,
-                physical_tables_json=dict(profile.physical_tables_json),
-                summary_json=dict(profile.summary_json),
-                last_profiled_at=profile.last_profiled_at,
-                source_fingerprint=profile.source_fingerprint,
-                query_modes_json=dict(profile.query_modes_json),
-                mcp_description=profile.mcp_description,
-                metadata_json=dict(profile.metadata_json),
+            row = DataContractRecord(
+                data_contract_id=contract.data_contract_id,
+                project_id=contract_project_id,
+                name=contract.name,
+                data_type=contract.data_type,
+                assay=contract.assay,
+                producer_tool=contract.producer_tool,
+                producer_tool_version=contract.producer_tool_version,
+                producer_pipeline=contract.producer_pipeline,
+                genome_build=contract.genome_build,
+                feature_type=contract.feature_type,
+                value_type=contract.value_type,
+                unit=contract.unit,
+                entity_grain=contract.entity_grain,
+                value_semantics=contract.value_semantics,
+                primary_table=contract.primary_table,
+                physical_tables_json=dict(contract.physical_tables_json),
+                summary_json=dict(contract.summary_json),
+                last_profiled_at=contract.last_profiled_at,
+                source_fingerprint=contract.source_fingerprint,
+                query_modes_json=dict(contract.query_modes_json),
+                mcp_description=contract.mcp_description,
+                metadata_json=dict(contract.metadata_json),
             )
         else:
-            row.project_id = profile_project_id
-            row.name = profile.name
-            row.data_type = profile.data_type
-            row.assay = profile.assay
-            row.producer_tool = profile.producer_tool
-            row.producer_tool_version = profile.producer_tool_version
-            row.producer_pipeline = profile.producer_pipeline
-            row.genome_build = profile.genome_build
-            row.feature_type = profile.feature_type
-            row.value_type = profile.value_type
-            row.unit = profile.unit
-            row.entity_grain = profile.entity_grain
-            row.value_semantics = profile.value_semantics
-            row.primary_table = profile.primary_table
-            row.physical_tables_json = dict(profile.physical_tables_json)
-            row.summary_json = dict(profile.summary_json)
-            row.last_profiled_at = profile.last_profiled_at
-            row.source_fingerprint = profile.source_fingerprint
-            row.query_modes_json = dict(profile.query_modes_json)
-            row.mcp_description = profile.mcp_description
-            row.metadata_json = dict(profile.metadata_json)
+            row.project_id = contract_project_id
+            row.name = contract.name
+            row.data_type = contract.data_type
+            row.assay = contract.assay
+            row.producer_tool = contract.producer_tool
+            row.producer_tool_version = contract.producer_tool_version
+            row.producer_pipeline = contract.producer_pipeline
+            row.genome_build = contract.genome_build
+            row.feature_type = contract.feature_type
+            row.value_type = contract.value_type
+            row.unit = contract.unit
+            row.entity_grain = contract.entity_grain
+            row.value_semantics = contract.value_semantics
+            row.primary_table = contract.primary_table
+            row.physical_tables_json = dict(contract.physical_tables_json)
+            row.summary_json = dict(contract.summary_json)
+            row.last_profiled_at = contract.last_profiled_at
+            row.source_fingerprint = contract.source_fingerprint
+            row.query_modes_json = dict(contract.query_modes_json)
+            row.mcp_description = contract.mcp_description
+            row.metadata_json = dict(contract.metadata_json)
         rows.append(row)
     session.add_all(rows)
     await session.flush()
     return rows
 
 
-async def _upsert_data_profile_fields(
+async def _upsert_data_contract_fields(
     session: AsyncSession,
-    fields: list[DataProfileField],
-    profile_pk_by_label: dict[str, int],
-) -> list[DataProfileFieldRecord]:
+    fields: list[DataContractField],
+    contract_pk_by_label: dict[str, int],
+) -> list[DataContractFieldRecord]:
     if not fields:
         return []
-    field_ids_by_profile_pk: dict[int, set[str]] = {}
+    field_ids_by_contract_pk: dict[int, set[str]] = {}
     for field in fields:
-        profile_pk = profile_pk_by_label.get(field.data_profile_id)
-        if profile_pk is not None:
-            field_ids_by_profile_pk.setdefault(profile_pk, set()).add(field.field_id)
+        contract_pk = contract_pk_by_label.get(field.data_contract_id)
+        if contract_pk is not None:
+            field_ids_by_contract_pk.setdefault(contract_pk, set()).add(field.field_id)
 
-    for profile_pk, field_ids in sorted(field_ids_by_profile_pk.items()):
+    for contract_pk, field_ids in sorted(field_ids_by_contract_pk.items()):
         await session.exec(
-            delete(DataProfileFieldRecord)
-            .where(DataProfileFieldRecord.data_profile_id == profile_pk)
-            .where(cast(Any, DataProfileFieldRecord.field_id).in_(sorted(field_ids)))
+            delete(DataContractFieldRecord)
+            .where(DataContractFieldRecord.data_contract_id == contract_pk)
+            .where(cast(Any, DataContractFieldRecord.field_id).in_(sorted(field_ids)))
         )
     rows = [
-        DataProfileFieldRecord(
-            data_profile_id=profile_pk_by_label[field.data_profile_id],
+        DataContractFieldRecord(
+            data_contract_id=contract_pk_by_label[field.data_contract_id],
             field_id=field.field_id,
             field_role=field.field_role,
             entity_scope=field.entity_scope,
@@ -1040,7 +1040,7 @@ async def _upsert_data_profile_fields(
             metadata_json=dict(field.metadata_json),
         )
         for field in fields
-        if field.data_profile_id in profile_pk_by_label
+        if field.data_contract_id in contract_pk_by_label
     ]
     session.add_all(rows)
     await session.flush()
@@ -1312,10 +1312,10 @@ async def _delete_run_scoped_catalog(
             select(RunSampleRecord.id).where(RunSampleRecord.run_id == run_pk)
         )
     ).all()
-    profile_ids = (
+    contract_ids = (
         await session.exec(
-            select(DataProfileRecord.id).where(
-                DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
+            select(DataContractRecord.id).where(
+                DataContractRecord.data_contract_id.startswith(f"{run_id}:")
             )
         )
     ).all()
@@ -1339,20 +1339,22 @@ async def _delete_run_scoped_catalog(
         )
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_pk))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_pk))
-    if profile_ids:
+    if contract_ids:
         await session.exec(
-            delete(DataProfileFieldRecord).where(
-                cast(Any, DataProfileFieldRecord.data_profile_id).in_(list(profile_ids))
+            delete(DataContractFieldRecord).where(
+                cast(Any, DataContractFieldRecord.data_contract_id).in_(
+                    list(contract_ids)
+                )
             )
         )
         await session.exec(
             delete(FileLinkRecord).where(
-                cast(Any, FileLinkRecord.data_profile_id).in_(list(profile_ids))
+                cast(Any, FileLinkRecord.data_contract_id).in_(list(contract_ids))
             )
         )
     await session.exec(
-        delete(DataProfileRecord).where(
-            DataProfileRecord.data_profile_id.startswith(f"{run_id}:")
+        delete(DataContractRecord).where(
+            DataContractRecord.data_contract_id.startswith(f"{run_id}:")
         )
     )
     if file_ids:

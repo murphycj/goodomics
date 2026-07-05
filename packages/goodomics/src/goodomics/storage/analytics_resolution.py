@@ -10,36 +10,36 @@ from pydantic import BaseModel
 from goodomics.schemas.models import AnalyticsIngestBatch
 
 CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
-    "entity_attributes": frozenset({"data_profile_id", "field_id"}),
+    "entity_attributes": frozenset({"data_contract_id", "field_id"}),
     "sample_metrics": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id", "field_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id", "field_id"}
     ),
     "feature_value_numeric": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "feature_call": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "sample_interval_values": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "copy_number_segments": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
-    "variant_annotations": frozenset({"data_profile_id"}),
-    "variant_transcript_annotations": frozenset({"data_profile_id"}),
+    "variant_annotations": frozenset({"data_contract_id"}),
+    "variant_transcript_annotations": frozenset({"data_contract_id"}),
     "sample_variant_calls": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "sample_structural_variant_calls": frozenset(
-        {"data_profile_id", "run_id", "run_sample_id", "sample_id"}
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "timeline_events": frozenset({"subject_id", "sample_id", "run_sample_id"}),
-    "profile_payloads": frozenset({"data_profile_id", "run_id", "run_sample_id"}),
+    "contract_payloads": frozenset({"data_contract_id", "run_id", "run_sample_id"}),
     "gene_alteration_state": frozenset(
-        {"run_sample_id", "sample_id", "subject_id", "data_profile_id"}
+        {"run_sample_id", "sample_id", "subject_id", "data_contract_id"}
     ),
-    "cohort_summaries": frozenset({"sample_set_id", "data_profile_id"}),
+    "cohort_summaries": frozenset({"sample_set_id", "data_contract_id"}),
     "tool_versions": frozenset({"run_id"}),
     "data_sources": frozenset({"run_id", "run_sample_id", "sample_id"}),
 }

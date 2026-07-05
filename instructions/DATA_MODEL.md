@@ -2,7 +2,7 @@
 
 This file is the source of truth for Goodomics data model terminology and
 schema-direction discussions. Use it when working on core data concepts, table
-shapes, SQL vs DuckDB responsibilities, data imports, data profiles, processed
+shapes, SQL vs DuckDB responsibilities, data imports, data contracts, processed
 samples, files, observations, and agent/MCP data-query behavior.
 
 The guiding split:
@@ -17,11 +17,11 @@ The guiding identity rule:
 - SQL control store tables use integer `id` primary keys and integer foreign keys for internal
   relationships.
 - Human-readable/source identifiers such as `sample_id`, `run_id`,
-  `data_profile_id`, `file_id`, and `feature_label` are stable, indexed label
+  `data_contract_id`, `file_id`, and `feature_label` are stable, indexed label
   columns, not the physical join mechanism.
 - DuckDB analytical fact tables use integer columns named for the referenced
   entity, such as `sample_id`, `run_sample_id`, `feature_id`, `field_id`, and
-  `data_profile_id`.
+  `data_contract_id`.
 - User/API/ingest boundaries may accept readable labels, then resolve them to
   integer IDs before writing analytical rows.
 
@@ -29,14 +29,14 @@ The guiding identity rule:
 
 | Concept          | User-facing meaning                                         | Implementation role                                                                |
 | ---------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Project          | Workspace or data boundary                                  | Owns runs, samples, files, sample sets, profiles, and analytical store             |
+| Project          | Workspace or data boundary                                  | Owns runs, samples, files, sample sets, contracts, and analytical store             |
 | Subject          | Optional patient, donor, organism, cell line, or individual | Links related samples                                                              |
 | Sample           | Biological or material sample users recognize and navigate  | Stable sample identity across runs                                                 |
 | Data import      | Data entry/audit event                                      | Records how files/results entered Goodomics                                        |
 | Run              | Computational, benchmark, or imported analytical result     | Captures one result-producing execution or result snapshot                         |
 | Processed sample | A sample within a specific run                              | Internal `run_sample` grain for latest-run lookup, comparison, and metrics         |
 | File             | Original or derived file                                    | Tracks physical evidence and outputs                                               |
-| Data profile     | Smallest logical queryable dataset                          | Declares data type, provenance, and query behavior                                 |
+| Data contract     | Smallest logical queryable dataset                          | Declares data type, provenance, and query behavior                                 |
 | Sample set       | Saved group of processed samples                            | General primitive behind cohorts and reference sets                                |
 | Cohort           | Sample set used for grouping or comparison                  | Specialized sample set                                                             |
 | Reference set    | Sample set used as a baseline                               | Specialized sample set                                                             |
@@ -51,8 +51,8 @@ Short version:
 | Data import          | How data entered Goodomics                                  |
 | Run                  | Analytical or computational result represented in Goodomics |
 | Processed sample     | That sample in that run                                     |
-| Data profile         | What kind of data was produced                              |
-| Observation          | A value/call/measurement inside that profile                |
+| Data contract         | What kind of data was produced                              |
+| Observation          | A value/call/measurement inside that contract                |
 | Cohort/reference set | Selected processed samples                                  |
 
 ## SQL Control Store
@@ -147,7 +147,7 @@ For sample-first sources such as cBioPortal, Goodomics creates one
 `data_imports` row plus one imported-result run per biological sample. It does
 not create an extra import-context run. Analytical facts reference the
 per-sample run IDs; source files link back to the `data_imports` row and the
-relevant data profiles.
+relevant data contracts.
 
 | Column             | Notes                                                                       |
 | ------------------ | --------------------------------------------------------------------------- |
@@ -189,58 +189,58 @@ than stored as a denormalized cache.
 | `status`        | Processed-sample status                                          |
 | `metadata_json` | Flexible per-run sample metadata                                 |
 
-### `data_profiles`
+### `data_contracts`
 
-Stable semantic query contracts. A data profile declares what kind of data a
+Stable semantic query contracts. A data contract declares what kind of data a
 parser, SDK workflow, or user-defined source writes, how it should be queried,
-and how agents should understand it. Built-in profile IDs are stable across
+and how agents should understand it. Built-in contract IDs are stable across
 projects, runs, samples, and source datasets, so MCP tools and agents can ask
 for `cbioportal:mutations:maf` or `salmon:metrics` without learning a
 specific import run ID.
 
-A data profile is not a dataset instance and is not sample membership. Data
+A data contract is not a dataset instance and is not sample membership. Data
 imports, runs, files, file links, `data_sources`, fact-table `run_id` columns,
 payload metadata, and source metadata carry provenance such as cBioPortal study
 IDs, source filenames, generated import IDs, source `stable_id` values, and
 platform descriptions.
 
-A data profile is also not the same thing as a field definition. A profile might
+A data contract is also not the same thing as a field definition. A contract might
 be `fastqc:raw:metrics`; the fields inside it might be
 `general_stats.fastqc_raw_percent_duplicates` and
-`general_stats.fastqc_raw_total_sequences`. Keep profile-level query behavior,
-source fingerprints, summaries, and agent descriptions on `data_profiles`, and
+`general_stats.fastqc_raw_total_sequences`. Keep contract-level query behavior,
+source fingerprints, summaries, and agent descriptions on `data_contracts`, and
 keep per-field labels, units, directions, query refs, and compact summaries in
-`data_profile_fields`.
+`data_contract_fields`.
 
 | Column                  | Notes                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `id`                    | Integer primary key                                                                                           |
-| `data_profile_id`       | Stable readable profile ID, unique/indexed                                                                    |
-| `project_id`            | Nullable integer owner for user/project-defined profiles; built-ins are global                                |
-| `name`                  | Human-readable profile name                                                                                   |
+| `data_contract_id`       | Stable readable contract ID, unique/indexed                                                                    |
+| `project_id`            | Nullable integer owner for user/project-defined contracts; built-ins are global                                |
+| `name`                  | Human-readable contract name                                                                                   |
 | `data_type`             | Example: `generic_metrics`, `feature_matrix`, `feature_calls`, `small_variants`, `copy_number_segments`       |
 | `assay`                 | Nullable assay label                                                                                          |
 | `producer_tool`         | Tool that produced this logical dataset                                                                       |
 | `producer_tool_version` | Tool version                                                                                                  |
-| `producer_pipeline`     | Pipeline/workflow that produced this profile                                                                  |
+| `producer_pipeline`     | Pipeline/workflow that produced this contract                                                                  |
 | `genome_build`          | Nullable genome/reference build                                                                               |
 | `feature_type`          | Example: `metric`, `gene`, `transcript`, `protein`, `antibody`, `variant`, `interval`, `pathway`, `signature` |
 | `value_type`            | Example: `numeric`, `categorical`, `call`, `matrix`                                                           |
 | `unit`                  | Nullable default unit                                                                                         |
 | `entity_grain`          | Default entity grain, such as `run_sample`, `sample`, `subject`, `feature`, or `run`                          |
-| `value_semantics`       | Profile-level meaning, such as `tpm`, `count`, `log2_cna`, `beta`, `score`, or `zscore`                       |
-| `primary_table`         | Default analytical table for profile-first queries                                                            |
-| `physical_tables_json`  | Physical tables/views used by the profile                                                                     |
-| `summary_json`          | Compact profile-level summary                                                                                 |
-| `last_profiled_at`      | Last time field/profile summaries were computed                                                               |
+| `value_semantics`       | Contract-level meaning, such as `tpm`, `count`, `log2_cna`, `beta`, `score`, or `zscore`                       |
+| `primary_table`         | Default analytical table for contract-first queries                                                            |
+| `physical_tables_json`  | Physical tables/views used by the contract                                                                     |
+| `summary_json`          | Compact contract-level summary                                                                                 |
+| `last_profiled_at`      | Last time field/contract summaries were computed                                                               |
 | `source_fingerprint`    | Fingerprint for invalidating derived summaries/cache rows                                                     |
 | `query_modes_json`      | Supported query modes, such as sample, metric, gene, region                                                   |
 | `mcp_description`       | Agent-readable description                                                                                    |
-| `metadata_json`         | Flexible profile metadata                                                                                     |
+| `metadata_json`         | Flexible contract metadata                                                                                     |
 
 Examples:
 
-| Data profile                      | Data type              | Producer   |
+| Data contract                      | Data type              | Producer   |
 | --------------------------------- | ---------------------- | ---------- |
 | `salmon:metrics`                  | `generic_metrics`      | Salmon     |
 | `fastqc:raw:metrics`              | `generic_metrics`      | FastQC     |
@@ -284,7 +284,7 @@ nullable ownership columns.
 | `run_id`          | Nullable linked run integer ID                                     |
 | `run_sample_id`   | Nullable linked processed sample integer ID                        |
 | `sample_id`       | Nullable linked raw sample integer ID                              |
-| `data_profile_id` | Nullable linked data profile integer ID                            |
+| `data_contract_id` | Nullable linked data contract integer ID                            |
 | `link_role`       | Relationship role, such as `source`, `index`, `derived`, `preview` |
 
 ### `sample_sets`
@@ -317,7 +317,7 @@ should generally be `run_sample_id` based.
 ### Other SQL Control Tables
 
 These stay in the control store and should point to projects, runs, processed
-samples, data profiles, sample sets, and files where relevant.
+samples, data contracts, sample sets, and files where relevant.
 
 | Table                  | Purpose                               |
 | ---------------------- | ------------------------------------- |
@@ -335,14 +335,14 @@ samples, data profiles, sample sets, and files where relevant.
 ## DuckDB Analytical Store
 
 These tables are larger and query-oriented. Any analytical table that stores
-actual values, calls, measurements, or profile-specific rows should include the
-integer `data_profile_id`.
+actual values, calls, measurements, or contract-specific rows should include the
+integer `data_contract_id`.
 
 Each project should have its own DuckDB analytical store by default, so large
 analytics tables do not need to repeat `project_id` on every row. Store project
 identity once in DuckDB metadata and keep `project_id` in the SQL control store.
 
-Dimension tables do not always need profile identity.
+Dimension tables do not always need contract identity.
 
 The analytical store is modular by design. Do not force every ingested result
 into one universal table. Use a small catalog of reusable biological data
@@ -352,7 +352,7 @@ shapes, and add derived layouts only for hot query paths.
 | ---------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Scalar metrics         | QC and pipeline scalar values                                    | MultiQC metrics, Picard summary metrics, custom TSV metrics                  |
 | Entity attributes      | Queryable metadata and clinical/context fields                   | Sample attributes, subject attributes, run batch, disease, tissue            |
-| Profile availability   | Records what was profiled, even when no observation exists       | RNA-seq available, WGS profiled, gene panel coverage                         |
+| Contract availability   | Records what was profiled, even when no observation exists       | RNA-seq available, WGS profiled, gene panel coverage                         |
 | Numeric feature values | Sample x feature quantitative matrices                           | TPM, counts, methylation beta values, protein abundance, pathway scores      |
 | Feature calls          | Sample x feature categorical, binary, ordinal, or discrete calls | CNA AMP/HOMDEL, cluster labels, alteration present/absent                    |
 | Small variants         | Exact variant identities and sample calls                        | SNVs, indels, MAF/VCF-derived calls                                          |
@@ -363,8 +363,8 @@ shapes, and add derived layouts only for hot query paths.
 | Logical payloads       | Queryable escape hatch for object-like outputs                   | Parsed tables, arrays, JSON payloads, logs, report sections                  |
 | Derived query layouts  | Duplicate or reshape canonical data for hot access patterns      | By-metric metrics, by-feature matrices, by-region variants, alteration state |
 
-Data profiles sit above these physical choices. A data profile names the logical
-dataset and its provenance, while the profile's `data_type` determines whether
+Data contracts sit above these physical choices. A data contract names the logical
+dataset and its provenance, while the contract's `data_type` determines whether
 Goodomics stores it as scalar metrics, feature values, feature calls, variants,
 intervals, segments, structural variants, logical payloads, and/or derived query
 layouts.
@@ -384,13 +384,13 @@ Examples:
 
 | Fact column       | References readable label                                                 |
 | ----------------- | ------------------------------------------------------------------------- |
-| `data_profile_id` | `data_profiles.data_profile_id` or `dim_data_profiles.data_profile_label` |
+| `data_contract_id` | `data_contracts.data_contract_id` or `dim_data_contracts.data_contract_label` |
 | `run_id`          | `runs.run_id` or `dim_runs.run_key`                                       |
 | `run_sample_id`   | `run_samples.run_sample_id` or `dim_run_samples.run_sample_label`         |
 | `sample_id`       | `samples.sample_id` or `dim_samples.sample_label`                         |
 | `subject_id`      | `subjects.subject_id` or `dim_subjects.subject_label`                     |
 | `feature_id`      | `features.feature_label` or `dim_features.feature_label`                  |
-| `field_id`        | `data_profile_fields.field_id` or `dim_fields.field_label`                |
+| `field_id`        | `data_contract_fields.field_id` or `dim_fields.field_label`                |
 | `variant_id`      | `variants.variant_label` or `dim_variants.variant_label`                  |
 
 DuckDB analytical fact tables should rely primarily on physical ordering and
@@ -403,32 +403,32 @@ General rule:
 
 | Query family                   | Preferred layout                                              |
 | ------------------------------ | ------------------------------------------------------------- |
-| Sample/run detail              | `data_profile_id, run_id, run_sample_id, ...`                 |
-| Feature/gene across a cohort   | `data_profile_id, feature_id, run_sample_id`                  |
-| Metric scans/distributions     | `data_profile_id, field_id, value_numeric, run_sample_id`     |
+| Sample/run detail              | `data_contract_id, run_id, run_sample_id, ...`                 |
+| Feature/gene across a cohort   | `data_contract_id, feature_id, run_sample_id`                  |
+| Metric scans/distributions     | `data_contract_id, field_id, value_numeric, run_sample_id`     |
 | Attribute facets/filters       | `entity_scope, field_id, value_*, entity_id`                  |
 | Genomic range queries          | `genome_build, contig, start_pos, end_pos`                    |
-| Alteration frequency/OncoPrint | `feature_id, alteration_type, data_profile_id, run_sample_id` |
+| Alteration frequency/OncoPrint | `feature_id, alteration_type, data_contract_id, run_sample_id` |
 
 Do not maintain many duplicate layouts speculatively. Add a derived layout when
 it serves a named UI, SDK, MCP, report, or notebook access path.
 
-### `data_profile_fields`
+### `data_contract_fields`
 
 SQL-side field catalog for queryable metrics, clinical attributes, metadata
-facets, and other user-facing fields inside a data profile.
+facets, and other user-facing fields inside a data contract.
 
-`data_profiles` describe a logical dataset. `data_profile_fields` describe the
+`data_contracts` describe a logical dataset. `data_contract_fields` describe the
 queryable columns or measures inside that dataset. For example,
-`fastqc:raw:metrics` is a data profile; `percent_duplicates` and
+`fastqc:raw:metrics` is a data contract; `percent_duplicates` and
 `general_stats.fastqc_raw_percent_gc` are fields.
 
 | Column            | Notes                                                                     |
 | ----------------- | ------------------------------------------------------------------------- |
-| `data_profile_id` | SQL FK to the owning profile                                              |
+| `data_contract_id` | SQL FK to the owning contract                                              |
 | `field_id`        | Stable readable/source field key                                          |
 | `field_role`      | Example: `metric`, `attribute`, `dimension`, `measure`                    |
-| `entity_scope`    | Example: `subject`, `sample`, `run`, `run_sample`, `file`, `data_profile` |
+| `entity_scope`    | Example: `subject`, `sample`, `run`, `run_sample`, `file`, `data_contract` |
 | `display_name`    | Human-readable label                                                      |
 | `value_type`      | Example: `numeric`, `string`, `boolean`, `date`, `json`                   |
 | `unit`            | Nullable unit                                                             |
@@ -448,8 +448,8 @@ Unified EAV-style table for faceted metadata and clinical/context values:
 | ----------------- | -------------------------------------------------------------- |
 | `entity_scope`    | Entity type the value belongs to                               |
 | `entity_id`       | Internal or stable entity key                                  |
-| `field_id`        | Data profile field integer ID                                  |
-| `data_profile_id` | Nullable source profile integer ID, when imported as a profile |
+| `field_id`        | Data contract field integer ID                                  |
+| `data_contract_id` | Nullable source contract integer ID, when imported as a contract |
 | `source_file_id`  | Nullable source file integer ID                                |
 | `value_type`      | `numeric`, `string`, `boolean`, `date`, or `json`              |
 | `value_numeric`   | Numeric value when `value_type = numeric`                      |
@@ -471,11 +471,11 @@ Unified table for generic sample/run metrics: `sample_metrics`.
 
 | Column            | Notes                                             |
 | ----------------- | ------------------------------------------------- |
-| `data_profile_id` | Logical profile integer ID this metric belongs to |
+| `data_contract_id` | Logical contract integer ID this metric belongs to |
 | `run_id`          | Producing/importing run integer ID                |
 | `run_sample_id`   | Nullable processed sample integer ID              |
 | `sample_id`       | Nullable sample integer ID shortcut for filtering |
-| `field_id`        | Data profile field integer ID                     |
+| `field_id`        | Data contract field integer ID                     |
 | `source_file_id`  | Nullable source file integer ID                   |
 | `value_type`      | `numeric`, `string`, or `json`                    |
 | `value_numeric`   | Numeric value when `value_type = numeric`         |
@@ -486,10 +486,10 @@ Recommended physical layouts:
 
 | Table/layout                      | Physical order                                      | Optimized for                                            |
 | --------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| `sample_metrics`                  | `data_profile_id, run_id, run_sample_id, field_id`  | Canonical table and fast run/sample detail queries       |
-| `sample_metric_numeric_by_metric` | `data_profile_id, field_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
+| `sample_metrics`                  | `data_contract_id, run_id, run_sample_id, field_id`  | Canonical table and fast run/sample detail queries       |
+| `sample_metric_numeric_by_metric` | `data_contract_id, field_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
 
-Keep direct table/SQL access available as an advanced mode, but use profiles and
+Keep direct table/SQL access available as an advanced mode, but use contracts and
 fields as the default report, insight, dashboard, and MCP query surface.
 
 ### `features`
@@ -546,25 +546,25 @@ metric groups, interval sets, and reference feature universes.
 | `member_role`    | Optional role                 |
 | `metadata_json`  | Flexible member metadata      |
 
-### Observed Profile Availability
+### Observed Contract Availability
 
-Goodomics does not maintain a separate sample/profile availability fact table.
+Goodomics does not maintain a separate sample/contract availability fact table.
 Observed availability is derived from the typed fact tables and
-`profile_payloads`: if a run sample has rows for a `data_profile_id`, that
-profile is observed for that run sample. If a source needs to preserve
+`contract_payloads`: if a run sample has rows for a `data_contract_id`, that
+contract is observed for that run sample. If a source needs to preserve
 "profiled but no emitted rows" semantics later, add an explicit source-specific
 fact or coverage table for that use case rather than duplicating every
-sample/profile relationship by default.
+sample/contract relationship by default.
 
 ### `feature_value_numeric`
 
-For expression matrices and any similar sample x feature quantitative profile:
+For expression matrices and any similar sample x feature quantitative contract:
 TPM, counts, methylation beta values, protein abundance, pathway scores,
 signature scores, log2 copy-number values, and quantitative assay outputs.
 
 | Column            | Notes                                                                       |
 | ----------------- | --------------------------------------------------------------------------- |
-| `data_profile_id` | Logical feature-value profile integer ID                                    |
+| `data_contract_id` | Logical feature-value contract integer ID                                    |
 | `run_id`          | Producing/importing run integer ID                                          |
 | `run_sample_id`   | Processed sample integer ID                                                 |
 | `sample_id`       | Sample integer ID shortcut for filtering                                    |
@@ -577,9 +577,9 @@ Recommended derived layouts:
 
 | Layout    | Physical order                                      | Optimized for                                              |
 | --------- | --------------------------------------------------- | ---------------------------------------------------------- |
-| Canonical | `data_profile_id, feature_id, run_sample_id`        | Gene/feature across samples, cohort matrices, correlations |
-| By sample | `data_profile_id, run_sample_id, feature_id`        | Sample detail pages and sample profile exports             |
-| By value  | `data_profile_id, feature_id, value, run_sample_id` | Threshold filters and top/bottom values                    |
+| Canonical | `data_contract_id, feature_id, run_sample_id`        | Gene/feature across samples, cohort matrices, correlations |
+| By sample | `data_contract_id, run_sample_id, feature_id`        | Sample detail pages and sample contract exports             |
+| By value  | `data_contract_id, feature_id, value, run_sample_id` | Threshold filters and top/bottom values                    |
 
 Expression-specific measurements should use `feature_value_numeric` with an
 appropriate `value_semantics` value.
@@ -591,7 +591,7 @@ discrete instead of continuous numeric values.
 
 | Column            | Notes                                                                          |
 | ----------------- | ------------------------------------------------------------------------------ |
-| `data_profile_id` | Logical call profile integer ID                                                |
+| `data_contract_id` | Logical call contract integer ID                                                |
 | `run_id`          | Producing/importing run integer ID                                             |
 | `run_sample_id`   | Processed sample integer ID                                                    |
 | `sample_id`       | Sample integer ID shortcut for filtering                                       |
@@ -608,8 +608,8 @@ Recommended physical layouts:
 
 | Layout    | Physical order                                          | Optimized for                             |
 | --------- | ------------------------------------------------------- | ----------------------------------------- |
-| Canonical | `data_profile_id, feature_id, call_code, run_sample_id` | Counts by feature/call and cohort filters |
-| By sample | `data_profile_id, run_sample_id, feature_id`            | Sample detail pages and OncoPrint exports |
+| Canonical | `data_contract_id, feature_id, call_code, run_sample_id` | Counts by feature/call and cohort filters |
+| By sample | `data_contract_id, run_sample_id, feature_id`            | Sample detail pages and OncoPrint exports |
 
 ### `genomic_intervals`
 
@@ -637,7 +637,7 @@ Per-sample measurements over genomic intervals.
 
 | Column            | Notes                                                                  |
 | ----------------- | ---------------------------------------------------------------------- |
-| `data_profile_id` | Logical interval-value profile integer ID                              |
+| `data_contract_id` | Logical interval-value contract integer ID                              |
 | `run_id`          | Producing/importing run integer ID                                     |
 | `run_sample_id`   | Processed sample integer ID                                            |
 | `sample_id`       | Sample integer ID shortcut for filtering                               |
@@ -655,7 +655,7 @@ Segmented copy-number data. Keep this separate from gene-level CNA calls.
 
 | Column              | Notes                                    |
 | ------------------- | ---------------------------------------- |
-| `data_profile_id`   | Logical segment profile integer ID       |
+| `data_contract_id`   | Logical segment contract integer ID       |
 | `run_id`            | Producing/importing run integer ID       |
 | `run_sample_id`     | Processed sample integer ID              |
 | `sample_id`         | Sample integer ID shortcut for filtering |
@@ -674,8 +674,8 @@ Recommended physical layouts:
 
 | Layout    | Physical order                                                             | Optimized for                        |
 | --------- | -------------------------------------------------------------------------- | ------------------------------------ |
-| Canonical | `data_profile_id, run_sample_id, contig, start_pos`                        | Sample segment plots                 |
-| By region | `genome_build, contig, start_pos, end_pos, data_profile_id, run_sample_id` | Region/locus queries and IGV context |
+| Canonical | `data_contract_id, run_sample_id, contig, start_pos`                        | Sample segment plots                 |
+| By region | `genome_build, contig, start_pos, end_pos, data_contract_id, run_sample_id` | Region/locus queries and IGV context |
 
 ### `variants`
 
@@ -699,11 +699,11 @@ Recommended physical order: `genome_build, contig, pos, end_pos, variant_id`.
 
 ### `variant_annotations`
 
-Variant annotations. Some annotations may be profile-specific.
+Variant annotations. Some annotations may be contract-specific.
 
 | Column                 | Notes                                   |
 | ---------------------- | --------------------------------------- |
-| `data_profile_id`      | Annotation profile/source integer ID    |
+| `data_contract_id`      | Annotation contract/source integer ID    |
 | `variant_id`           | Variant integer ID                      |
 | `feature_id`           | Nullable linked gene/feature integer ID |
 | `consequence`          | Nullable consequence                    |
@@ -719,7 +719,7 @@ protein changes, exon/intron context, or canonical-transcript status matter.
 
 | Column                  | Notes                                |
 | ----------------------- | ------------------------------------ |
-| `data_profile_id`       | Annotation profile/source integer ID |
+| `data_contract_id`       | Annotation contract/source integer ID |
 | `variant_id`            | Variant integer ID                   |
 | `transcript_feature_id` | Transcript feature integer ID        |
 | `gene_feature_id`       | Nullable gene feature integer ID     |
@@ -738,7 +738,7 @@ Sample-level variant calls.
 
 | Column             | Notes                                    |
 | ------------------ | ---------------------------------------- |
-| `data_profile_id`  | Logical variant-call profile integer ID  |
+| `data_contract_id`  | Logical variant-call contract integer ID  |
 | `run_id`           | Producing/importing run integer ID       |
 | `run_sample_id`    | Processed sample integer ID              |
 | `sample_id`        | Sample integer ID shortcut for filtering |
@@ -757,10 +757,10 @@ Recommended derived layouts:
 
 | Layout      | Physical order                                           | Optimized for                               |
 | ----------- | -------------------------------------------------------- | ------------------------------------------- |
-| Canonical   | `data_profile_id, run_sample_id, variant_id`             | Fetch all calls for one processed sample    |
-| By variant  | `data_profile_id, variant_id, run_sample_id`             | Exact variant recurrence and carrier lookup |
+| Canonical   | `data_contract_id, run_sample_id, variant_id`             | Fetch all calls for one processed sample    |
+| By variant  | `data_contract_id, variant_id, run_sample_id`             | Exact variant recurrence and carrier lookup |
 | By position | `genome_build, contig, pos, end_pos, variant_id`         | Genomic range queries                       |
-| By gene     | `feature_id, data_profile_id, run_sample_id, variant_id` | Gene-centric variant queries                |
+| By gene     | `feature_id, data_contract_id, run_sample_id, variant_id` | Gene-centric variant queries                |
 
 ### `structural_variant_events`
 
@@ -788,7 +788,7 @@ Sample-level calls for structural variant events.
 
 | Column                  | Notes                                     |
 | ----------------------- | ----------------------------------------- |
-| `data_profile_id`       | Logical SV profile integer ID             |
+| `data_contract_id`       | Logical SV contract integer ID             |
 | `run_id`                | Producing/importing run integer ID        |
 | `run_sample_id`         | Processed sample integer ID               |
 | `sample_id`             | Sample integer ID shortcut for filtering  |
@@ -826,7 +826,7 @@ or longitudinal data.
 
 Recommended physical order: `subject_id, event_type, start_time`.
 
-### `profile_payloads`
+### `contract_payloads`
 
 Logical payloads for results that are naturally consumed as one object or are
 not yet worth promoting into typed facts.
@@ -834,7 +834,7 @@ not yet worth promoting into typed facts.
 | Column            | Notes                                                                |
 | ----------------- | -------------------------------------------------------------------- |
 | `payload_id`      | Payload integer ID                                                   |
-| `data_profile_id` | Logical profile integer ID this payload belongs to                   |
+| `data_contract_id` | Logical contract integer ID this payload belongs to                   |
 | `run_id`          | Producing/importing run integer ID                                   |
 | `run_sample_id`   | Nullable processed sample integer ID                                 |
 | `payload_name`    | Stable payload name                                                  |
@@ -863,7 +863,7 @@ expression outliers, methylation calls, protein calls, and other typed sources.
 | `sample_id`          | Sample integer ID shortcut                                                                    |
 | `subject_id`         | Nullable subject integer ID shortcut                                                          |
 | `feature_id`         | Usually a gene feature integer ID                                                             |
-| `data_profile_id`    | Source profile integer ID                                                                     |
+| `data_contract_id`    | Source contract integer ID                                                                     |
 | `alteration_type`    | Example: `mutation`, `cna`, `sv`, `expression_outlier`, `methylation`, `protein`, `signature` |
 | `alteration_subtype` | More specific type or call                                                                    |
 | `is_altered`         | Boolean alteration state                                                                      |
@@ -877,19 +877,19 @@ Recommended physical layouts:
 
 | Layout    | Physical order                                                | Optimized for                                     |
 | --------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| Canonical | `feature_id, alteration_type, data_profile_id, run_sample_id` | Alteration frequency, filters, OncoPrint matrices |
+| Canonical | `feature_id, alteration_type, data_contract_id, run_sample_id` | Alteration frequency, filters, OncoPrint matrices |
 | By sample | `run_sample_id, feature_id, alteration_type`                  | Sample detail and sample-centric exports          |
 
 ### Cohort Summary Tables
 
 Precomputed reference-set and cohort statistics. Treat these as derived/cache
-data keyed by the sample set, profile, field or feature, and source fingerprint.
+data keyed by the sample set, contract, field or feature, and source fingerprint.
 
 | Column            | Notes                                  |
 | ----------------- | -------------------------------------- |
 | `sample_set_id`   | Cohort/reference set integer ID        |
-| `data_profile_id` | Profile integer ID summarized          |
-| `field_id`        | Nullable profile field integer ID summarized |
+| `data_contract_id` | Contract integer ID summarized          |
+| `field_id`        | Nullable contract field integer ID summarized |
 | `feature_id`      | Nullable feature integer ID summarized |
 | `n`               | Observation count                      |
 | `mean`            | Mean                                   |
@@ -902,30 +902,30 @@ data keyed by the sample set, profile, field or feature, and source fingerprint.
 | `q75`             | 75th percentile                        |
 | `q95`             | 95th percentile                        |
 
-## Data Profile Rule
+## Data Contract Rule
 
-Every analytical fact table should include integer `data_profile_id` when the
-row stores an actual value, call, measurement, or profile-specific record. Keep
-the readable profile label in SQL control storage or DuckDB dimensions, and
+Every analytical fact table should include integer `data_contract_id` when the
+row stores an actual value, call, measurement, or contract-specific record. Keep
+the readable contract label in SQL control storage or DuckDB dimensions, and
 resolve user-provided labels to integer IDs before writing fact rows.
 
 Examples:
 
-| Table                             | Should include profile identity? | Why                                                        |
+| Table                             | Should include contract identity? | Why                                                        |
 | --------------------------------- | -------------------------------- | ---------------------------------------------------------- |
-| `sample_metrics`                  | Yes                              | Metric value belongs to a logical metric profile           |
-| `feature_value_numeric`           | Yes                              | Numeric feature value belongs to one feature-value profile |
-| `feature_call`                    | Yes                              | Feature call belongs to one call profile                   |
-| `sample_variant_calls`            | Yes                              | Call belongs to one variant-call profile                   |
-| `copy_number_segments`            | Yes                              | Segment belongs to one segment profile                     |
-| `sample_structural_variant_calls` | Yes                              | SV call belongs to one SV profile                          |
-| `profile_payloads`                | Yes                              | Payload belongs to one logical profile                     |
-| `variant_annotations`             | Usually yes                      | Annotation meaning/source can vary by profile              |
+| `sample_metrics`                  | Yes                              | Metric value belongs to a logical metric contract           |
+| `feature_value_numeric`           | Yes                              | Numeric feature value belongs to one feature-value contract |
+| `feature_call`                    | Yes                              | Feature call belongs to one call contract                   |
+| `sample_variant_calls`            | Yes                              | Call belongs to one variant-call contract                   |
+| `copy_number_segments`            | Yes                              | Segment belongs to one segment contract                     |
+| `sample_structural_variant_calls` | Yes                              | SV call belongs to one SV contract                          |
+| `contract_payloads`                | Yes                              | Payload belongs to one logical contract                     |
+| `variant_annotations`             | Usually yes                      | Annotation meaning/source can vary by contract              |
 | `variants`                        | No                               | Canonical variant identity is shared                       |
 | `features`                        | No                               | Shared feature dictionary                                  |
 | `genomic_intervals`               | No                               | Canonical interval identity can be shared                  |
 | `samples`                         | No                               | Control-store entity, not an analytical fact               |
-| `files`                           | No                               | File entity; use `file_links` to connect to profiles       |
+| `files`                           | No                               | File entity; use `file_links` to connect to contracts       |
 
 ## Worked Example
 
@@ -987,20 +987,20 @@ display and user input, but table relationships use the integer `id` columns.
 | `7` | `run_rnaseq_batch_042_rerun:P001_Tumor_RNA` | `3`    | `3`       |
 | `8` | `run_rnaseq_batch_042_rerun:P002_Tumor_RNA` | `3`    | `6`       |
 
-### Data Profiles
+### Data Contracts
 
-| id  | data_profile_id                   | data_type              | producer_tool | Notes                                          |
+| id  | data_contract_id                   | data_type              | producer_tool | Notes                                          |
 | --- | --------------------------------- | ---------------------- | ------------- | ---------------------------------------------- |
 | `1` | `salmon:metrics`                  | `generic_metrics`      | Salmon        | Tool-owned metric contract reused across runs  |
 | `2` | `cbioportal:mutations:maf`        | `small_variants`       | cBioPortal    | Built-in cBioPortal mutation contract          |
 | `3` | `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal    | Built-in segment-level CNA contract            |
 | `4` | `goodomics:sdk_metrics`           | `generic_metrics`      | goodomics-sdk | Native SDK metric contract                     |
 | `5` | `fastqc:raw:metrics`              | `generic_metrics`      | FastQC        | Tool-owned raw-read QC metric contract         |
-| `6` | `project_rnaseq:salmon_gene_tpm`  | `feature_matrix`       | Salmon        | Example project-defined profile                |
+| `6` | `project_rnaseq:salmon_gene_tpm`  | `feature_matrix`       | Salmon        | Example project-defined contract                |
 
 ### Files
 
-| id  | file_id                   | file_role          | linked data_profile_id |
+| id  | file_id                   | file_role          | linked data_contract_id |
 | --- | ------------------------- | ------------------ | ---------------------- |
 | `1` | `P001_T.bam`              | `bam`              | null                   |
 | `2` | `P001_T.bam.bai`          | `bai`              | null                   |
@@ -1012,34 +1012,34 @@ display and user input, but table relationships use the integer `id` columns.
 
 ### Example Metric Observations
 
-| data_profile_id | run_id | run_sample_id | sample_id | field_id | value_numeric |
+| data_contract_id | run_id | run_sample_id | sample_id | field_id | value_numeric |
 | --------------- | ------ | ------------- | --------- | --------- | ------ |
 | `1`             | `2`    | `5`           | `3`       | `1`       | `91.2` |
 | `1`             | `3`    | `7`           | `3`       | `1`       | `93.8` |
 
 ### Example Numeric Feature Observations
 
-| data_profile_id | run_id | run_sample_id | sample_id | feature_id | value  |
+| data_contract_id | run_id | run_sample_id | sample_id | feature_id | value  |
 | --------------- | ------ | ------------- | --------- | ---------- | ------ |
 | `5`             | `2`    | `5`           | `3`       | `1`        | `12.4` |
 | `5`             | `3`    | `7`           | `3`       | `1`        | `13.1` |
 
-### Example Profile Availability
+### Example Contract Availability
 
-| data_profile_id | run_sample_id | availability_status | feature_set_id |
+| data_contract_id | run_sample_id | availability_status | feature_set_id |
 | --------------- | ------------- | ------------------- | -------------- |
 | `2`             | `1`           | `profiled`          | `1`            |
 | `5`             | `5`           | `profiled`          | `2`            |
 
 ### Example Variant Call
 
-| data_profile_id | run_id | run_sample_id | sample_id | variant_id | feature_id | genotype | depth | allele_fraction |
+| data_contract_id | run_id | run_sample_id | sample_id | variant_id | feature_id | genotype | depth | allele_fraction |
 | --------------- | ------ | ------------- | --------- | ---------- | ---------- | -------- | ----- | --------------- |
 | `2`             | `1`    | `1`           | `1`       | `1`        | `1`        | `0/1`    | `118` | `0.37`          |
 
 ### Example Alteration State
 
-| run_sample_id | feature_id | alteration_type | alteration_subtype | is_altered | data_profile_id |
+| run_sample_id | feature_id | alteration_type | alteration_subtype | is_altered | data_contract_id |
 | ------------- | ---------- | --------------- | ------------------ | ---------- | --------------- |
 | `1`           | `1`        | `mutation`      | `missense`         | `true`     | `2`             |
 
@@ -1065,6 +1065,6 @@ processed by RNA-seq 3.19.
 Given this model, an MCP layer can accurately say:
 
 > This project has WES variants from Mutect2, WES alignment files from BWA,
-> RNA-seq QC metrics from Salmon and FastQC parsed via MultiQC, and gene TPM profiles from Salmon. Sample
+> RNA-seq QC metrics from Salmon and FastQC parsed via MultiQC, and gene TPM contracts from Salmon. Sample
 > `P001_Tumor_RNA` has two RNA-seq processed results: one from nf-core/rnaseq
 > 3.18 and one from 3.19.

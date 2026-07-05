@@ -63,11 +63,11 @@ LINKERS: dict[str, JsonObject] = {
 }
 
 MODES: dict[str, JsonObject] = {
-    "profile_metrics": {
-        "id": "profile_metrics",
+    "contract_metrics": {
+        "id": "contract_metrics",
         "label": "Cohort analysis",
         "icon": "BarChart3",
-        "description": "Cohort-level metric panels from one or more profile fields.",
+        "description": "Cohort-level metric panels from one or more contract fields.",
         "default_visualization": "bar",
         "supports_add_all_numeric": True,
     },
@@ -329,7 +329,7 @@ def chart_rule(chart_id: str) -> JsonObject:
 def explain_insight_config(config: Mapping[str, Any]) -> str:
     """Build a compact explanation of a normalized insight config."""
 
-    mode = str(config.get("mode") or "profile_metrics")
+    mode = str(config.get("mode") or "contract_metrics")
     chart = str(config.get("visualization") or "table")
     raw_context = config.get("context")
     context: Mapping[str, Any] = raw_context if isinstance(raw_context, Mapping) else {}
@@ -345,7 +345,7 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
     if context.get("sample_id"):
         context_label += f" {context['sample_id']}"
     return (
-        f"{MODES.get(mode, MODES['profile_metrics'])['label']} insight using "
+        f"{MODES.get(mode, MODES['contract_metrics'])['label']} insight using "
         f"{CHARTS.get(chart, CHARTS['table'])['label']} over {context_label}; "
         f"series: {', '.join(series_labels) or 'table rows'}; "
         f"matched by {linker['kind']}; data size policy {policy['mode']}."

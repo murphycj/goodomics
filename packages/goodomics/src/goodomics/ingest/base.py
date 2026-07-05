@@ -8,9 +8,9 @@ from typing import Any, Protocol
 
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    DataContract,
+    DataContractField,
     DataImport,
-    DataProfile,
-    DataProfileField,
     FileAsset,
     FileLink,
     Run,
@@ -65,8 +65,8 @@ class NormalizedIngestResult:
     subjects: list[Subject] = field(default_factory=list)
     samples: list[Sample] = field(default_factory=list)
     run_samples: list[RunSample] = field(default_factory=list)
-    data_profiles: list[DataProfile] = field(default_factory=list)
-    data_profile_fields: list[DataProfileField] = field(default_factory=list)
+    data_contracts: list[DataContract] = field(default_factory=list)
+    data_contract_fields: list[DataContractField] = field(default_factory=list)
     files: list[FileAsset] = field(default_factory=list)
     file_links: list[FileLink] = field(default_factory=list)
     sample_sets: list[SampleSet] = field(default_factory=list)

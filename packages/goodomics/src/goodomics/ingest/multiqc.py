@@ -258,13 +258,13 @@ def _save_multiqc_parse_result(
             run,
             data_import=data_import,
             run_samples=run_samples,
-            data_profiles=[
-                data_profile.model_copy(
+            data_contracts=[
+                data_contract.model_copy(
                     update={"project_id": project_record.project_id}
                 )
-                for data_profile in parsed.profiles
+                for data_contract in parsed.contracts
             ],
-            data_profile_fields=parsed.profile_fields,
+            data_contract_fields=parsed.contract_fields,
             files=files,
             file_links=file_links,
         )

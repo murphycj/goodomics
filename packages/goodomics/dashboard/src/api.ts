@@ -97,7 +97,7 @@ const fileSchema = z.object({
 
 const analyticsMetricSchema = z.object({
   run_id: idSchema,
-  data_profile_id: idSchema,
+  data_contract_id: idSchema,
   run_sample_id: idSchema.nullable(),
   sample_id: idSchema.nullable(),
   field_id: idSchema,
@@ -108,7 +108,7 @@ const analyticsMetricSchema = z.object({
 
 const analyticsPayloadSchema = z.object({
   run_id: z.string(),
-  data_profile_id: z.string(),
+  data_contract_id: z.string(),
   run_sample_id: z.string().nullable(),
   payload_name: z.string(),
   payload_kind: z.string(),
@@ -157,7 +157,7 @@ const databaseTablePageSchema = z.object({
   sort_direction: z.enum(['asc', 'desc']).nullable(),
 });
 
-const dataProfileFieldSchema = z.object({
+const dataContractFieldSchema = z.object({
   field_id: z.string(),
   field_role: z.string(),
   entity_scope: z.string().nullable(),
@@ -172,8 +172,8 @@ const dataProfileFieldSchema = z.object({
   metadata_json: z.record(z.string(), z.unknown()).default({}),
 });
 
-const dataProfileSchema = z.object({
-  data_profile_id: z.string(),
+const dataContractSchema = z.object({
+  data_contract_id: z.string(),
   name: z.string(),
   data_type: z.string(),
   assay: z.string().nullable(),
@@ -187,7 +187,7 @@ const dataProfileSchema = z.object({
   query_modes: z.record(z.string(), z.unknown()).default({}),
   mcp_description: z.string().nullable(),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
-  fields: z.array(dataProfileFieldSchema).default([]),
+  fields: z.array(dataContractFieldSchema).default([]),
 });
 
 const insightSchema = z.object({
@@ -278,8 +278,8 @@ export type AnalyticsPayload = z.infer<typeof analyticsPayloadSchema>;
 export type DatabaseSummary = z.infer<typeof databaseSummarySchema>;
 export type DatabaseTable = z.infer<typeof databaseTableSchema>;
 export type DatabaseTablePage = z.infer<typeof databaseTablePageSchema>;
-export type DataProfile = z.infer<typeof dataProfileSchema>;
-export type DataProfileField = z.infer<typeof dataProfileFieldSchema>;
+export type DataContract = z.infer<typeof dataContractSchema>;
+export type DataContractField = z.infer<typeof dataContractFieldSchema>;
 export type SavedInsight = z.infer<typeof insightSchema>;
 export type SavedReport = z.infer<typeof reportSchema>;
 export type InsightResult = z.infer<typeof insightResultSchema>['result'];
@@ -485,9 +485,9 @@ export function listProjectDatabaseTables(projectId: string) {
   return getJson(`/api/v1/database/tables?${params.toString()}`, z.array(databaseTableSchema));
 }
 
-export function listProjectDataProfiles(projectId: string) {
+export function listProjectDataContracts(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
-  return getJson(`/api/v1/profiles?${params.toString()}`, z.array(dataProfileSchema));
+  return getJson(`/api/v1/contracts?${params.toString()}`, z.array(dataContractSchema));
 }
 
 export function getInsightCatalog() {
@@ -510,11 +510,11 @@ export function listSampleSets(projectId: string, kind?: string) {
   return getJson(`/api/v1/sample-sets?${params.toString()}`, z.array(sampleSetSchema));
 }
 
-export function getProjectDataProfile(projectId: string, dataProfileId: string) {
+export function getProjectDataContract(projectId: string, dataContractId: string) {
   const params = new URLSearchParams({ project_id: projectId });
   return getJson(
-    `/api/v1/profiles/${encodeURIComponent(dataProfileId)}?${params.toString()}`,
-    dataProfileSchema,
+    `/api/v1/contracts/${encodeURIComponent(dataContractId)}?${params.toString()}`,
+    dataContractSchema,
   );
 }
 

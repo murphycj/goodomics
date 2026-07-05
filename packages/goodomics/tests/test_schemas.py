@@ -4,9 +4,10 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
 from goodomics import run
-from goodomics.profiles.base import PROFILE_NAMESPACE_PREFIXES
-from goodomics.profiles.cbioportal import (
+from goodomics.contracts.base import CONTRACT_NAMESPACE_PREFIXES
+from goodomics.contracts.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
@@ -15,16 +16,22 @@ from goodomics.profiles.cbioportal import (
     CBIOPORTAL_MUTATIONS_MAF,
     CBIOPORTAL_STRUCTURAL_VARIANTS,
 )
-from goodomics.profiles.cbioportal import (
-    profile_for_meta as cbioportal_data_profile_for_meta,
+from goodomics.contracts.cbioportal import (
+    contract_for_meta as cbioportal_data_contract_for_meta,
 )
-from goodomics.profiles.registry import built_in_profiles
+from goodomics.contracts.registry import built_in_contracts
+from goodomics.contracts.specs import (
+    data_contract_fields_from_specs,
+    data_contracts_from_specs,
+    load_data_contract_spec_file,
+    load_package_data_contract_specs,
+)
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import DataImport, QCDecision, Run, Sample
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
-    DataProfileFieldRecord,
+    DataContractFieldRecord,
     RunRecord,
     SampleRecord,
     SQLModelGoodomicsStore,
@@ -58,8 +65,8 @@ def _field_pk(field_id: str) -> int:
         async with AsyncSession(catalog_store._get_engine()) as session:
             row = (
                 await session.exec(
-                    select(DataProfileFieldRecord).where(
-                        DataProfileFieldRecord.field_id == field_id
+                    select(DataContractFieldRecord).where(
+                        DataContractFieldRecord.field_id == field_id
                     )
                 )
             ).one()
@@ -168,16 +175,112 @@ def test_qc_decision_status_values() -> None:
     assert decision.reasons == ["low depth"]
 
 
-def test_builtin_data_profile_registry_has_stable_namespaces() -> None:
-    built_in_data_profiles = built_in_profiles()
-    assert len(built_in_data_profiles) == len(set(built_in_data_profiles))
+def test_builtin_data_contract_registry_has_stable_namespaces() -> None:
+    built_in_data_contracts = built_in_contracts()
+    assert len(built_in_data_contracts) == len(set(built_in_data_contracts))
     assert all(
-        profile_id.startswith(PROFILE_NAMESPACE_PREFIXES)
-        for profile_id in built_in_data_profiles
+        contract_id.startswith(CONTRACT_NAMESPACE_PREFIXES)
+        for contract_id in built_in_data_contracts
     )
 
 
-def test_cbioportal_profile_mapping_covers_fixture_formats() -> None:
+def test_package_data_contract_specs_load_from_resources() -> None:
+    spec_files = load_package_data_contract_specs()
+    contract_ids = {
+        contract.data_contract_id for contract in data_contracts_from_specs(spec_files)
+    }
+
+    assert "salmon:metrics" in contract_ids
+    assert "fastqc:raw:metrics" in contract_ids
+    assert "multiqc:payloads" in contract_ids
+    assert "cbioportal:mutations:maf" in contract_ids
+    assert "goodomics:sdk_metrics" in contract_ids
+
+
+def test_data_contract_specs_reject_duplicate_contract_ids() -> None:
+    first = load_data_contract_spec_file(
+        {
+            "contracts": [
+                {
+                    "data_contract_id": "demo:metrics",
+                    "name": "Demo metrics",
+                    "data_type": "generic_metrics",
+                }
+            ]
+        }
+    )
+    second = load_data_contract_spec_file(
+        {
+            "contracts": [
+                {
+                    "data_contract_id": "demo:metrics",
+                    "name": "Demo metrics again",
+                    "data_type": "generic_metrics",
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="Duplicate data_contract_id"):
+        data_contracts_from_specs([first, second])
+
+
+def test_data_contract_specs_reject_duplicate_field_identities() -> None:
+    spec = load_data_contract_spec_file(
+        {
+            "contracts": [
+                {
+                    "data_contract_id": "demo:metrics",
+                    "name": "Demo metrics",
+                    "data_type": "generic_metrics",
+                    "fields": [
+                        {"field_id": "demo.value", "display_name": "Demo value"},
+                        {"field_id": "demo.value", "display_name": "Duplicate"},
+                    ],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="Duplicate data contract field"):
+        data_contract_fields_from_specs([spec])
+
+
+def test_data_contract_specs_materialize_contract_and_field_models() -> None:
+    spec = load_data_contract_spec_file(
+        {
+            "contracts": [
+                {
+                    "data_contract_id": "demo:metrics",
+                    "name": "Demo metrics",
+                    "data_type": "generic_metrics",
+                    "primary_table": "sample_metrics",
+                    "physical_tables": ["sample_metrics"],
+                    "query_modes": ["sample", "metric"],
+                    "fields": [
+                        {
+                            "field_id": "demo.value",
+                            "display_name": "Demo value",
+                            "unit": "count",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    contract = data_contracts_from_specs([spec])[0]
+    field = data_contract_fields_from_specs([spec])[0]
+
+    assert contract.data_contract_id == "demo:metrics"
+    assert contract.physical_tables_json == {"tables": ["sample_metrics"]}
+    assert contract.query_modes_json == {"modes": ["sample", "metric"]}
+    assert field.data_contract_id == "demo:metrics"
+    assert field.field_id == "demo.value"
+    assert field.unit == "count"
+
+
+def test_cbioportal_contract_mapping_covers_fixture_formats() -> None:
     cases = [
         (
             {
@@ -225,9 +328,9 @@ def test_cbioportal_profile_mapping_covers_fixture_formats() -> None:
         ),
     ]
 
-    for values, expected_profile_id in cases:
-        profile = cbioportal_data_profile_for_meta(
+    for values, expected_contract_id in cases:
+        contract = cbioportal_data_contract_for_meta(
             values,
             source_meta_file="meta_test.txt",
         )
-        assert profile.data_profile_id == expected_profile_id
+        assert contract.data_contract_id == expected_contract_id

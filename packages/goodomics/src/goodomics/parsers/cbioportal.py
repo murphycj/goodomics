@@ -10,19 +10,19 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from goodomics.contracts.cbioportal import (
+    contract_for_meta as cbioportal_data_contract_for_meta,
+)
 from goodomics.ingest.base import (
     AnalyticsBulkLoad,
     AnalyticsStagedLoad,
     NormalizedIngestResult,
 )
-from goodomics.profiles.cbioportal import (
-    profile_for_meta as cbioportal_data_profile_for_meta,
-)
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    DataContract,
+    DataContractField,
     DataImport,
-    DataProfile,
-    DataProfileField,
     FeatureSet,
     FileAsset,
     FileLink,
@@ -81,14 +81,14 @@ class CbioPortalParseContext:
     project_id: str | None
     assay: str | None
     study_meta: dict[str, str]
-    profiles_by_file: dict[str, DataProfile]
+    contracts_by_file: dict[str, DataContract]
     metas_by_file: dict[str, CbioPortalMeta]
     source_files_by_path: dict[Path, FileAsset] = field(default_factory=dict)
     file_links: list[FileLink] = field(default_factory=list)
     subjects: dict[str, Subject] = field(default_factory=dict)
     samples: dict[str, Sample] = field(default_factory=dict)
     run_samples: dict[str, RunSample] = field(default_factory=dict)
-    data_profile_fields: dict[tuple[str, str], DataProfileField] = field(
+    data_contract_fields: dict[tuple[str, str], DataContractField] = field(
         default_factory=dict
     )
     sample_sets: list[SampleSet] = field(default_factory=list)
@@ -103,13 +103,13 @@ class CbioPortalParseContext:
     def run_sample_id_for_sample(self, sample_id: str) -> str:
         return _run_sample_id(self.run_id_for_sample(sample_id), sample_id)
 
-    def data_profile_id_for_sample(
+    def data_contract_id_for_sample(
         self,
-        profile: DataProfile,
+        contract: DataContract,
         sample_id: str,  # noqa: ARG002
     ) -> str:
-        # Data profiles are stable semantic contracts, not per-sample objects.
-        return profile.data_profile_id
+        # Data contracts are stable semantic contracts, not per-sample objects.
+        return contract.data_contract_id
 
 
 def parse_cbioportal_study(
@@ -130,8 +130,8 @@ def parse_cbioportal_study(
     if not resolved_data_import_id:
         resolved_data_import_id = _normalize_id(resolved_root.name)
 
-    profiles_by_file = {
-        meta.data_filename: _profile_from_meta(
+    contracts_by_file = {
+        meta.data_filename: _contract_from_meta(
             meta,
             assay=assay,
             project_id=project_id,
@@ -146,14 +146,14 @@ def parse_cbioportal_study(
         project_id=project_id,
         assay=assay,
         study_meta=study_meta,
-        profiles_by_file=profiles_by_file,
+        contracts_by_file=contracts_by_file,
         metas_by_file=metas_by_file,
     )
 
     _register_source_files(context, metas)
     _parse_clinical_files(context)
     _parse_case_lists(context)
-    _plan_profile_loads(context)
+    _plan_contract_loads(context)
 
     data_import = DataImport(
         data_import_id=resolved_data_import_id,
@@ -163,7 +163,7 @@ def parse_cbioportal_study(
         importer_name=CBIOPORTAL_TOOL,
         status="complete",
         summary_json={
-            "profiles_found": len(profiles_by_file),
+            "contracts_found": len(contracts_by_file),
             "files_registered": len(context.source_files_by_path),
             "bulk_loads": len(context.bulk_loads),
         },
@@ -200,13 +200,13 @@ def parse_cbioportal_study(
             context.run_samples.values(),
             key=lambda run_sample: run_sample.run_sample_id,
         ),
-        data_profiles=sorted(
-            _data_profiles_from_context(context),
-            key=lambda profile: profile.data_profile_id,
+        data_contracts=sorted(
+            _data_contracts_from_context(context),
+            key=lambda contract: contract.data_contract_id,
         ),
-        data_profile_fields=sorted(
-            context.data_profile_fields.values(),
-            key=lambda field: (field.data_profile_id, field.field_id),
+        data_contract_fields=sorted(
+            context.data_contract_fields.values(),
+            key=lambda field: (field.data_contract_id, field.field_id),
         ),
         files=sorted(
             context.source_files_by_path.values(), key=lambda file: file.file_id
@@ -218,7 +218,7 @@ def parse_cbioportal_study(
         bulk_loads=context.bulk_loads,
         staged_loads=context.staged_loads,
         summary={
-            "profiles_found": len(profiles_by_file),
+            "contracts_found": len(contracts_by_file),
             "files_registered": len(context.source_files_by_path),
             "bulk_loads": len(context.bulk_loads),
         },
@@ -248,62 +248,23 @@ def _read_meta_file(path: Path) -> dict[str, str]:
     return values
 
 
-def _profile_from_meta(
+def _contract_from_meta(
     meta: CbioPortalMeta,
     *,
     assay: str | None,
     project_id: str | None,
-) -> DataProfile:
-    profile = cbioportal_data_profile_for_meta(
+) -> DataContract:
+    contract = cbioportal_data_contract_for_meta(
         meta.values,
         source_meta_file=meta.path.name,
     )
     updates: dict[str, Any] = {
-        "assay": assay or profile.assay,
+        "assay": assay or contract.assay,
         "project_id": project_id,
     }
-    if profile.primary_table == "feature_value_numeric":
-        updates["value_semantics"] = _value_semantics_from_meta(meta.values, profile)
-    return profile.model_copy(update=updates)
-
-
-def _profile_shape(meta: CbioPortalMeta) -> tuple[str, str | None, str | None]:
-    alteration = meta.alteration_type
-    datatype = meta.datatype
-    if alteration == "CLINICAL":
-        return "entity_attributes", None, "mixed"
-    if alteration == "COPY_NUMBER_ALTERATION" and datatype == "DISCRETE":
-        return "feature_calls", "gene", "call"
-    if alteration == "COPY_NUMBER_ALTERATION" and datatype == "SEG":
-        return "copy_number_segments", "interval", "numeric"
-    if alteration == "MUTATION_EXTENDED":
-        return "small_variants", "gene", "call"
-    if alteration == "STRUCTURAL_VARIANT":
-        return "structural_variants", "gene", "call"
-    if alteration == "GENE_PANEL_MATRIX":
-        return "profile_availability", "gene_panel", "categorical"
-    if alteration == "GENERIC_ASSAY":
-        return "feature_matrix", "compound", "numeric"
-    if alteration in {"MRNA_EXPRESSION", "PROTEIN_LEVEL"}:
-        return (
-            "feature_matrix",
-            "gene" if alteration == "MRNA_EXPRESSION" else "protein",
-            "numeric",
-        )
-    return "profile_payload", None, None
-
-
-def _query_modes(data_type: str) -> dict[str, Any]:
-    modes = {
-        "entity_attributes": ["sample", "subject", "attribute"],
-        "feature_matrix": ["sample", "feature", "cohort"],
-        "feature_calls": ["sample", "feature", "call", "cohort"],
-        "small_variants": ["sample", "variant", "gene", "region"],
-        "copy_number_segments": ["sample", "region"],
-        "structural_variants": ["sample", "gene", "event"],
-        "profile_availability": ["sample", "profile", "feature_set"],
-    }
-    return {"modes": modes.get(data_type, ["payload"])}
+    if contract.primary_table == "feature_value_numeric":
+        updates["value_semantics"] = _value_semantics_from_meta(meta.values, contract)
+    return contract.model_copy(update=updates)
 
 
 def _register_source_files(
@@ -316,14 +277,14 @@ def _register_source_files(
         if meta.data_filename:
             data_path = context.root / meta.data_filename
             file = _register_file(context, data_path, role="cbioportal_data")
-            profile = context.profiles_by_file.get(meta.data_filename)
-            if profile is not None:
+            contract = context.contracts_by_file.get(meta.data_filename)
+            if contract is not None:
                 context.file_links.append(
                     FileLink(
                         file_id=file.file_id,
                         project_id=context.project_id,
                         data_import_id=context.data_import_id,
-                        data_profile_id=profile.data_profile_id,
+                        data_contract_id=contract.data_contract_id,
                         link_role="source",
                     )
                 )
@@ -371,7 +332,7 @@ def _register_file(
 
 
 def _parse_clinical_files(context: CbioPortalParseContext) -> None:
-    for filename, profile in context.profiles_by_file.items():
+    for filename, contract in context.contracts_by_file.items():
         meta = context.metas_by_file[filename].values
         if meta.get("genetic_alteration_type") != "CLINICAL":
             continue
@@ -383,11 +344,11 @@ def _parse_clinical_files(context: CbioPortalParseContext) -> None:
         entity_scope = (
             "subject" if meta.get("datatype") == "PATIENT_ATTRIBUTES" else "sample"
         )
-        _add_attribute_definitions(context, profile, clinical, entity_scope)
+        _add_attribute_definitions(context, contract, clinical, entity_scope)
         source_file_id = source_file.file_id if source_file else None
         context.staged_loads.append(
             ClinicalAttributeStagedLoad(
-                profile=profile,
+                contract=contract,
                 path=path,
                 source_file_id=source_file_id,
                 entity_scope=entity_scope,
@@ -464,7 +425,7 @@ def _read_cbioportal_table(path: Path) -> CbioPortalTable | None:
 
 def _add_attribute_definitions(
     context: CbioPortalParseContext,
-    profile: DataProfile,
+    contract: DataContract,
     table: CbioPortalTable,
     entity_scope: str,
 ) -> None:
@@ -473,9 +434,9 @@ def _add_attribute_definitions(
             continue
         value_type = _attribute_value_type(table.value_types.get(column))
         field_id = _attribute_id(entity_scope, column)
-        context.data_profile_fields[(profile.data_profile_id, field_id)] = (
-            DataProfileField(
-                data_profile_id=profile.data_profile_id,
+        context.data_contract_fields[(contract.data_contract_id, field_id)] = (
+            DataContractField(
+                data_contract_id=contract.data_contract_id,
                 field_id=field_id,
                 field_role="attribute",
                 entity_scope=entity_scope,
@@ -502,7 +463,7 @@ def _add_attribute_definitions(
 
 @dataclass(frozen=True)
 class ClinicalAttributeStagedLoad:
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     entity_scope: str
@@ -532,7 +493,7 @@ class ClinicalAttributeStagedLoad:
                     "entity_scope",
                     "entity_id",
                     "field_id",
-                    "data_profile_id",
+                    "data_contract_id",
                     "source_file_id",
                     "value_type",
                     "value_numeric",
@@ -569,7 +530,7 @@ class ClinicalAttributeStagedLoad:
         delete_public_parquet(
             connection,
             table_name,
-            ("entity_scope", "entity_id", "field_id", "data_profile_id"),
+            ("entity_scope", "entity_id", "field_id", "data_contract_id"),
             path,
         )
         insert_public_parquet(connection, table_name, columns, path)
@@ -584,11 +545,11 @@ class ClinicalAttributeStagedLoad:
                 {self._attribute_id_sql()} AS field_id,
                 {
             resolve_catalog_id(
-                "data_profile_id",
-                self.profile.data_profile_id,
+                "data_contract_id",
+                self.contract.data_contract_id,
                 self.catalog_id_maps,
             )
-        } AS data_profile_id,
+        } AS data_contract_id,
                 {_sql_nullable_literal(self.source_file_id)} AS source_file_id,
                 {value_type} AS value_type,
                 CASE
@@ -692,8 +653,8 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
         )
 
 
-def _plan_profile_loads(context: CbioPortalParseContext) -> None:
-    for filename, profile in sorted(context.profiles_by_file.items()):
+def _plan_contract_loads(context: CbioPortalParseContext) -> None:
+    for filename, contract in sorted(context.contracts_by_file.items()):
         meta = context.metas_by_file[filename].values
         if meta.get("genetic_alteration_type") == "CLINICAL":
             continue
@@ -703,14 +664,14 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
         alteration = meta.get("genetic_alteration_type")
         datatype = meta.get("datatype")
         if alteration == "GENE_PANEL_MATRIX":
-            _parse_gene_panel_matrix(context, profile, path, source_file_id)
+            _parse_gene_panel_matrix(context, contract, path, source_file_id)
         elif alteration == "COPY_NUMBER_ALTERATION" and datatype == "DISCRETE":
             # Bulk loaders map each source sample column/row to that sample's
             # analytical run.
             context.bulk_loads.append(
                 CnaMatrixBulkLoad(
                     context.data_import_id,
-                    profile,
+                    contract,
                     path,
                     source_file_id,
                 )
@@ -719,7 +680,7 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
             context.bulk_loads.append(
                 SegmentBulkLoad(
                     context.data_import_id,
-                    profile,
+                    contract,
                     path,
                     source_file_id,
                     genome_build=_genome_build_from_meta(meta),
@@ -729,7 +690,7 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
             context.bulk_loads.append(
                 MutationBulkLoad(
                     context.data_import_id,
-                    profile,
+                    contract,
                     path,
                     source_file_id,
                     genome_build=_genome_build_from_meta(meta),
@@ -739,7 +700,7 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
             context.bulk_loads.append(
                 StructuralVariantBulkLoad(
                     context.data_import_id,
-                    profile,
+                    contract,
                     path,
                     source_file_id,
                     genome_build=_genome_build_from_meta(meta),
@@ -757,18 +718,18 @@ def _plan_profile_loads(context: CbioPortalParseContext) -> None:
             context.bulk_loads.append(
                 FeatureMatrixBulkLoad(
                     context.data_import_id,
-                    profile,
+                    contract,
                     path,
                     source_file_id,
                 )
             )
         else:
-            _add_payload(context, profile, path, source_file_id, "cbioportal_table")
+            _add_payload(context, contract, path, source_file_id, "cbioportal_table")
 
 
 def _parse_gene_panel_matrix(
     context: CbioPortalParseContext,
-    profile: DataProfile,
+    contract: DataContract,
     path: Path,
     source_file_id: str | None,
 ) -> None:
@@ -797,13 +758,13 @@ def _parse_gene_panel_matrix(
                         metadata_json={"source": "cbioportal_gene_panel_matrix"},
                     )
                 )
-    _add_payload(context, profile, path, source_file_id, "gene_panel_matrix")
+    _add_payload(context, contract, path, source_file_id, "gene_panel_matrix")
 
 
 @dataclass(frozen=True)
 class FeatureMatrixBulkLoad:
     run_id: str
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
@@ -820,7 +781,7 @@ class FeatureMatrixBulkLoad:
         return not _use_duckdb_matrix_unpivot(self.path)
 
     def load(self, connection: Any) -> None:
-        feature_type = self.profile.feature_type or "generic_entity"
+        feature_type = self.contract.feature_type or "generic_entity"
         source = _feature_matrix_source_sql(
             self.path,
             feature_type=feature_type,
@@ -866,7 +827,7 @@ class FeatureMatrixBulkLoad:
             mapped = _mapped_sample_source_sql(
                 source,
                 base_run_id=self.run_id,
-                base_profile_id=self.profile.data_profile_id,
+                base_contract_id=self.contract.data_contract_id,
                 catalog_id_maps=self.catalog_id_maps,
             )
             insert_public_select(
@@ -875,7 +836,7 @@ class FeatureMatrixBulkLoad:
                 _FEATURE_VALUE_COLUMNS,
                 f"""
                 SELECT
-                    data_profile_id,
+                    data_contract_id,
                     mapped_run_id AS run_id,
                     mapped_run_sample_id AS run_sample_id,
                     mapped_sample_id AS sample_id,
@@ -902,7 +863,7 @@ class FeatureMatrixBulkLoad:
                 for _, values in _iter_feature_matrix_batches(
                     self.path,
                     self.run_id,
-                    self.profile.data_profile_id,
+                    self.contract.data_contract_id,
                     feature_type=feature_type,
                     source_file_id=self.source_file_id,
                     catalog_id_maps=self.catalog_id_maps,
@@ -915,7 +876,7 @@ class FeatureMatrixBulkLoad:
 @dataclass(frozen=True)
 class CnaMatrixBulkLoad:
     run_id: str
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
@@ -965,7 +926,7 @@ class CnaMatrixBulkLoad:
             mapped = _mapped_sample_source_sql(
                 source,
                 base_run_id=self.run_id,
-                base_profile_id=self.profile.data_profile_id,
+                base_contract_id=self.contract.data_contract_id,
                 catalog_id_maps=self.catalog_id_maps,
             )
             insert_public_select(
@@ -974,7 +935,7 @@ class CnaMatrixBulkLoad:
                 _FEATURE_CALL_COLUMNS,
                 f"""
                 SELECT
-                    data_profile_id,
+                    data_contract_id,
                     mapped_run_id AS run_id,
                     mapped_run_sample_id AS run_sample_id,
                     mapped_sample_id AS sample_id,
@@ -1020,7 +981,7 @@ class CnaMatrixBulkLoad:
                 for _, calls in _iter_cna_batches(
                     self.path,
                     self.run_id,
-                    self.profile.data_profile_id,
+                    self.contract.data_contract_id,
                     source_file_id=self.source_file_id,
                     catalog_id_maps=self.catalog_id_maps,
                 )
@@ -1032,7 +993,7 @@ class CnaMatrixBulkLoad:
 @dataclass(frozen=True)
 class SegmentBulkLoad:
     run_id: str
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
@@ -1046,8 +1007,8 @@ class SegmentBulkLoad:
         return replace(self, catalog_id_maps=catalog_id_maps)
 
     def load(self, connection: Any) -> None:
-        data_profile_id = _mapped_data_profile_id_sql(
-            base_profile_id=self.profile.data_profile_id,
+        data_contract_id = _mapped_data_contract_id_sql(
+            base_contract_id=self.contract.data_contract_id,
             catalog_id_maps=self.catalog_id_maps,
         )
         _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
@@ -1069,7 +1030,7 @@ class SegmentBulkLoad:
             )
             """,
             base_run_id=self.run_id,
-            base_profile_id=self.profile.data_profile_id,
+            base_contract_id=self.contract.data_contract_id,
             catalog_id_maps=self.catalog_id_maps,
         )
         insert_public_select(
@@ -1078,7 +1039,7 @@ class SegmentBulkLoad:
             _SEGMENT_COLUMNS,
             f"""
             SELECT
-                {data_profile_id} AS data_profile_id,
+                {data_contract_id} AS data_contract_id,
                 mapped_run_id AS run_id,
                 mapped_run_sample_id AS run_sample_id,
                 mapped_sample_id AS sample_id,
@@ -1097,7 +1058,7 @@ class SegmentBulkLoad:
             AND try_cast("seg.mean" AS DOUBLE) IS NOT NULL
             """,
             [
-                self.genome_build or self.profile.genome_build or "unknown",
+                self.genome_build or self.contract.genome_build or "unknown",
                 self.source_file_id,
                 str(self.path),
             ],
@@ -1107,7 +1068,7 @@ class SegmentBulkLoad:
 @dataclass(frozen=True)
 class MutationBulkLoad:
     run_id: str
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
@@ -1123,7 +1084,7 @@ class MutationBulkLoad:
     def load(self, connection: Any) -> None:
         source = _mutation_source_sql(
             self.path,
-            self.genome_build or self.profile.genome_build,
+            self.genome_build or self.contract.genome_build,
         )
         params = [str(self.path)]
         _replace_features_from_source(connection, source, params)
@@ -1140,10 +1101,10 @@ class MutationBulkLoad:
         delete_public_select(
             connection,
             "variant_annotations",
-            ("data_profile_id", "variant_id", "feature_id", "consequence"),
+            ("data_contract_id", "variant_id", "feature_id", "consequence"),
             f"""
                 SELECT DISTINCT
-                    ? AS data_profile_id,
+                    ? AS data_contract_id,
                     variant_id,
                     feature_id,
                     consequence
@@ -1151,8 +1112,8 @@ class MutationBulkLoad:
             """,
             [
                 resolve_catalog_id(
-                    "data_profile_id",
-                    self.profile.data_profile_id,
+                    "data_contract_id",
+                    self.contract.data_contract_id,
                     self.catalog_id_maps,
                 ),
                 *params,
@@ -1198,7 +1159,7 @@ class MutationBulkLoad:
             _VARIANT_ANNOTATION_COLUMNS,
             f"""
             SELECT DISTINCT
-                ? AS data_profile_id,
+                ? AS data_contract_id,
                 variant_id,
                 feature_id,
                 consequence,
@@ -1210,8 +1171,8 @@ class MutationBulkLoad:
             """,
             [
                 resolve_catalog_id(
-                    "data_profile_id",
-                    self.profile.data_profile_id,
+                    "data_contract_id",
+                    self.contract.data_contract_id,
                     self.catalog_id_maps,
                 ),
                 *params,
@@ -1221,7 +1182,7 @@ class MutationBulkLoad:
         mapped = _mapped_sample_source_sql(
             source,
             base_run_id=self.run_id,
-            base_profile_id=self.profile.data_profile_id,
+            base_contract_id=self.contract.data_contract_id,
             catalog_id_maps=self.catalog_id_maps,
         )
         insert_public_select(
@@ -1230,7 +1191,7 @@ class MutationBulkLoad:
             _SAMPLE_VARIANT_CALL_COLUMNS,
             f"""
             SELECT
-                data_profile_id,
+                data_contract_id,
                 mapped_run_id AS run_id,
                 mapped_run_sample_id AS run_sample_id,
                 mapped_sample_id AS sample_id,
@@ -1260,7 +1221,7 @@ class MutationBulkLoad:
 @dataclass(frozen=True)
 class StructuralVariantBulkLoad:
     run_id: str
-    profile: DataProfile
+    contract: DataContract
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
@@ -1310,7 +1271,7 @@ class StructuralVariantBulkLoad:
                         _event_class(row),
                         _genome_from_build(row.get("NCBI_Build"))
                         or self.genome_build
-                        or self.profile.genome_build,
+                        or self.contract.genome_build,
                         site1_feature,
                         site2_feature,
                         _clean(row.get("Site1_Chromosome")),
@@ -1325,8 +1286,8 @@ class StructuralVariantBulkLoad:
             calls.append(
                 (
                     resolve_catalog_id(
-                        "data_profile_id",
-                        self.profile.data_profile_id,
+                        "data_contract_id",
+                        self.contract.data_contract_id,
                         self.catalog_id_maps,
                     ),
                     resolve_catalog_id(
@@ -1383,15 +1344,15 @@ class StructuralVariantBulkLoad:
 def _iter_feature_matrix_batches(
     path: Path,
     run_id: str,
-    profile_id: str,
+    contract_id: str,
     *,
     feature_type: str,
     source_file_id: str | None,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
-    resolved_profile_id = _catalog_value_or_label(
-        "data_profile_id",
-        profile_id,
+    resolved_contract_id = _catalog_value_or_label(
+        "data_contract_id",
+        contract_id,
         catalog_id_maps,
     )
     with path.open(newline="", encoding="utf-8") as handle:
@@ -1428,7 +1389,7 @@ def _iter_feature_matrix_batches(
                 )
                 values.append(
                     (
-                        resolved_profile_id,
+                        resolved_contract_id,
                         sample_ids[0],
                         sample_ids[1],
                         sample_ids[2],
@@ -1447,14 +1408,14 @@ def _iter_feature_matrix_batches(
 def _iter_cna_batches(
     path: Path,
     run_id: str,
-    profile_id: str,
+    contract_id: str,
     *,
     source_file_id: str | None,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
-    resolved_profile_id = _catalog_value_or_label(
-        "data_profile_id",
-        profile_id,
+    resolved_contract_id = _catalog_value_or_label(
+        "data_contract_id",
+        contract_id,
         catalog_id_maps,
     )
     with path.open(newline="", encoding="utf-8") as handle:
@@ -1485,7 +1446,7 @@ def _iter_cna_batches(
                 code, label = _cna_call(rank)
                 calls.append(
                     (
-                        resolved_profile_id,
+                        resolved_contract_id,
                         sample_ids[0],
                         sample_ids[1],
                         sample_ids[2],
@@ -1508,7 +1469,7 @@ def _iter_cna_batches(
 
 def _add_payload(
     context: CbioPortalParseContext,
-    profile: DataProfile,
+    contract: DataContract,
     path: Path,
     source_file_id: str | None,
     payload_kind: str,
@@ -1518,22 +1479,24 @@ def _add_payload(
     sample_ids = [None]
     for sample_id in sample_ids:
         payload_run_id = context.data_import_id
-        payload_profile_id = profile.data_profile_id
+        payload_contract_id = contract.data_contract_id
         run_sample_id = None
         payload_metadata: dict[str, Any] = {"source_format": "cbioportal"}
         if sample_id is not None:
             payload_run_id = context.run_id_for_sample(sample_id)
-            payload_profile_id = context.data_profile_id_for_sample(profile, sample_id)
+            payload_contract_id = context.data_contract_id_for_sample(
+                contract, sample_id
+            )
             run_sample_id = _run_sample_id(payload_run_id, sample_id)
             payload_metadata["sample_id"] = sample_id
-        context.batch.profile_payloads.append(
+        context.batch.contract_payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=(
                     f"{payload_run_id}:{_normalize_id(path.name)}"
                     if sample_id is None
                     else f"{payload_run_id}:{_normalize_id(path.name)}:{sample_id}"
                 ),
-                data_profile_id=payload_profile_id,
+                data_contract_id=payload_contract_id,
                 run_id=payload_run_id,
                 run_sample_id=run_sample_id,
                 payload_name=path.stem,
@@ -1603,11 +1566,6 @@ def _ensure_sample(
             metadata_json={"source": "cbioportal_import"},
         )
     return sample
-
-
-def _read_tsv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle, delimiter="\t"))
 
 
 def _read_tsv_iter(
@@ -2038,22 +1996,6 @@ def _csv_row(row: tuple[Any, ...]) -> tuple[str, ...]:
     return tuple("" if value is None else str(value) for value in row)
 
 
-def _insert_model_dicts(
-    connection: Any,
-    table: str,
-    columns: tuple[str, ...],
-    rows: list[dict[str, Any]],
-) -> None:
-    if not rows:
-        return
-    _insert_rows(
-        connection,
-        table,
-        columns,
-        [tuple(row.get(column) for column in columns) for row in rows],
-    )
-
-
 def _replace_dimension_rows(
     connection: Any,
     table: str,
@@ -2135,11 +2077,11 @@ def _feature_row(
 
 def _value_semantics_from_meta(
     meta: dict[str, str],
-    profile: DataProfile,
+    contract: DataContract,
 ) -> str:
     datatype = meta.get("datatype")
     stable_id = meta.get("stable_id")
-    raw = stable_id or datatype or profile.data_profile_id
+    raw = stable_id or datatype or contract.data_contract_id
     return _normalize_id(str(raw))
 
 
@@ -2305,11 +2247,11 @@ def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[R
     return runs
 
 
-def _data_profiles_from_context(context: CbioPortalParseContext) -> list[DataProfile]:
-    profiles: dict[str, DataProfile] = {}
-    for profile in context.profiles_by_file.values():
-        profiles.setdefault(profile.data_profile_id, profile)
-    return list(profiles.values())
+def _data_contracts_from_context(context: CbioPortalParseContext) -> list[DataContract]:
+    contracts: dict[str, DataContract] = {}
+    for contract in context.contracts_by_file.values():
+        contracts.setdefault(contract.data_contract_id, contract)
+    return list(contracts.values())
 
 
 def _file_links_from_context(context: CbioPortalParseContext) -> list[FileLink]:
@@ -2417,28 +2359,28 @@ def _mapped_sample_id_sql(
     return sample_column
 
 
-def _mapped_data_profile_id_sql(
+def _mapped_data_contract_id_sql(
     *,
-    base_profile_id: str,
+    base_contract_id: str,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     if catalog_id_maps:
         return str(
-            resolve_catalog_id("data_profile_id", base_profile_id, catalog_id_maps)
+            resolve_catalog_id("data_contract_id", base_contract_id, catalog_id_maps)
         )
-    return _sql_string(base_profile_id)
+    return _sql_string(base_contract_id)
 
 
 def _mapped_sample_source_sql(
     source_sql: str,
     *,
     base_run_id: str,
-    base_profile_id: str,
+    base_contract_id: str,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     if catalog_id_maps:
-        data_profile_id = _mapped_data_profile_id_sql(
-            base_profile_id=base_profile_id,
+        data_contract_id = _mapped_data_contract_id_sql(
+            base_contract_id=base_contract_id,
             catalog_id_maps=catalog_id_maps,
         )
         return f"""
@@ -2447,7 +2389,7 @@ def _mapped_sample_source_sql(
                 sample_map.run_id AS mapped_run_id,
                 sample_map.run_sample_id AS mapped_run_sample_id,
                 sample_map.sample_id AS mapped_sample_id,
-                {data_profile_id} AS data_profile_id
+                {data_contract_id} AS data_contract_id
             FROM ({source_sql}) source
             LEFT JOIN {_CATALOG_SAMPLE_MAP_TABLE} sample_map
             ON trim(CAST(source.sample_id AS VARCHAR)) = sample_map.sample_label
@@ -2457,8 +2399,8 @@ def _mapped_sample_source_sql(
         base_run_id=base_run_id,
         catalog_id_maps=catalog_id_maps,
     )
-    data_profile_id = _mapped_data_profile_id_sql(
-        base_profile_id=base_profile_id,
+    data_contract_id = _mapped_data_contract_id_sql(
+        base_contract_id=base_contract_id,
         catalog_id_maps=catalog_id_maps,
     )
     mapped_run_sample_id = _mapped_run_sample_id_sql(
@@ -2476,7 +2418,7 @@ def _mapped_sample_source_sql(
             {mapped_run_id} AS mapped_run_id,
             {mapped_run_sample_id} AS mapped_run_sample_id,
             {mapped_sample_id} AS mapped_sample_id,
-            {data_profile_id} AS data_profile_id
+            {data_contract_id} AS data_contract_id
         FROM ({source_sql})
     """
 
@@ -2627,7 +2569,7 @@ _FEATURE_COLUMNS = (
     "metadata_json",
 )
 _FEATURE_VALUE_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2636,7 +2578,7 @@ _FEATURE_VALUE_COLUMNS = (
     "source_file_id",
 )
 _FEATURE_CALL_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2650,7 +2592,7 @@ _FEATURE_CALL_COLUMNS = (
     "source_file_id",
 )
 _SEGMENT_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2678,7 +2620,7 @@ _VARIANT_COLUMNS = (
     "normalized_id",
 )
 _VARIANT_ANNOTATION_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "variant_id",
     "feature_id",
     "consequence",
@@ -2688,7 +2630,7 @@ _VARIANT_ANNOTATION_COLUMNS = (
     "info_json",
 )
 _SAMPLE_VARIANT_CALL_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2719,7 +2661,7 @@ _SV_EVENT_COLUMNS = (
     "annotation_json",
 )
 _SV_CALL_COLUMNS = (
-    "data_profile_id",
+    "data_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",

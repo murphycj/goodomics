@@ -174,7 +174,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
       [
         metric.sample_id,
         metric.run_sample_id,
-        metric.data_profile_id,
+        metric.data_contract_id,
         metric.field_id,
         metric.value,
         metric.source_file_id,
@@ -201,7 +201,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Sample</TableHead>
-                  <TableHead>Profile</TableHead>
+                  <TableHead>Contract</TableHead>
                   <TableHead>Field</TableHead>
                   <TableHead>Value</TableHead>
                   <TableHead>Source</TableHead>
@@ -211,7 +211,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
                 {metrics.map((metric, index) => (
                   <TableRow key={`${metric.field_id}-${metric.run_sample_id}-${index}`}>
                     <TableCell>{metric.sample_id ?? metric.run_sample_id ?? "—"}</TableCell>
-                    <TableCell>{metric.data_profile_id}</TableCell>
+                    <TableCell>{metric.data_contract_id}</TableCell>
                     <TableCell className="font-mono">{metric.field_id}</TableCell>
                     <TableCell>{formatMetricValue(metric)}</TableCell>
                     <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
@@ -241,7 +241,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
                 <TableRow>
                   <TableHead>Payload</TableHead>
                   <TableHead>Sample</TableHead>
-                  <TableHead>Profile</TableHead>
+                  <TableHead>Contract</TableHead>
                   <TableHead>Rows</TableHead>
                   <TableHead>Columns</TableHead>
                   <TableHead className="text-right" />
@@ -252,7 +252,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
                   <TableRow key={`${payload.payload_name}-${payload.run_sample_id ?? "run"}`}>
                     <TableCell className="font-bold">{payload.payload_name}</TableCell>
                     <TableCell>{payload.run_sample_id ?? "—"}</TableCell>
-                    <TableCell>{payload.data_profile_id}</TableCell>
+                    <TableCell>{payload.data_contract_id}</TableCell>
                     <TableCell>{payload.row_count}</TableCell>
                     <TableCell>{payload.columns.length}</TableCell>
                     <TableCell className="text-right">

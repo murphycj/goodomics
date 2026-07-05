@@ -112,7 +112,7 @@ def print_cbioportal_ingest_result(result: Any, console: Console) -> None:
         {
             "data_import_id": result.data_import_id,
             "runs_ingested": result.runs_ingested,
-            "profiles_ingested": result.profiles_ingested,
+            "contracts_ingested": result.contracts_ingested,
             "subjects_ingested": result.subjects_ingested,
             "samples_ingested": result.samples_ingested,
             "run_samples_ingested": result.run_samples_ingested,

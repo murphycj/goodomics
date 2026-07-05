@@ -16,9 +16,9 @@ from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    DataContractFieldRecord,
+    DataContractRecord,
     DataImportRecord,
-    DataProfileFieldRecord,
-    DataProfileRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
@@ -31,7 +31,7 @@ from goodomics.storage.sqlalchemy import (
 )
 
 # This module is the "friendly read API" for agents and query tools. It bridges
-# the SQL catalog, which tracks projects/runs/samples/files/profiles, and the
+# the SQL catalog, which tracks projects/runs/samples/files/contracts, and the
 # DuckDB analytics store, which holds metric values and other analytical facts.
 # The public methods intentionally return compact dictionaries with dashboard
 # links and stable public IDs rather than raw SQLModel or DuckDB records.
@@ -82,20 +82,20 @@ class GoodomicsQueryTools:
             "projects": [await self._project_summary(project) for project in projects]
         }
 
-    async def list_data_profiles(
+    async def list_data_contracts(
         self,
         project: str | None = None,
         query: str | None = None,
         limit: int = 20,
         field_limit: int = 25,
     ) -> dict[str, Any]:
-        """List visible data profiles and a bounded set of field definitions."""
+        """List visible data contracts and a bounded set of field definitions."""
 
         # Project arguments may be IDs, slugs, or names. Resolve first so the
         # SQL query can filter by the integer project primary key.
         project_id, project_resolution = await self._optional_project_id(project)
         if project is not None and project_id is None:
-            return project_resolution or {"profiles": []}
+            return project_resolution or {"contracts": []}
 
         await self.context.store.ensure_schema()
         term = _normalize(query or "")
@@ -106,70 +106,72 @@ class GoodomicsQueryTools:
                     session, ProjectRecord, ProjectRecord.project_id, project_id
                 )
                 if project_row is None:
-                    return {"profiles": []}
+                    return {"contracts": []}
                 project_pk = project_row.id
-            statement = select(DataProfileRecord)
+            statement = select(DataContractRecord)
             if project_pk is not None:
                 if project_id == DEFAULT_PROJECT_ID:
-                    profile_project_id = cast(Any, DataProfileRecord.project_id)
+                    contract_project_id = cast(Any, DataContractRecord.project_id)
                     statement = statement.where(
                         or_(
-                            profile_project_id == project_pk,
-                            profile_project_id.is_(None),
+                            contract_project_id == project_pk,
+                            contract_project_id.is_(None),
                         )
                     )
                 else:
                     statement = statement.where(
-                        DataProfileRecord.project_id == project_pk
+                        DataContractRecord.project_id == project_pk
                     )
-            statement = statement.order_by(DataProfileRecord.name).limit(
+            statement = statement.order_by(DataContractRecord.name).limit(
                 _bounded_limit(limit)
             )
-            profiles = list((await session.exec(statement)).all())
+            contracts = list((await session.exec(statement)).all())
             if project_pk is not None:
-                profiles = _prefer_project_profile_rows(profiles, project_pk)
+                contracts = _prefer_project_contract_rows(contracts, project_pk)
             if term:
                 # The SQL query has already handled project visibility. This
-                # second pass keeps text search simple across a few profile
+                # second pass keeps text search simple across a few contract
                 # descriptors without exposing raw SQL search syntax.
-                profiles = [
-                    profile
-                    for profile in profiles
-                    if term in _normalize(profile.name)
-                    or term in _normalize(profile.data_profile_id)
-                    or term in _normalize(profile.data_type)
+                contracts = [
+                    contract
+                    for contract in contracts
+                    if term in _normalize(contract.name)
+                    or term in _normalize(contract.data_contract_id)
+                    or term in _normalize(contract.data_type)
                 ]
-            profile_ids = [profile.id for profile in profiles if profile.id is not None]
-            fields_by_profile: dict[int | None, list[DataProfileFieldRecord]] = {}
-            if profile_ids:
-                # Fetch fields in one query rather than one query per profile.
-                # Responses are capped per profile so wide schemas do not swamp
+            contract_ids = [
+                contract.id for contract in contracts if contract.id is not None
+            ]
+            fields_by_contract: dict[int | None, list[DataContractFieldRecord]] = {}
+            if contract_ids:
+                # Fetch fields in one query rather than one query per contract.
+                # Responses are capped per contract so wide schemas do not swamp
                 # an agent/tool response.
                 rows = (
                     await session.exec(
-                        select(DataProfileFieldRecord)
+                        select(DataContractFieldRecord)
                         .where(
-                            cast(Any, DataProfileFieldRecord.data_profile_id).in_(
-                                profile_ids
+                            cast(Any, DataContractFieldRecord.data_contract_id).in_(
+                                contract_ids
                             )
                         )
                         .order_by(
-                            DataProfileFieldRecord.field_role,
-                            DataProfileFieldRecord.field_id,
+                            DataContractFieldRecord.field_role,
+                            DataContractFieldRecord.field_id,
                         )
                     )
                 ).all()
                 bounded_fields = _bounded_limit(field_limit, maximum=100)
                 for row in rows:
-                    bucket = fields_by_profile.setdefault(row.data_profile_id, [])
+                    bucket = fields_by_contract.setdefault(row.data_contract_id, [])
                     if len(bucket) < bounded_fields:
                         bucket.append(row)
             return {
-                "profiles": [
-                    _data_profile_payload(
-                        profile, fields_by_profile.get(profile.id, [])
+                "contracts": [
+                    _data_contract_payload(
+                        contract, fields_by_contract.get(contract.id, [])
                     )
-                    for profile in profiles
+                    for contract in contracts
                 ]
             }
 
@@ -478,7 +480,7 @@ class GoodomicsQueryTools:
         """List run-linked and import-linked files with optional kind filtering."""
 
         # Files are catalog records with link rows that describe whether a file
-        # belongs to a run, sample, import, or data profile.
+        # belongs to a run, sample, import, or data contract.
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
         if not isinstance(run, dict):
@@ -775,15 +777,15 @@ def _bounded_limit(limit: int, *, maximum: int = 50) -> int:
     return max(1, min(limit, maximum))
 
 
-def _prefer_project_profile_rows(
-    profiles: list[DataProfileRecord],
+def _prefer_project_contract_rows(
+    contracts: list[DataContractRecord],
     project_pk: int,
-) -> list[DataProfileRecord]:
-    by_label: dict[str, DataProfileRecord] = {}
-    for profile in profiles:
-        existing = by_label.get(profile.data_profile_id)
-        if existing is None or profile.project_id == project_pk:
-            by_label[profile.data_profile_id] = profile
+) -> list[DataContractRecord]:
+    by_label: dict[str, DataContractRecord] = {}
+    for contract in contracts:
+        existing = by_label.get(contract.data_contract_id)
+        if existing is None or contract.project_id == project_pk:
+            by_label[contract.data_contract_id] = contract
     return list(by_label.values())
 
 
@@ -934,7 +936,7 @@ def _file_payload(
         "run_id": link.run_id,
         "run_sample_id": link.run_sample_id,
         "sample_id": link.sample_id,
-        "data_profile_id": link.data_profile_id,
+        "data_contract_id": link.data_contract_id,
         "association_scope": association_scope,
         "association_reason": association_reason,
         "kind": file.file_role,
@@ -980,8 +982,8 @@ async def _file_payload_public(
             "sample_id": await _public_label(
                 session, SampleRecord, "sample_id", link.sample_id
             ),
-            "data_profile_id": await _public_label(
-                session, DataProfileRecord, "data_profile_id", link.data_profile_id
+            "data_contract_id": await _public_label(
+                session, DataContractRecord, "data_contract_id", link.data_contract_id
             ),
         }
     )
@@ -1022,7 +1024,7 @@ def _dedupe_file_payloads(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
     # Direct associations are more specific than import-level associations, and
-    # profile-linked files are usually more informative than generic files.
+    # contract-linked files are usually more informative than generic files.
     scope = file.get("association_scope")
     if not isinstance(scope, str):
         scope = ""
@@ -1030,8 +1032,8 @@ def _file_payload_rank(file: dict[str, Any]) -> tuple[int, int]:
         scope,
         1,
     )
-    profile_rank = 1 if file.get("data_profile_id") is not None else 0
-    return scope_rank, profile_rank
+    contract_rank = 1 if file.get("data_contract_id") is not None else 0
+    return scope_rank, contract_rank
 
 
 def _analytics_metric_payload(value: Any) -> dict[str, Any]:
@@ -1039,7 +1041,7 @@ def _analytics_metric_payload(value: Any) -> dict[str, Any]:
     # column into a single "value" key for simpler tool output.
     return {
         "run_id": value.run_id,
-        "data_profile_id": value.data_profile_id,
+        "data_contract_id": value.data_contract_id,
         "run_sample_id": value.run_sample_id,
         "sample_id": value.sample_id,
         "field_id": value.field_id,
@@ -1058,28 +1060,28 @@ def _sample_metric_value(value: Any) -> JsonValue:
     return value.value_string
 
 
-def _data_profile_payload(
-    profile: DataProfileRecord,
-    fields: list[DataProfileFieldRecord],
+def _data_contract_payload(
+    contract: DataContractRecord,
+    fields: list[DataContractFieldRecord],
 ) -> dict[str, Any]:
-    # Data profiles are semantic query contracts. Include a bounded field list so
+    # Data contracts are semantic query contracts. Include a bounded field list so
     # agents can discover available measures without loading every raw row.
     return {
-        "data_profile_id": profile.data_profile_id,
-        "name": profile.name,
-        "data_type": profile.data_type,
-        "assay": profile.assay,
-        "entity_grain": profile.entity_grain,
-        "value_semantics": profile.value_semantics,
-        "primary_table": profile.primary_table,
-        "summary": profile.summary_json,
-        "fields": [_data_profile_field_payload(field) for field in fields],
+        "data_contract_id": contract.data_contract_id,
+        "name": contract.name,
+        "data_type": contract.data_type,
+        "assay": contract.assay,
+        "entity_grain": contract.entity_grain,
+        "value_semantics": contract.value_semantics,
+        "primary_table": contract.primary_table,
+        "summary": contract.summary_json,
+        "fields": [_data_contract_field_payload(field) for field in fields],
     }
 
 
-def _data_profile_field_payload(field: DataProfileFieldRecord) -> dict[str, Any]:
+def _data_contract_field_payload(field: DataContractFieldRecord) -> dict[str, Any]:
     # Field metadata explains how to query and display an individual metric or
-    # attribute within a profile.
+    # attribute within a contract.
     return {
         "field_id": field.field_id,
         "field_role": field.field_role,

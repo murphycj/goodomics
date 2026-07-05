@@ -7,13 +7,13 @@ import {
   getInsightCatalog,
   listInsights,
   listProjectDatabaseTables,
-  listProjectDataProfiles,
+  listProjectDataContracts,
   listProjectSamples,
   listReports,
   listSampleSets,
   patchInsight,
   validateInsightConfig,
-  type DataProfile,
+  type DataContract,
   type DatabaseTable,
   type InsightCatalog,
   type InsightValidation,
@@ -26,7 +26,7 @@ import {
   InsightSeriesEditor,
   blankSeries,
   fieldForSeries,
-  profileSeries,
+  contractSeries,
   seriesDisplayName,
   type BuilderSeries,
   type SqlSourceSelection,
@@ -61,10 +61,10 @@ import { queryClient } from "../lib/queryClient";
 
 type Store = DatabaseTable["store"];
 type InsightMode = "list" | "detail";
-type QueryMode = "profile" | "table";
+type QueryMode = "contract" | "table";
 type ContextKind = "cohort" | "sample";
 type BuilderMode =
-  | "profile_metrics"
+  | "contract_metrics"
   | "comparison"
   | "sample_detail"
   | "variant_table";
@@ -78,7 +78,7 @@ type ResultPolicyMode =
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
 export function InsightsPage({ projectId }: { projectId: string }) {
-  // These queries feed both the list view and the builder. Profiles provide the
+  // These queries feed both the list view and the builder. Contracts provide the
   // semantic route; database tables provide the lower-level escape hatch.
   const insights = useQuery({
     queryKey: ["insights", projectId],
@@ -88,9 +88,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     queryKey: ["database-tables", projectId],
     queryFn: () => listProjectDatabaseTables(projectId),
   });
-  const profiles = useQuery({
-    queryKey: ["data-profiles", projectId],
-    queryFn: () => listProjectDataProfiles(projectId),
+  const contracts = useQuery({
+    queryKey: ["data-contracts", projectId],
+    queryFn: () => listProjectDataContracts(projectId),
   });
   const reports = useQuery({
     queryKey: ["reports", projectId],
@@ -119,9 +119,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const [sampleId, setSampleId] = useState("");
   const [runSampleId, setRunSampleId] = useState("");
   const [builderMode, setBuilderMode] =
-    useState<BuilderMode>("profile_metrics");
-  const [queryMode, setQueryMode] = useState<QueryMode>("profile");
-  const [profileId, setProfileId] = useState("");
+    useState<BuilderMode>("contract_metrics");
+  const [queryMode, setQueryMode] = useState<QueryMode>("contract");
+  const [contractId, setContractId] = useState("");
   const [fieldId, setFieldId] = useState("");
   const [series, setSeries] = useState<BuilderSeries[]>([
     blankSeries(0, "", ""),
@@ -142,9 +142,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const [aggregation, setAggregation] = useState("count");
   const [advancedSql, setAdvancedSql] = useState("");
   const availableTables = tables.data ?? [];
-  const availableProfiles = profiles.data ?? [];
-  const selectedProfile = availableProfiles.find(
-    (candidate) => candidate.data_profile_id === profileId,
+  const availableContracts = contracts.data ?? [];
+  const selectedContract = availableContracts.find(
+    (candidate) => candidate.data_contract_id === contractId,
   );
   const selectedTable = availableTables.find(
     (candidate) => candidate.store === store && candidate.name === table,
@@ -164,7 +164,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const selectBuilderMode = (next: BuilderMode) => {
     setBuilderMode(next);
     setContextKind(next === "sample_detail" ? "sample" : "cohort");
-    setQueryMode("profile");
+    setQueryMode("contract");
     if (next === "sample_detail" || next === "variant_table") {
       setVisualization("table");
       return;
@@ -175,15 +175,15 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     }
     setVisualization("bar");
   };
-  const selectProfileField = ({
+  const selectContractField = ({
     fieldId: nextFieldId,
-    profileId: nextProfileId,
+    contractId: nextContractId,
   }: {
-    profileId: string;
+    contractId: string;
     fieldId: string;
   }) => {
-    setQueryMode("profile");
-    setProfileId(nextProfileId);
+    setQueryMode("contract");
+    setContractId(nextContractId);
     setFieldId(nextFieldId);
   };
   const selectSqlSource = (selection: SqlSourceSelection) => {
@@ -210,7 +210,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       setSampleSetId("");
       setSampleId("");
       setRunSampleId("");
-      setBuilderMode("profile_metrics");
+      setBuilderMode("contract_metrics");
       setVisualization("bar");
       setLinkerKind("auto");
       setResultPolicyMode("preview");
@@ -218,7 +218,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       setRandomSeed("goodomics");
       setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
       setAdvancedSql("");
-      setQueryMode("profile");
+      setQueryMode("contract");
       setSeries([blankSeries(0, "", "")]);
       setMode("detail");
       window.history.replaceState(null, "", window.location.pathname);
@@ -237,13 +237,13 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   }, [sampleSetId, sampleSets.data]);
 
   useEffect(() => {
-    // Seed a profile-first insight with the first useful data profile. The
-    // profile picker remains the source of truth after the user makes a choice.
-    if (profileId || availableProfiles.length === 0) return;
+    // Seed a contract-first insight with the first useful data contract. The
+    // contract picker remains the source of truth after the user makes a choice.
+    if (contractId || availableContracts.length === 0) return;
     const preferred =
-      availableProfiles.find((candidate) => candidate.fields.length > 0) ??
-      availableProfiles[0];
-    setProfileId(preferred.data_profile_id);
+      availableContracts.find((candidate) => candidate.fields.length > 0) ??
+      availableContracts[0];
+    setContractId(preferred.data_contract_id);
     const defaultField =
       preferred.fields.find((field) => field.value_type === "numeric")
         ?.field_id ??
@@ -252,28 +252,28 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setFieldId(defaultField);
     setSeries((current) =>
       current.map((item, index) =>
-        index === 0 && !item.profileId
+        index === 0 && !item.contractId
           ? {
               ...item,
-              profileId: preferred.data_profile_id,
+              contractId: preferred.data_contract_id,
               fieldId: defaultField,
             }
           : item,
       ),
     );
-  }, [availableProfiles, profileId]);
+  }, [availableContracts, contractId]);
 
   useEffect(() => {
-    // When the selected profile changes, choose a numeric field by default so
+    // When the selected contract changes, choose a numeric field by default so
     // chart previews start from a likely-valid metric.
-    if (!selectedProfile || fieldId) return;
+    if (!selectedContract || fieldId) return;
     const defaultField =
-      selectedProfile.fields.find((field) => field.value_type === "numeric")
+      selectedContract.fields.find((field) => field.value_type === "numeric")
         ?.field_id ??
-      selectedProfile.fields[0]?.field_id ??
+      selectedContract.fields[0]?.field_id ??
       "";
     setFieldId(defaultField);
-  }, [fieldId, selectedProfile]);
+  }, [fieldId, selectedContract]);
 
   useEffect(() => {
     // Advanced table mode needs a physical table and default x/y columns. Prefer
@@ -298,7 +298,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   useEffect(() => {
     // Scatter plots require two aligned series. Add the second empty card
     // automatically so the user sees the missing Y-series slot immediately.
-    if (queryMode !== "profile" || visualization !== "scatter") {
+    if (queryMode !== "contract" || visualization !== "scatter") {
       return;
     }
     setSeries((current) =>
@@ -306,23 +306,23 @@ export function InsightsPage({ projectId }: { projectId: string }) {
         ? current
         : [
             ...current,
-            blankSeries(current.length, current[0]?.profileId ?? profileId, ""),
+            blankSeries(current.length, current[0]?.contractId ?? contractId, ""),
           ],
     );
-  }, [profileId, queryMode, visualization]);
+  }, [contractId, queryMode, visualization]);
 
   useEffect(() => {
-    // Profiles can arrive after the series state is initialized. Fill any
-    // profile-only series with its default field once metadata is available.
-    if (queryMode !== "profile" || availableProfiles.length === 0) return;
+    // Contracts can arrive after the series state is initialized. Fill any
+    // contract-only series with its default field once metadata is available.
+    if (queryMode !== "contract" || availableContracts.length === 0) return;
     setSeries((current) =>
       current.map((item) =>
-        item.profileId && !item.fieldId
-          ? profileSeries(item.profileId, availableProfiles, item)
+        item.contractId && !item.fieldId
+          ? contractSeries(item.contractId, availableContracts, item)
           : item,
       ),
     );
-  }, [availableProfiles, queryMode]);
+  }, [availableContracts, queryMode]);
 
   useEffect(() => {
     // Opening a saved insight is the inverse of buildConfig(): parse the saved
@@ -355,17 +355,17 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setRandomSeed(stringConfig(resultPolicy.seed) || "goodomics");
     setDisplayOptions(readDisplayOptions(config));
     setQueryMode(source.kind);
-    if (source.kind === "profile") {
-      setProfileId(source.dataProfileId);
+    if (source.kind === "contract") {
+      setContractId(source.dataContractId);
       const selectedField = firstString(query.y, query.fields, "");
-      const savedSeries = parseSavedSeries(config.series, source.dataProfileId);
+      const savedSeries = parseSavedSeries(config.series, source.dataContractId);
       setFieldId(selectedField || savedSeries[0]?.fieldId || "");
       setSeries(
         savedSeries.length
           ? savedSeries
           : [
               {
-                ...blankSeries(0, source.dataProfileId, selectedField),
+                ...blankSeries(0, source.dataContractId, selectedField),
                 aggregation,
               },
             ],
@@ -395,8 +395,8 @@ export function InsightsPage({ projectId }: { projectId: string }) {
         builderMode,
         queryMode,
         seriesItems: series,
-        profiles: availableProfiles,
-        selectedProfile,
+        contracts: availableContracts,
+        selectedContract,
         store,
         table,
         visualization,
@@ -413,20 +413,20 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     [
       advancedSql,
       aggregation,
-      availableProfiles,
+      availableContracts,
       builderMode,
       contextKind,
       description,
       displayOptions,
       fieldId,
       linkerKind,
-      profileId,
+      contractId,
       queryMode,
       randomSeed,
       resultLimit,
       resultPolicyMode,
       series,
-      selectedProfile,
+      selectedContract,
       sampleId,
       sampleSetId,
       store,
@@ -457,13 +457,13 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       }),
     enabled:
       mode === "detail" &&
-      (queryMode === "profile"
-        ? series.some((item) => item.profileId && item.fieldId)
+      (queryMode === "contract"
+        ? series.some((item) => item.contractId && item.fieldId)
         : Boolean(table || advancedSql.trim())),
     retry: false,
   });
   const setupWarning = chartSetupWarning({
-    profiles: availableProfiles,
+    contracts: availableContracts,
     queryMode,
     series,
     visualization,
@@ -492,7 +492,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   });
 
   const openNewInsight = () => {
-    // Preserve the currently selected profile/field when starting another
+    // Preserve the currently selected contract/field when starting another
     // insight; this makes repeated chart authoring less jumpy.
     setSelectedInsightId(null);
     setTitle("New insight");
@@ -500,7 +500,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setContextKind("cohort");
     setSampleId("");
     setRunSampleId("");
-    setBuilderMode("profile_metrics");
+    setBuilderMode("contract_metrics");
     setVisualization("bar");
     setLinkerKind("auto");
     setResultPolicyMode("preview");
@@ -508,8 +508,8 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     setRandomSeed("goodomics");
     setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
     setAdvancedSql("");
-    setQueryMode("profile");
-    setSeries([blankSeries(0, profileId, fieldId)]);
+    setQueryMode("contract");
+    setSeries([blankSeries(0, contractId, fieldId)]);
     setMode("detail");
   };
 
@@ -579,7 +579,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
             <CardContent className="space-y-3">
               <InsightSeriesEditor
                 advancedSql={advancedSql}
-                profiles={availableProfiles}
+                contracts={availableContracts}
                 series={series}
                 setSeries={setSeries}
                 sourceKind={queryMode}
@@ -589,21 +589,21 @@ export function InsightsPage({ projectId }: { projectId: string }) {
                 xField={xField}
                 yField={yField}
                 onAdvancedSqlChange={setAdvancedSql}
-                onProfileFieldSelect={selectProfileField}
+                onContractFieldSelect={selectContractField}
                 onSqlSourceSelect={selectSqlSource}
               />
-              {builderMode === "profile_metrics" && selectedProfile ? (
+              {builderMode === "contract_metrics" && selectedContract ? (
                 <Button
                   className="w-full justify-center"
                   variant="outline"
                   onClick={() =>
                     setSeries(
-                      selectedProfile.fields
+                      selectedContract.fields
                         .filter((field) => field.value_type === "numeric")
                         .map((field, index) => ({
                           ...blankSeries(
                             index,
-                            selectedProfile.data_profile_id,
+                            selectedContract.data_contract_id,
                             field.field_id,
                           ),
                         })),
@@ -613,7 +613,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
                   Add all numeric fields
                 </Button>
               ) : null}
-              {queryMode === "profile" ? (
+              {queryMode === "contract" ? (
                 <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-3 text-xs text-[#657082]">
                   {seriesGuidance(visualization)}
                 </div>
@@ -624,7 +624,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
           <Card className="mt-0">
             <CardContent className="space-y-4">
               <Label>Options</Label>
-            {builderMode === "profile_metrics" ? (
+            {builderMode === "contract_metrics" ? (
               <Field label="Cohort">
                 <Select value={sampleSetId} onValueChange={setSampleSetId}>
                   <SelectTrigger>
@@ -705,7 +705,7 @@ export function InsightsPage({ projectId }: { projectId: string }) {
 }
 
 function safeFieldAlias(value: string) {
-  // The server can return safe aliases for profile fields with punctuation. Use
+  // The server can return safe aliases for contract fields with punctuation. Use
   // the same aliasing rule when building x/y fields and color map keys.
   return value
     .replace(/[^a-zA-Z0-9_]+/g, "_")
@@ -728,26 +728,26 @@ function seriesGuidance(visualization: string) {
   if (["line", "area", "bar", "stacked_bar"].includes(visualization)) {
     return "Use sample or run creation date fields in advanced table mode for added-over-time charts.";
   }
-  return "Add one or more colored series from profile fields, then preview the result.";
+  return "Add one or more colored series from contract fields, then preview the result.";
 }
 
 function chartSetupWarning({
-  profiles,
+  contracts,
   queryMode,
   series,
   visualization,
 }: {
-  profiles: DataProfile[];
+  contracts: DataContract[];
   queryMode: QueryMode;
   series: BuilderSeries[];
   visualization: string;
 }) {
   // Warnings are advisory overlays; the server still validates the executable
   // config and returns concrete errors for invalid queries.
-  if (queryMode !== "profile") return null;
-  const activeSeries = series.filter((item) => item.profileId && item.fieldId);
+  if (queryMode !== "contract") return null;
+  const activeSeries = series.filter((item) => item.contractId && item.fieldId);
   if (activeSeries.length === 0) {
-    return "Choose a data profile field to preview this chart.";
+    return "Choose a data contract field to preview this chart.";
   }
   if (visualization === "scatter" && activeSeries.length < 2) {
     return "Scatter plots need two aligned numeric series.";
@@ -755,19 +755,19 @@ function chartSetupWarning({
   if (["histogram", "scatter"].includes(visualization)) {
     const nonNumeric = activeSeries
       .slice(0, visualization === "scatter" ? 2 : activeSeries.length)
-      .find((item) => fieldForSeries(profiles, item)?.value_type !== "numeric");
+      .find((item) => fieldForSeries(contracts, item)?.value_type !== "numeric");
     if (nonNumeric) {
-      return `${seriesDisplayName(profiles, nonNumeric)} must be numeric for this chart type.`;
+      return `${seriesDisplayName(contracts, nonNumeric)} must be numeric for this chart type.`;
     }
   }
   return null;
 }
 
-function seriesColorMap(profiles: DataProfile[], series: BuilderSeries[]) {
+function seriesColorMap(contracts: DataContract[], series: BuilderSeries[]) {
   // Store colors under every label the renderer might see: raw field IDs, safe
   // field aliases, display labels, and the generated Count series.
   const entries = series.flatMap((item, index) => {
-    const label = seriesLabel(profiles, item, index);
+    const label = seriesLabel(contracts, item, index);
     const values = [
       [item.fieldId, item.color],
       [safeFieldAlias(item.fieldId), item.color],
@@ -782,13 +782,13 @@ function seriesColorMap(profiles: DataProfile[], series: BuilderSeries[]) {
 }
 
 function seriesLabel(
-  profiles: DataProfile[],
+  contracts: DataContract[],
   item: BuilderSeries,
   index: number,
 ) {
   return (
     item.name ||
-    fieldForSeries(profiles, item)?.display_name ||
+    fieldForSeries(contracts, item)?.display_name ||
     item.fieldId ||
     `Series ${index + 1}`
   );
@@ -1059,7 +1059,7 @@ function executionConfig(config: Record<string, unknown>) {
 
 function builderTabsFromCatalog(catalog: InsightCatalog | undefined) {
   const fallback = [
-    ["profile_metrics", "Cohort analysis"],
+    ["contract_metrics", "Cohort analysis"],
     ["sample_detail", "Sample"],
     ["comparison", "Comparison"],
     ["variant_table", "Table"],
@@ -1091,15 +1091,15 @@ function builderTabsFromCatalog(catalog: InsightCatalog | undefined) {
 }
 
 function tabLabel(value: string, fallback: string) {
-  if (value === "profile_metrics") return "Cohort analysis";
+  if (value === "contract_metrics") return "Cohort analysis";
   if (value === "sample_detail") return "Sample";
   if (value === "variant_table") return "Table";
   return fallback;
 }
 
 function tabDescription(value: string, fallback: string) {
-  if (value === "profile_metrics") {
-    return "Build cohort-level metric panels and distributions from profile fields.";
+  if (value === "contract_metrics") {
+    return "Build cohort-level metric panels and distributions from contract fields.";
   }
   if (value === "sample_detail") {
     return "Inspect one sample or processed sample with detail and table views.";
@@ -1108,7 +1108,7 @@ function tabDescription(value: string, fallback: string) {
     return "Align two or more values by sample, processed sample, feature, or run.";
   }
   if (value === "variant_table") {
-    return "Create table-oriented outputs from profile fields or SQL-backed data.";
+    return "Create table-oriented outputs from contract fields or SQL-backed data.";
   }
   return fallback || "Configure an insight with catalog guardrails.";
 }
@@ -1192,8 +1192,8 @@ function buildConfig({
   builderMode,
   queryMode,
   seriesItems,
-  profiles,
-  selectedProfile,
+  contracts,
+  selectedContract,
   store,
   table,
   visualization,
@@ -1216,8 +1216,8 @@ function buildConfig({
   builderMode: BuilderMode;
   queryMode: QueryMode;
   seriesItems: BuilderSeries[];
-  profiles: DataProfile[];
-  selectedProfile: DataProfile | undefined;
+  contracts: DataContract[];
+  selectedContract: DataContract | undefined;
   store: Store;
   table: string;
   visualization: string;
@@ -1244,24 +1244,24 @@ function buildConfig({
     randomSeed,
     rowLimit: resultLimit,
   });
-  if (queryMode === "profile") {
+  if (queryMode === "contract") {
     const activeSeries = seriesItems.filter(
-      (item) => item.profileId && item.fieldId,
+      (item) => item.contractId && item.fieldId,
     );
     const firstSeries = activeSeries[0];
-    const profileId = firstSeries?.profileId ?? "";
+    const contractId = firstSeries?.contractId ?? "";
     const firstFieldId = firstSeries?.fieldId ?? "";
-    const entity = selectedProfile?.entity_grain ?? undefined;
+    const entity = selectedContract?.entity_grain ?? undefined;
     const query: Record<string, unknown> = {
-      // Profile mode targets a semantic data_profile_id. The server resolves the
-      // backing analytics table and field metadata from that profile.
-      source: { kind: "data_profile", data_profile_id: profileId },
+      // Contract mode targets a semantic data_contract_id. The server resolves the
+      // backing analytics table and field metadata from that contract.
+      source: { kind: "data_contract", data_contract_id: contractId },
       fields: activeSeries.map((item) => item.fieldId),
       entity,
       measures: activeSeries.map((item, index) => ({
         field: item.fieldId,
         aggregation: item.aggregation || aggregation,
-        label: seriesLabel(profiles, item, index),
+        label: seriesLabel(contracts, item, index),
       })),
       limit: resultPolicy.limit,
     };
@@ -1293,19 +1293,19 @@ function buildConfig({
       activeSeries.length >= 2
     ) {
       // Two-series bars use the second series as the group and the first as the
-      // value column, matching the pivoted profile query shape.
+      // value column, matching the pivoted contract query shape.
       query.x = safeFieldAlias(activeSeries[1].fieldId);
       query.y = safeFieldAlias(activeSeries[0].fieldId);
       query.measures = [];
     }
     if (visualization === "table") {
-      // Table previews should show raw profile values rather than aggregated
+      // Table previews should show raw contract values rather than aggregated
       // measures.
       query.columns = [safeFieldAlias(firstFieldId)].filter(Boolean);
       query.measures = [];
     }
     if (visualization === "scatter" && activeSeries.length >= 2) {
-      // Scatter needs two aligned raw value columns from the profile query.
+      // Scatter needs two aligned raw value columns from the contract query.
       query.x = safeFieldAlias(activeSeries[0].fieldId);
       query.y = safeFieldAlias(activeSeries[1].fieldId);
       query.measures = [];
@@ -1313,7 +1313,7 @@ function buildConfig({
     if (
       ["line", "area"].includes(visualization) &&
       activeSeries.length === 1 &&
-      selectedProfile?.fields.find((field) => field.field_id === firstFieldId)
+      selectedContract?.fields.find((field) => field.field_id === firstFieldId)
         ?.value_type === "numeric"
     ) {
       // A lone numeric series should plot the raw observations in their natural
@@ -1333,9 +1333,9 @@ function buildConfig({
       query,
       series: activeSeries.map((item, index) => ({
         series_id: item.id,
-        profile_id: item.profileId,
+        contract_id: item.contractId,
         field_id: item.fieldId,
-        name: seriesLabel(profiles, item, index),
+        name: seriesLabel(contracts, item, index),
         aggregation: item.aggregation || aggregation,
         color: item.color,
         filters: [],
@@ -1344,7 +1344,7 @@ function buildConfig({
       filters: [],
       result_policy: resultPolicy,
       display: {
-        colors: seriesColorMap(profiles, activeSeries),
+        colors: seriesColorMap(contracts, activeSeries),
         ...displayOptionsConfig(displayOptions),
       },
     };
@@ -1399,20 +1399,20 @@ function buildConfig({
   };
 }
 
-function parseSavedSeries(value: unknown, fallbackProfileId: string) {
+function parseSavedSeries(value: unknown, fallbackContractId: string) {
   if (!Array.isArray(value)) return [];
   return value
     .filter(isRecord)
     .map((item, index) => {
-      const profileId =
-        stringConfig(item.profile_id) ||
-        stringConfig(item.data_profile_id) ||
-        fallbackProfileId;
+      const contractId =
+        stringConfig(item.contract_id) ||
+        stringConfig(item.data_contract_id) ||
+        fallbackContractId;
       const fieldId = stringConfig(item.field_id) || stringConfig(item.field);
-      if (!profileId || !fieldId) return null;
+      if (!contractId || !fieldId) return null;
       return {
         id: stringConfig(item.series_id) || `series-${index}`,
-        profileId,
+        contractId,
         fieldId,
         aggregation: stringConfig(item.aggregation) || "avg",
         name: stringConfig(item.name) || stringConfig(item.label),
@@ -1426,7 +1426,7 @@ function parseBuilderMode(value: unknown, sourceKind: QueryMode): BuilderMode {
   const mode = stringConfig(value);
   if (mode === "advanced_sql") return "variant_table";
   if (isBuilderMode(mode)) return mode;
-  return sourceKind === "table" ? "variant_table" : "profile_metrics";
+  return sourceKind === "table" ? "variant_table" : "contract_metrics";
 }
 
 function parseLinkerKind(value: unknown): LinkerKind {
@@ -1441,7 +1441,7 @@ function parseResultPolicyMode(value: unknown): ResultPolicyMode {
 
 function isBuilderMode(value: string): value is BuilderMode {
   return [
-    "profile_metrics",
+    "contract_metrics",
     "comparison",
     "sample_detail",
     "variant_table",
@@ -1493,17 +1493,17 @@ function filterInsights(insights: SavedInsight[], search: string) {
 function parseSource(
   value: unknown,
 ):
-  | { kind: "profile"; dataProfileId: string }
+  | { kind: "contract"; dataContractId: string }
   | { kind: "table"; store: Store; table: string } {
-  // Saved configs may come from the profile builder, table builder, or older
+  // Saved configs may come from the contract builder, table builder, or older
   // store.table strings. Normalize them into the two editor modes.
   if (isRecord(value)) {
-    if (value.kind === "data_profile") {
+    if (value.kind === "data_contract") {
       return {
-        kind: "profile",
-        dataProfileId:
-          typeof value.data_profile_id === "string"
-            ? value.data_profile_id
+        kind: "contract",
+        dataContractId:
+          typeof value.data_contract_id === "string"
+            ? value.data_contract_id
             : "",
       };
     }

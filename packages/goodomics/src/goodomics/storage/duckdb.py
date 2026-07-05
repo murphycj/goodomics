@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     CohortSummary,
+    ContractPayload,
     CopyNumberSegment,
     DataSource,
     EntityAttribute,
@@ -27,7 +28,6 @@ from goodomics.schemas.models import (
     FeatureValueNumeric,
     GeneAlterationState,
     GenomicInterval,
-    ProfilePayload,
     SampleIntervalValue,
     SampleMetric,
     SampleStructuralVariantCall,
@@ -246,13 +246,13 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
             "entity_scope",
             "entity_id",
             "field_id",
-            "data_profile_id",
+            "data_contract_id",
         ),
     ),
     AnalyticalTableSerializer(
         "sample_metrics",
         SampleMetric,
-        "data_profile_id, run_id, run_sample_id, field_id",
+        "data_contract_id, run_id, run_sample_id, field_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -282,13 +282,13 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "feature_value_numeric",
         FeatureValueNumeric,
-        "data_profile_id, feature_id, run_sample_id",
+        "data_contract_id, feature_id, run_sample_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "feature_call",
         FeatureCall,
-        "data_profile_id, feature_id, call_code, run_sample_id",
+        "data_contract_id, feature_id, call_code, run_sample_id",
         run_column="run_id",
         column_types={
             "call_rank": "INTEGER",
@@ -303,13 +303,13 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "sample_interval_values",
         SampleIntervalValue,
-        "data_profile_id, run_sample_id, interval_id",
+        "data_contract_id, run_sample_id, interval_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
         "copy_number_segments",
         CopyNumberSegment,
-        "data_profile_id, run_sample_id, contig, start_pos",
+        "data_contract_id, run_sample_id, contig, start_pos",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -321,9 +321,9 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "variant_annotations",
         VariantAnnotation,
-        "variant_id, data_profile_id, feature_id",
+        "variant_id, data_contract_id, feature_id",
         unique_columns=(
-            "data_profile_id",
+            "data_contract_id",
             "variant_id",
             "feature_id",
             "consequence",
@@ -333,12 +333,12 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         "variant_transcript_annotations",
         VariantTranscriptAnnotation,
         "variant_id, transcript_feature_id",
-        unique_columns=("data_profile_id", "variant_id", "transcript_feature_id"),
+        unique_columns=("data_contract_id", "variant_id", "transcript_feature_id"),
     ),
     AnalyticalTableSerializer(
         "sample_variant_calls",
         SampleVariantCall,
-        "data_profile_id, run_sample_id, variant_id",
+        "data_contract_id, run_sample_id, variant_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -350,7 +350,7 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "sample_structural_variant_calls",
         SampleStructuralVariantCall,
-        "data_profile_id, run_sample_id, structural_variant_id",
+        "data_contract_id, run_sample_id, structural_variant_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -360,24 +360,24 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         unique_columns=("event_id",),
     ),
     AnalyticalTableSerializer(
-        "profile_payloads",
-        ProfilePayload,
-        "data_profile_id, run_id, run_sample_id, payload_name",
+        "contract_payloads",
+        ContractPayload,
+        "data_contract_id, run_id, run_sample_id, payload_name",
         run_column="run_id",
         unique_columns=("payload_id",),
     ),
     AnalyticalTableSerializer(
         "gene_alteration_state",
         GeneAlterationState,
-        "feature_id, alteration_type, data_profile_id, run_sample_id",
+        "feature_id, alteration_type, data_contract_id, run_sample_id",
     ),
     AnalyticalTableSerializer(
         "cohort_summaries",
         CohortSummary,
-        "sample_set_id, data_profile_id, field_id, feature_id",
+        "sample_set_id, data_contract_id, field_id, feature_id",
         unique_columns=(
             "sample_set_id",
-            "data_profile_id",
+            "data_contract_id",
             "field_id",
             "feature_id",
         ),
@@ -445,7 +445,7 @@ class DuckDBDimension:
 CATALOG_ID_COLUMNS = frozenset(
     {
         "project_id",
-        "data_profile_id",
+        "data_contract_id",
         "run_id",
         "run_sample_id",
         "sample_id",
@@ -632,11 +632,11 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "entity_attributes": (
             "entity_id",
             "field_id",
-            "data_profile_id",
+            "data_contract_id",
             "source_file_id",
         ),
         "sample_metrics": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -646,7 +646,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "feature_aliases": ("feature_id",),
         "feature_set_members": ("feature_set_id", "feature_id"),
         "feature_value_numeric": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -654,7 +654,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "source_file_id",
         ),
         "feature_call": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -663,7 +663,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "genomic_intervals": ("feature_id",),
         "sample_interval_values": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -671,25 +671,25 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "source_file_id",
         ),
         "copy_number_segments": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
             "source_file_id",
         ),
         "variant_annotations": (
-            "data_profile_id",
+            "data_contract_id",
             "variant_id",
             "feature_id",
         ),
         "variant_transcript_annotations": (
-            "data_profile_id",
+            "data_contract_id",
             "variant_id",
             "transcript_feature_id",
             "gene_feature_id",
         ),
         "sample_variant_calls": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -702,7 +702,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "site2_feature_id",
         ),
         "sample_structural_variant_calls": (
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -715,9 +715,9 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "sample_id",
             "run_sample_id",
         ),
-        "profile_payloads": (
+        "contract_payloads": (
             "payload_id",
-            "data_profile_id",
+            "data_contract_id",
             "run_id",
             "run_sample_id",
             "source_file_id",
@@ -727,12 +727,12 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "sample_id",
             "subject_id",
             "feature_id",
-            "data_profile_id",
+            "data_contract_id",
             "source_event_id",
         ),
         "cohort_summaries": (
             "sample_set_id",
-            "data_profile_id",
+            "data_contract_id",
             "field_id",
             "feature_id",
         ),
@@ -884,7 +884,7 @@ class DuckDBAnalyticsStore:
         batch: AnalyticsIngestBatch | None = None,
         *,
         metrics: Sequence[SampleMetric] | None = None,
-        payloads: Sequence[ProfilePayload] | None = None,
+        payloads: Sequence[ContractPayload] | None = None,
         tool_versions: Sequence[ToolVersion] | None = None,
         data_sources: Sequence[DataSource] | None = None,
     ) -> None:
@@ -893,7 +893,7 @@ class DuckDBAnalyticsStore:
         if batch is None:
             batch = AnalyticsIngestBatch(
                 sample_metrics=list(metrics or []),
-                profile_payloads=list(payloads or []),
+                contract_payloads=list(payloads or []),
                 tool_versions=list(tool_versions or []),
                 data_sources=list(data_sources or []),
             )
@@ -969,15 +969,15 @@ class DuckDBAnalyticsStore:
             )
         ]
 
-    def list_profile_payloads(self, run_id: Any) -> list[ProfilePayload]:
-        """List profile payload rows for a run."""
+    def list_contract_payloads(self, run_id: Any) -> list[ContractPayload]:
+        """List contract payload rows for a run."""
 
-        return self.fetch_records("profile_payloads", ProfilePayload, run_id=run_id)
+        return self.fetch_records("contract_payloads", ContractPayload, run_id=run_id)
 
-    def list_table_payloads(self, run_id: Any) -> list[ProfilePayload]:
-        """Backward-compatible alias for listing profile payload rows."""
+    def list_table_payloads(self, run_id: Any) -> list[ContractPayload]:
+        """Backward-compatible alias for listing contract payload rows."""
 
-        return self.list_profile_payloads(run_id)
+        return self.list_contract_payloads(run_id)
 
     def row_counts(self) -> dict[str, int]:
         """Return row counts for each registered analytical table."""
@@ -1084,7 +1084,7 @@ class DuckDBAnalyticsStore:
         connection.execute(f"""
             CREATE OR REPLACE VIEW sample_metric_numeric_by_metric AS
             SELECT
-                data_profile_id,
+                data_contract_id,
                 run_id,
                 run_sample_id,
                 sample_id,
@@ -1096,7 +1096,7 @@ class DuckDBAnalyticsStore:
             ORDER BY {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["sample_metrics"],
-                "data_profile_id, field_id, value_numeric, run_sample_id",
+                "data_contract_id, field_id, value_numeric, run_sample_id",
             )
         }
             """)
@@ -1107,7 +1107,7 @@ class DuckDBAnalyticsStore:
             ORDER BY {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["feature_value_numeric"],
-                "data_profile_id, run_sample_id, feature_id",
+                "data_contract_id, run_sample_id, feature_id",
             )
         }
             """)
@@ -1118,7 +1118,7 @@ class DuckDBAnalyticsStore:
             ORDER BY {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["feature_call"],
-                "data_profile_id, run_sample_id, feature_id",
+                "data_contract_id, run_sample_id, feature_id",
             )
         }
             """)
@@ -1129,7 +1129,7 @@ class DuckDBAnalyticsStore:
             ORDER BY {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["sample_variant_calls"],
-                "data_profile_id, variant_id, run_sample_id",
+                "data_contract_id, variant_id, run_sample_id",
             )
         }
             """)
@@ -1141,7 +1141,7 @@ class DuckDBAnalyticsStore:
                 {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["copy_number_segments"],
-                "data_profile_id, run_sample_id",
+                "data_contract_id, run_sample_id",
             )
         }
             """)
@@ -1209,7 +1209,7 @@ class DuckDBAnalyticsStore:
                 svc.sample_id,
                 NULL AS subject_id,
                 va.feature_id,
-                svc.data_profile_id,
+                svc.data_contract_id,
                 'mutation' AS alteration_type,
                 va.consequence AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1235,7 +1235,7 @@ class DuckDBAnalyticsStore:
                 sample_id,
                 NULL AS subject_id,
                 feature_id,
-                data_profile_id,
+                data_contract_id,
                 'feature_call' AS alteration_type,
                 call_code AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1265,7 +1265,7 @@ class DuckDBAnalyticsStore:
                 ssvc.sample_id,
                 NULL AS subject_id,
                 sve.site1_feature_id AS feature_id,
-                ssvc.data_profile_id,
+                ssvc.data_contract_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1292,7 +1292,7 @@ class DuckDBAnalyticsStore:
                 ssvc.sample_id,
                 NULL AS subject_id,
                 sve.site2_feature_id AS feature_id,
-                ssvc.data_profile_id,
+                ssvc.data_contract_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,

@@ -8,7 +8,7 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import type { DataProfile, DataProfileField, DatabaseTable } from "../../api";
+import type { DataContract, DataContractField, DatabaseTable } from "../../api";
 import { CHART_COLORS } from "../../lib/chartColors";
 import {
   Button,
@@ -33,19 +33,19 @@ import {
 } from "../ui";
 import { isRecord } from "../reports/reportUtils";
 
-type QueryMode = "profile" | "table";
-type SourceTab = "profiles" | "sql";
+type QueryMode = "contract" | "table";
+type SourceTab = "contracts" | "sql";
 type Store = DatabaseTable["store"];
-type ProfileFieldGroup = { profile: DataProfile; fields: DataProfileField[] };
-type ProfileFieldOption = {
+type ContractFieldGroup = { contract: DataContract; fields: DataContractField[] };
+type ContractFieldOption = {
   id: string;
-  profile: DataProfile;
-  field: DataProfileField;
+  contract: DataContract;
+  field: DataContractField;
 };
 
 export type BuilderSeries = {
   id: string;
-  profileId: string;
+  contractId: string;
   fieldId: string;
   aggregation: string;
   name: string;
@@ -60,9 +60,9 @@ export type SqlSourceSelection = {
 };
 
 export function InsightSeriesEditor({
-  profiles,
+  contracts,
   tables = [],
-  sourceKind = "profile",
+  sourceKind = "contract",
   store = "analytics",
   table = "",
   xField = "",
@@ -71,10 +71,10 @@ export function InsightSeriesEditor({
   series,
   setSeries,
   onAdvancedSqlChange,
-  onProfileFieldSelect,
+  onContractFieldSelect,
   onSqlSourceSelect,
 }: {
-  profiles: DataProfile[];
+  contracts: DataContract[];
   tables?: DatabaseTable[];
   sourceKind?: QueryMode;
   store?: Store;
@@ -85,8 +85,8 @@ export function InsightSeriesEditor({
   series: BuilderSeries[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   onAdvancedSqlChange?: (value: string) => void;
-  onProfileFieldSelect?: (selection: {
-    profileId: string;
+  onContractFieldSelect?: (selection: {
+    contractId: string;
     fieldId: string;
   }) => void;
   onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
@@ -95,10 +95,10 @@ export function InsightSeriesEditor({
     <div className="space-y-3">
       <Label>Series</Label>
       {series.map((item, index) => {
-        const profile = profiles.find(
-          (candidate) => candidate.data_profile_id === item.profileId,
+        const contract = contracts.find(
+          (candidate) => candidate.data_contract_id === item.contractId,
         );
-        const field = profile?.fields.find(
+        const field = contract?.fields.find(
           (candidate) => candidate.field_id === item.fieldId,
         );
         return (
@@ -108,7 +108,7 @@ export function InsightSeriesEditor({
             index={index}
             item={item}
             key={item.id}
-            profiles={profiles}
+            contracts={contracts}
             setSeries={setSeries}
             sourceKind={sourceKind}
             store={store}
@@ -117,7 +117,7 @@ export function InsightSeriesEditor({
             xField={xField}
             yField={yField}
             onAdvancedSqlChange={onAdvancedSqlChange}
-            onProfileFieldSelect={onProfileFieldSelect}
+            onContractFieldSelect={onContractFieldSelect}
             onSqlSourceSelect={onSqlSourceSelect}
           />
         );
@@ -131,7 +131,7 @@ export function InsightSeriesEditor({
             const previous = current[current.length - 1] ?? current[0];
             return [
               ...current,
-              blankSeries(current.length, previous?.profileId ?? "", ""),
+              blankSeries(current.length, previous?.contractId ?? "", ""),
             ];
           })
         }
@@ -144,12 +144,12 @@ export function InsightSeriesEditor({
 
 export function blankSeries(
   index: number,
-  profileId: string,
+  contractId: string,
   fieldId: string,
 ): BuilderSeries {
   return {
     id: `series-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
-    profileId,
+    contractId,
     fieldId,
     aggregation: "avg",
     name: "",
@@ -157,42 +157,42 @@ export function blankSeries(
   };
 }
 
-export function profileSeries(
-  profileId: string,
-  profiles: DataProfile[],
+export function contractSeries(
+  contractId: string,
+  contracts: DataContract[],
   current: BuilderSeries,
 ): BuilderSeries {
-  const profile = profiles.find(
-    (candidate) => candidate.data_profile_id === profileId,
+  const contract = contracts.find(
+    (candidate) => candidate.data_contract_id === contractId,
   );
   const field =
-    profile?.fields.length === 1
-      ? profile.fields[0]
-      : profile?.fields.find((candidate) => candidate.value_type === "numeric");
+    contract?.fields.length === 1
+      ? contract.fields[0]
+      : contract?.fields.find((candidate) => candidate.value_type === "numeric");
   return {
     ...current,
-    profileId,
+    contractId,
     fieldId: field?.field_id ?? "",
     name: current.name,
   };
 }
 
 export function fieldForSeries(
-  profiles: DataProfile[],
+  contracts: DataContract[],
   series: BuilderSeries,
 ) {
-  return profiles
-    .find((profile) => profile.data_profile_id === series.profileId)
+  return contracts
+    .find((contract) => contract.data_contract_id === series.contractId)
     ?.fields.find((field) => field.field_id === series.fieldId);
 }
 
 export function seriesDisplayName(
-  profiles: DataProfile[],
+  contracts: DataContract[],
   series: BuilderSeries,
 ) {
   return (
     series.name ||
-    fieldForSeries(profiles, series)?.display_name ||
+    fieldForSeries(contracts, series)?.display_name ||
     series.fieldId ||
     "This field"
   );
@@ -200,7 +200,7 @@ export function seriesDisplayName(
 
 function customSeriesName(
   series: BuilderSeries,
-  field: DataProfileField | undefined,
+  field: DataContractField | undefined,
 ) {
   return series.name && series.name !== field?.display_name ? series.name : "";
 }
@@ -210,7 +210,7 @@ function SeriesCard({
   field,
   index,
   item,
-  profiles,
+  contracts,
   setSeries,
   sourceKind,
   store,
@@ -219,14 +219,14 @@ function SeriesCard({
   xField,
   yField,
   onAdvancedSqlChange,
-  onProfileFieldSelect,
+  onContractFieldSelect,
   onSqlSourceSelect,
 }: {
   advancedSql: string;
-  field: DataProfileField | undefined;
+  field: DataContractField | undefined;
   index: number;
   item: BuilderSeries;
-  profiles: DataProfile[];
+  contracts: DataContract[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   sourceKind: QueryMode;
   store: Store;
@@ -235,8 +235,8 @@ function SeriesCard({
   xField: string;
   yField: string;
   onAdvancedSqlChange?: (value: string) => void;
-  onProfileFieldSelect?: (selection: {
-    profileId: string;
+  onContractFieldSelect?: (selection: {
+    contractId: string;
     fieldId: string;
   }) => void;
   onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
@@ -248,14 +248,14 @@ function SeriesCard({
         <ColorPickerTrigger
           color={item.color}
           index={index}
-          label={seriesDisplayName(profiles, item)}
+          label={seriesDisplayName(contracts, item)}
           onChange={(color) => updateSeries(setSeries, item.id, { color })}
         />
         <DataSourcePicker
           advancedSql={advancedSql}
           field={field}
           item={item}
-          profiles={profiles}
+          contracts={contracts}
           setSeries={setSeries}
           sourceKind={sourceKind}
           store={store}
@@ -264,7 +264,7 @@ function SeriesCard({
           xField={xField}
           yField={yField}
           onAdvancedSqlChange={onAdvancedSqlChange}
-          onProfileFieldSelect={onProfileFieldSelect}
+          onContractFieldSelect={onContractFieldSelect}
           onSqlSourceSelect={onSqlSourceSelect}
         />
         <SeriesActions
@@ -278,7 +278,7 @@ function SeriesCard({
       </div>
       <div className="mt-3 space-y-2">
         <AggregationSelect item={item} setSeries={setSeries} />
-        <FieldSummary field={sourceKind === "profile" ? field : undefined} />
+        <FieldSummary field={sourceKind === "contract" ? field : undefined} />
       </div>
       <RenameSeriesDialog
         defaultName={field?.display_name || `Series ${index + 1}`}
@@ -340,7 +340,7 @@ function SeriesActions({
   onRename,
   onResetName,
 }: {
-  field: DataProfileField | undefined;
+  field: DataContractField | undefined;
   index: number;
   item: BuilderSeries;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
@@ -440,7 +440,7 @@ function RenameSeriesDialog({
 function duplicateSeries(
   current: BuilderSeries[],
   item: BuilderSeries,
-  field: DataProfileField | undefined,
+  field: DataContractField | undefined,
   index: number,
 ) {
   const source = current.find((candidate) => candidate.id === item.id);
@@ -466,7 +466,7 @@ function DataSourcePicker({
   advancedSql,
   field,
   item,
-  profiles,
+  contracts,
   setSeries,
   sourceKind,
   store,
@@ -475,13 +475,13 @@ function DataSourcePicker({
   xField,
   yField,
   onAdvancedSqlChange,
-  onProfileFieldSelect,
+  onContractFieldSelect,
   onSqlSourceSelect,
 }: {
   advancedSql: string;
-  field: DataProfileField | undefined;
+  field: DataContractField | undefined;
   item: BuilderSeries;
-  profiles: DataProfile[];
+  contracts: DataContract[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   sourceKind: QueryMode;
   store: Store;
@@ -490,32 +490,32 @@ function DataSourcePicker({
   xField: string;
   yField: string;
   onAdvancedSqlChange?: (value: string) => void;
-  onProfileFieldSelect?: (selection: {
-    profileId: string;
+  onContractFieldSelect?: (selection: {
+    contractId: string;
     fieldId: string;
   }) => void;
   onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<SourceTab>("profiles");
+  const [tab, setTab] = useState<SourceTab>("contracts");
   const [search, setSearch] = useState("");
   const [draftStore, setDraftStore] = useState<Store>(store);
   const [draftTable, setDraftTable] = useState(table);
   const [draftXField, setDraftXField] = useState(xField);
   const [draftYField, setDraftYField] = useState(yField);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const selectedProfile = profiles.find(
-    (candidate) => candidate.data_profile_id === item.profileId,
+  const selectedContract = contracts.find(
+    (candidate) => candidate.data_contract_id === item.contractId,
   );
-  const profileGroups = useMemo(
-    () => filterProfileGroups(profiles, search),
-    [profiles, search],
+  const contractGroups = useMemo(
+    () => filterContractGroups(contracts, search),
+    [contracts, search],
   );
-  const profileOptions = useMemo(
-    () => flattenProfileOptions(profileGroups),
-    [profileGroups],
+  const contractOptions = useMemo(
+    () => flattenContractOptions(contractGroups),
+    [contractGroups],
   );
-  const [activeProfileOptionIndex, setActiveProfileOptionIndex] = useState(0);
+  const [activeContractOptionIndex, setActiveContractOptionIndex] = useState(0);
   const stores = useMemo(() => {
     const unique = new Set<Store>(["analytics", "catalog"]);
     for (const candidate of tables) unique.add(candidate.store);
@@ -535,7 +535,7 @@ function DataSourcePicker({
       ? `${store}.${table || "SQL query"}`
       : "Choose SQL source";
   const customName = customSeriesName(item, field);
-  const profileSourceLabel =
+  const contractSourceLabel =
     customName || field?.display_name || "Choose field";
 
   useEffect(() => {
@@ -556,26 +556,26 @@ function DataSourcePicker({
   }, [open]);
 
   useEffect(() => {
-    setActiveProfileOptionIndex(0);
+    setActiveContractOptionIndex(0);
   }, [search, tab]);
 
   useEffect(() => {
-    if (profileOptions.length === 0) {
-      setActiveProfileOptionIndex(0);
+    if (contractOptions.length === 0) {
+      setActiveContractOptionIndex(0);
       return;
     }
-    setActiveProfileOptionIndex((current) =>
-      Math.min(current, profileOptions.length - 1),
+    setActiveContractOptionIndex((current) =>
+      Math.min(current, contractOptions.length - 1),
     );
-  }, [profileOptions.length]);
+  }, [contractOptions.length]);
 
-  const selectField = (profile: DataProfile, nextField: DataProfileField) => {
+  const selectField = (contract: DataContract, nextField: DataContractField) => {
     setSeries((current) =>
       current.map((candidate) =>
         candidate.id === item.id
           ? {
               ...candidate,
-              profileId: profile.data_profile_id,
+              contractId: contract.data_contract_id,
               fieldId: nextField.field_id,
               name:
                 candidate.name && candidate.name !== field?.display_name
@@ -585,37 +585,37 @@ function DataSourcePicker({
           : candidate,
       ),
     );
-    onProfileFieldSelect?.({
-      profileId: profile.data_profile_id,
+    onContractFieldSelect?.({
+      contractId: contract.data_contract_id,
       fieldId: nextField.field_id,
     });
     setOpen(false);
   };
 
-  const selectProfileOption = (option: ProfileFieldOption) => {
-    selectField(option.profile, option.field);
+  const selectContractOption = (option: ContractFieldOption) => {
+    selectField(option.contract, option.field);
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (tab !== "profiles" || profileOptions.length === 0) return;
+    if (tab !== "contracts" || contractOptions.length === 0) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveProfileOptionIndex((current) =>
-        current + 1 >= profileOptions.length ? 0 : current + 1,
+      setActiveContractOptionIndex((current) =>
+        current + 1 >= contractOptions.length ? 0 : current + 1,
       );
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveProfileOptionIndex((current) =>
-        current - 1 < 0 ? profileOptions.length - 1 : current - 1,
+      setActiveContractOptionIndex((current) =>
+        current - 1 < 0 ? contractOptions.length - 1 : current - 1,
       );
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const option = profileOptions[activeProfileOptionIndex];
-      if (option) selectProfileOption(option);
+      const option = contractOptions[activeContractOptionIndex];
+      if (option) selectContractOption(option);
     }
   };
 
@@ -666,7 +666,7 @@ function DataSourcePicker({
               <span className="block truncate text-sm font-semibold text-[#1f2937]">
                 {sourceKind === "table"
                   ? sqlSummary
-                  : profileSourceLabel}
+                  : contractSourceLabel}
               </span>
             </span>
           </span>
@@ -680,7 +680,7 @@ function DataSourcePicker({
             <Input
               className="pl-9 pr-[128px]"
               placeholder={
-                tab === "profiles"
+                tab === "contracts"
                   ? "Search fields..."
                   : "Search tables or columns..."
               }
@@ -698,24 +698,24 @@ function DataSourcePicker({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="profiles">Fields</SelectItem>
+                  <SelectItem value="contracts">Fields</SelectItem>
                   <SelectItem value="sql">SQL</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
-          {tab === "profiles" ? (
-            <ProfileSourceList
-              activeOptionId={profileOptions[activeProfileOptionIndex]?.id}
-              groups={profileGroups}
+          {tab === "contracts" ? (
+            <ContractSourceList
+              activeOptionId={contractOptions[activeContractOptionIndex]?.id}
+              groups={contractGroups}
               search={search}
               selectedFieldId={item.fieldId}
-              selectedProfileId={item.profileId}
+              selectedContractId={item.contractId}
               onActiveOptionChange={(optionId) => {
-                const index = profileOptions.findIndex(
+                const index = contractOptions.findIndex(
                   (option) => option.id === optionId,
                 );
-                if (index >= 0) setActiveProfileOptionIndex(index);
+                if (index >= 0) setActiveContractOptionIndex(index);
               }}
               onSelect={selectField}
             />
@@ -743,48 +743,48 @@ function DataSourcePicker({
   );
 }
 
-function ProfileSourceList({
+function ContractSourceList({
   activeOptionId,
   groups,
   search,
   selectedFieldId,
-  selectedProfileId,
+  selectedContractId,
   onActiveOptionChange,
   onSelect,
 }: {
   activeOptionId: string | undefined;
-  groups: ProfileFieldGroup[];
+  groups: ContractFieldGroup[];
   search: string;
   selectedFieldId: string;
-  selectedProfileId: string;
+  selectedContractId: string;
   onActiveOptionChange: (optionId: string) => void;
-  onSelect: (profile: DataProfile, field: DataProfileField) => void;
+  onSelect: (contract: DataContract, field: DataContractField) => void;
 }) {
   useEffect(() => {
     if (!activeOptionId) return;
     document
-      .getElementById(profileOptionDomId(activeOptionId))
+      .getElementById(contractOptionDomId(activeOptionId))
       ?.scrollIntoView({ block: "nearest" });
   }, [activeOptionId]);
 
   return (
     <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
-      {groups.map(({ profile, fields }) => (
+      {groups.map(({ contract, fields }) => (
         <section
           className="rounded-md border border-[#d9e1ea] bg-white"
-          key={profile.data_profile_id}
+          key={contract.data_contract_id}
         >
           <div className="flex items-center justify-between gap-3 border-b border-[#e8edf3] px-3 py-2">
             <div className="group relative min-w-0">
               <div className="truncate text-xs font-bold uppercase tracking-wide text-[#657082]">
-                {highlightSearchMatch(profile.name.toUpperCase(), search)}
+                {highlightSearchMatch(contract.name.toUpperCase(), search)}
               </div>
               <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-[300px] rounded-md border border-[#d6dee8] bg-white p-2 text-xs leading-5 text-[#526071] opacity-0 shadow-[0_12px_30px_rgb(0_0_0/0.14)] transition-opacity delay-700 group-hover:opacity-100">
                 <div className="font-semibold text-[#1f2937]">
-                  {profile.name}
+                  {contract.name}
                 </div>
-                <div>{profile.data_profile_id}</div>
-                {profile.data_type ? <div>{profile.data_type}</div> : null}
+                <div>{contract.data_contract_id}</div>
+                {contract.data_type ? <div>{contract.data_type}</div> : null}
               </div>
             </div>
             <div className="shrink-0 text-xs text-[#657082]">
@@ -793,10 +793,10 @@ function ProfileSourceList({
           </div>
           <div className="grid gap-1 p-2">
             {fields.map((candidate) => {
-              const optionId = profileOptionId(profile, candidate);
+              const optionId = contractOptionId(contract, candidate);
               const active = activeOptionId === optionId;
               const selected =
-                selectedProfileId === profile.data_profile_id &&
+                selectedContractId === contract.data_contract_id &&
                 selectedFieldId === candidate.field_id;
               return (
                 <button
@@ -808,10 +808,10 @@ function ProfileSourceList({
                         ? "bg-[#f4f8fb] text-[#1f2937]"
                         : "hover:bg-white",
                   ].join(" ")}
-                  id={profileOptionDomId(optionId)}
+                  id={contractOptionDomId(optionId)}
                   key={candidate.field_id}
                   type="button"
-                  onClick={() => onSelect(profile, candidate)}
+                  onClick={() => onSelect(contract, candidate)}
                   onMouseEnter={() => onActiveOptionChange(optionId)}
                 >
                   <span className="min-w-0">
@@ -849,7 +849,7 @@ function ProfileSourceList({
       ))}
       {groups.length === 0 ? (
         <div className="rounded-md border border-dashed border-[#d6dee8] p-4 text-sm text-[#657082]">
-          No matching profile fields.
+          No matching contract fields.
         </div>
       ) : null}
     </div>
@@ -975,23 +975,23 @@ function SqlSourceForm({
   );
 }
 
-function filterProfileGroups(profiles: DataProfile[], search: string) {
+function filterContractGroups(contracts: DataContract[], search: string) {
   const normalized = search.trim().toLowerCase();
-  return profiles
-    .map((profile) => {
-      const profileText = [
-        profile.name,
-        profile.data_profile_id,
-        profile.data_type,
-        profile.assay,
+  return contracts
+    .map((contract) => {
+      const contractText = [
+        contract.name,
+        contract.data_contract_id,
+        contract.data_type,
+        contract.assay,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
-      const profileMatches = normalized && profileText.includes(normalized);
+      const contractMatches = normalized && contractText.includes(normalized);
       const fields = normalized
-        ? profile.fields.filter((field) => {
-            if (profileMatches) return true;
+        ? contract.fields.filter((field) => {
+            if (contractMatches) return true;
             return [
               field.display_name,
               field.field_id,
@@ -1003,31 +1003,31 @@ function filterProfileGroups(profiles: DataProfile[], search: string) {
               .toLowerCase()
               .includes(normalized);
           })
-        : profile.fields;
-      return fields.length ? { profile, fields } : null;
+        : contract.fields;
+      return fields.length ? { contract, fields } : null;
     })
     .filter(
-      (group): group is { profile: DataProfile; fields: DataProfileField[] } =>
+      (group): group is { contract: DataContract; fields: DataContractField[] } =>
         Boolean(group),
     );
 }
 
-function flattenProfileOptions(groups: ProfileFieldGroup[]): ProfileFieldOption[] {
-  return groups.flatMap(({ profile, fields }) =>
+function flattenContractOptions(groups: ContractFieldGroup[]): ContractFieldOption[] {
+  return groups.flatMap(({ contract, fields }) =>
     fields.map((field) => ({
-      id: profileOptionId(profile, field),
-      profile,
+      id: contractOptionId(contract, field),
+      contract,
       field,
     })),
   );
 }
 
-function profileOptionId(profile: DataProfile, field: DataProfileField) {
-  return `${profile.data_profile_id}::${field.field_id}`;
+function contractOptionId(contract: DataContract, field: DataContractField) {
+  return `${contract.data_contract_id}::${field.field_id}`;
 }
 
-function profileOptionDomId(optionId: string) {
-  return `profile-source-${optionId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+function contractOptionDomId(optionId: string) {
+  return `contract-source-${optionId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 function highlightSearchMatch(text: string, search: string) {
@@ -1131,7 +1131,7 @@ function updateSeries(
   );
 }
 
-function FieldSummary({ field }: { field: DataProfileField | undefined }) {
+function FieldSummary({ field }: { field: DataContractField | undefined }) {
   if (!field) return null;
   const parts = [
     field.value_type,
