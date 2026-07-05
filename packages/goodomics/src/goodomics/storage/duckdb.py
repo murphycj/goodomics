@@ -1,3 +1,5 @@
+"""DuckDB analytical storage registry, serializers, and ingest write helpers."""
+
 from __future__ import annotations
 
 import json
@@ -43,6 +45,8 @@ RecordT = TypeVar("RecordT", bound=BaseModel)
 
 @dataclass(frozen=True)
 class AnalyticalTableSerializer:
+    """Mapping between one analytical batch field, model schema, and DuckDB table."""
+
     # One serializer is the complete adapter between an AnalyticsIngestBatch
     # field, a Pydantic record model, and a physical DuckDB table.
     table_name: str
@@ -62,10 +66,14 @@ class AnalyticalTableSerializer:
 
     @property
     def resolved_batch_field(self) -> str:
+        """Return the `AnalyticsIngestBatch` field name for this serializer."""
+
         return self.batch_field or self.table_name
 
     @property
     def columns(self) -> tuple[str, ...]:
+        """Return public column names derived from the model field definitions."""
+
         return tuple(
             _field_column_name(field_name, field_info)
             for field_name, field_info in self.model_type.model_fields.items()
@@ -73,6 +81,8 @@ class AnalyticalTableSerializer:
 
     @property
     def column_sql(self) -> tuple[str, ...]:
+        """Return SQL column definitions for table creation."""
+
         sql: list[str] = []
         for field_name, field_info in self.model_type.model_fields.items():
             column = _field_column_name(field_name, field_info)
@@ -85,6 +95,8 @@ class AnalyticalTableSerializer:
 
     @property
     def create_sql(self) -> str:
+        """Build the `CREATE TABLE` statement for the serializer table."""
+
         columns = ",\n                    ".join(self.column_sql)
         return f"""
                 CREATE TABLE IF NOT EXISTS {self.table_name} (
@@ -93,6 +105,8 @@ class AnalyticalTableSerializer:
                 """
 
     def create_table(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Create the backing table, using integer-keyed behavior when configured."""
+
         integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
         if integer_table is not None:
             integer_table.create_table(connection)
@@ -100,6 +114,8 @@ class AnalyticalTableSerializer:
         connection.execute(self.create_sql)
 
     def create_sorted_view(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Create a deterministic sorted view for stable read/query ordering."""
+
         # Sorted views give API/query callers deterministic row order without
         # requiring every query to remember the table-specific ORDER BY clause.
         view_name = f"{self.table_name}_sorted"
@@ -123,6 +139,8 @@ class AnalyticalTableSerializer:
     def delete_run(
         self, connection: duckdb.DuckDBPyConnection, run_id: Any | None
     ) -> None:
+        """Delete run-scoped rows for one run identifier when supported."""
+
         if run_id is None or self.run_column is None:
             return
         integer_table = INTEGER_KEYED_TABLES.get(self.table_name)
@@ -138,6 +156,8 @@ class AnalyticalTableSerializer:
         connection: duckdb.DuckDBPyConnection,
         records: Sequence[Any],
     ) -> None:
+        """Delete rows matching natural-key values extracted from incoming records."""
+
         # Reference tables like features or metric definitions are not scoped to
         # a single run, so replacement is based on their configured natural key.
         if not records or not self.unique_columns:
@@ -168,6 +188,8 @@ class AnalyticalTableSerializer:
         connection: duckdb.DuckDBPyConnection,
         records: Sequence[Any],
     ) -> None:
+        """Insert validated records into either public or integer-keyed storage."""
+
         if not records:
             return
         if self.table_name in INTEGER_KEYED_TABLES:
@@ -198,6 +220,8 @@ class AnalyticalTableSerializer:
         )
 
     def records_from_batch(self, batch: AnalyticsIngestBatch) -> list[Any]:
+        """Extract and validate table-specific records from an ingest batch."""
+
         # The batch field name and model type are paired here, which lets the
         # write loop handle every analytical table with the same code path.
         raw_records = getattr(batch, self.resolved_batch_field)
@@ -382,6 +406,8 @@ ANALYTICS_TABLES = tuple(serializer.table_name for serializer in SERIALIZERS)
 
 @dataclass(frozen=True)
 class DuckDBDimension:
+    """Dimension table metadata for converting public labels to integer IDs."""
+
     table_name: str
     id_column: str
     label_column: str
@@ -389,10 +415,14 @@ class DuckDBDimension:
 
     @property
     def physical_column(self) -> str:
+        """Return the stored integer ID column name used in fact tables."""
+
         return self.storage_column or self.id_column
 
     @property
     def create_sql(self) -> str:
+        """Build the `CREATE TABLE` statement for this dimension table."""
+
         return f"""
             CREATE TABLE IF NOT EXISTS {self.table_name} (
                 {self.id_column} BIGINT PRIMARY KEY,
@@ -450,6 +480,8 @@ DIMENSIONS = tuple(dict.fromkeys(DIMENSIONS_BY_COLUMN.values()))
 
 @dataclass(frozen=True)
 class IntegerKeyedTableDefinition:
+    """Configuration for a fact table that stores integer foreign-key columns."""
+
     table_name: str
     serializer: AnalyticalTableSerializer
     dimensions: Mapping[str, DuckDBDimension]
@@ -457,6 +489,8 @@ class IntegerKeyedTableDefinition:
 
     @property
     def physical_columns(self) -> tuple[str, ...]:
+        """Return physical stored column names aligned with serializer columns."""
+
         return tuple(
             (
                 self.dimensions[column].physical_column
@@ -467,11 +501,15 @@ class IntegerKeyedTableDefinition:
         )
 
     def create_table(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Create the physical table and drop stale sorted views first."""
+
         _drop_view_if_exists(connection, self.table_name)
         connection.execute(self.create_sql)
 
     @property
     def create_sql(self) -> str:
+        """Build the physical `CREATE TABLE` statement for this table."""
+
         columns = ",\n                    ".join(
             self._physical_column_sql(column) for column in self.serializer.columns
         )
@@ -497,6 +535,8 @@ class IntegerKeyedTableDefinition:
         return f"{_quote_identifier(public_column)} {db_type}"
 
     def readable_select_sql(self, columns: Sequence[str] | None = None) -> str:
+        """Build a select statement that joins dimensions back to public labels."""
+
         requested_columns = tuple(columns or self.serializer.columns)
         select_columns: list[str] = []
         joins: list[str] = []
@@ -524,6 +564,8 @@ class IntegerKeyedTableDefinition:
             """
 
     def delete_run(self, connection: duckdb.DuckDBPyConnection, run_id: str) -> None:
+        """Delete rows for one run from this integer-keyed table."""
+
         if "run_id" in self.catalog_columns:
             connection.execute(
                 f"""
@@ -683,6 +725,8 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
 
 
 class DuckDBAnalyticsStore:
+    """DuckDB-backed analytical store with replace-oriented ingest operations."""
+
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
 
@@ -693,6 +737,8 @@ class DuckDBAnalyticsStore:
         return connection
 
     def ensure_schema(self) -> None:
+        """Create/refresh analytical tables, dimensions, and sorted views."""
+
         with self._connect() as connection:
             for serializer in SERIALIZERS:
                 connection.execute(
@@ -714,6 +760,8 @@ class DuckDBAnalyticsStore:
         replace_run_ids: Sequence[Any] | None = None,
         refresh_derived: bool = True,
     ) -> None:
+        """Write an ingest batch, optionally replacing existing data for run IDs."""
+
         validated = AnalyticsIngestBatch.model_validate(batch)
         run_ids_to_replace = list(replace_run_ids or [])
         if replace_run_id is not None:
@@ -761,6 +809,8 @@ class DuckDBAnalyticsStore:
         replace_run_ids: Sequence[Any] | None = None,
         bulk_load_progress: Callable[[Any, int, int], None] | None = None,
     ) -> None:
+        """Write a batch plus staged/bulk loaders in one coordinated workflow."""
+
         self.write_batch(
             batch,
             replace_run_id=replace_run_id,
@@ -817,6 +867,8 @@ class DuckDBAnalyticsStore:
         tool_versions: Sequence[ToolVersion] | None = None,
         data_sources: Sequence[DataSource] | None = None,
     ) -> None:
+        """Replace one run's analytical rows using a batch or selected table slices."""
+
         if batch is None:
             batch = AnalyticsIngestBatch(
                 sample_metrics=list(metrics or []),
@@ -833,6 +885,8 @@ class DuckDBAnalyticsStore:
     def fetch_records(
         self, table_name: str, model_type: type[RecordT], *, run_id: Any | None = None
     ) -> list[RecordT]:
+        """Fetch and validate records from one analytical table."""
+
         serializer = SERIALIZERS_BY_TABLE[table_name]
         if not self.path.exists():
             return []
@@ -875,6 +929,8 @@ class DuckDBAnalyticsStore:
         sample_id: Any | None = None,
         run_sample_id: Any | None = None,
     ) -> list[SampleMetric]:
+        """List sample metrics for a run, with optional sample/run-sample filtering."""
+
         values = self.fetch_records("sample_metrics", SampleMetric, run_id=run_id)
         if sample_id is None and run_sample_id is None:
             return values
@@ -893,12 +949,18 @@ class DuckDBAnalyticsStore:
         ]
 
     def list_profile_payloads(self, run_id: Any) -> list[ProfilePayload]:
+        """List profile payload rows for a run."""
+
         return self.fetch_records("profile_payloads", ProfilePayload, run_id=run_id)
 
     def list_table_payloads(self, run_id: Any) -> list[ProfilePayload]:
+        """Backward-compatible alias for listing profile payload rows."""
+
         return self.list_profile_payloads(run_id)
 
     def row_counts(self) -> dict[str, int]:
+        """Return row counts for each registered analytical table."""
+
         if not self.path.exists():
             return {table: 0 for table in ANALYTICS_TABLES}
         self.ensure_schema()
@@ -918,6 +980,8 @@ class DuckDBAnalyticsStore:
         sort_by: str | None = None,
         sort_direction: Literal["asc", "desc"] = "asc",
     ) -> tuple[list[str], list[dict[str, Any]], int]:
+        """Return a paginated preview for one analytical table."""
+
         serializer = SERIALIZERS_BY_TABLE[table_name]
         integer_table = INTEGER_KEYED_TABLES.get(table_name)
         columns = list(
@@ -967,6 +1031,8 @@ class DuckDBAnalyticsStore:
         parameters: Sequence[Any] = (),
         limit: int = 1000,
     ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Execute a bounded read-only query and return JSON-serializable rows."""
+
         if not self.path.exists():
             return [], []
         self.ensure_schema()
@@ -989,6 +1055,8 @@ class DuckDBAnalyticsStore:
         )
 
     def database_size_bytes(self) -> int:
+        """Return on-disk DuckDB file size in bytes when present."""
+
         return self.path.stat().st_size if self.path.exists() else 0
 
     def _create_derived_views(self, connection: duckdb.DuckDBPyConnection) -> None:
@@ -1232,6 +1300,8 @@ def insert_public_rows(
     columns: Sequence[str],
     rows: Sequence[Sequence[Any]],
 ) -> None:
+    """Insert rows expressed with public IDs/labels into the target table."""
+
     if not rows:
         return
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
@@ -1276,6 +1346,8 @@ def insert_storage_select(
     select_sql: str,
     parameters: Sequence[Any] | None = None,
 ) -> None:
+    """Insert rows from a select query that already yields storage-form columns."""
+
     column_sql = _column_list(columns)
     connection.execute(
         f"INSERT INTO {table_name} ({column_sql}) SELECT {column_sql} "
@@ -1293,6 +1365,8 @@ def insert_public_select(
     *,
     upsert_dimensions: bool = True,
 ) -> None:
+    """Insert rows from a public-label select query into storage tables."""
+
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
     column_sql = _column_list(columns)
     if integer_table is None:
@@ -1345,6 +1419,8 @@ def upsert_public_dimensions_select(
     *,
     dimension_columns: Sequence[str] | None = None,
 ) -> None:
+    """Upsert dimension labels referenced by a public select query."""
+
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
     if integer_table is None:
         return
@@ -1368,6 +1444,8 @@ def insert_public_parquet(
     *,
     upsert_dimensions: bool = True,
 ) -> None:
+    """Insert rows from a parquet file whose columns use public labels."""
+
     column_sql = _column_list(columns)
     insert_public_select(
         connection,
@@ -1386,6 +1464,8 @@ def delete_public_select(
     select_sql: str,
     parameters: Sequence[Any] | None = None,
 ) -> None:
+    """Delete rows matching records produced by a public select query."""
+
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
     if integer_table is None:
         where = " AND ".join(
@@ -1420,6 +1500,8 @@ def delete_public_parquet(
     columns: Sequence[str],
     path: Path | str,
 ) -> None:
+    """Delete rows matching records loaded from a parquet file."""
+
     column_sql = _column_list(columns)
     delete_public_select(
         connection,
@@ -1436,6 +1518,8 @@ def delete_public_rows(
     columns: Sequence[str],
     rows: Sequence[Sequence[Any]],
 ) -> None:
+    """Delete rows matching public-label row tuples."""
+
     if not rows:
         return
     integer_table = INTEGER_KEYED_TABLES.get(table_name)
@@ -1802,6 +1886,8 @@ def validate_records(
     table_name: str,
     records: Iterable[dict[str, Any] | BaseModel],
 ) -> list[BaseModel]:
+    """Validate records against the registered model for an analytical table."""
+
     serializer = SERIALIZERS_BY_TABLE[table_name]
     return [serializer.model_type.model_validate(record) for record in records]
 
