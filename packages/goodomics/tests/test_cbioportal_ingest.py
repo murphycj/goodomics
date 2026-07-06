@@ -38,6 +38,7 @@ from goodomics.storage.sqlalchemy import (
     FileRecord,
     RunRecord,
     SampleRecord,
+    SampleSetMemberRecord,
     SampleSetRecord,
     SQLModelGoodomicsStore,
 )
@@ -155,6 +156,10 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
         for link in parsed.file_links
     )
     assert parsed.sample_sets[0].name == "All samples"
+    assert {member.run_sample_id for member in parsed.sample_set_members} == {
+        "run-cbio:S1:S1",
+        "run-cbio:S2:S2",
+    }
     assert len(parsed.bulk_loads) == 6
 
 
@@ -308,7 +313,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert run.data_import_id == "run-cbio"
 
     async def load_catalog_counts() -> tuple[
-        int, int, int, int, int, list[str], set[int | None]
+        int, int, int, int, int, int, list[str], set[int | None]
     ]:
         async with AsyncSession(catalog_store._get_engine()) as session:
             imports = (await session.exec(select(DataImportRecord))).all()
@@ -319,12 +324,16 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
             links = (await session.exec(select(FileLinkRecord))).all()
             contracts = (await session.exec(select(DataContractRecord))).all()
             sample_sets = (await session.exec(select(SampleSetRecord))).all()
+            sample_set_members = (
+                await session.exec(select(SampleSetMemberRecord))
+            ).all()
         return (
             len(imports),
             len(files),
             len(links),
             len(contracts),
             len(sample_sets),
+            len(sample_set_members),
             [row.run_id for row in runs],
             {link.data_import_id for link in links},
         )
@@ -335,6 +344,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         links_count,
         contracts_count,
         sample_sets_count,
+        sample_set_members_count,
         run_ids,
         linked_import_ids,
     ) = asyncio.run(load_catalog_counts())
@@ -345,6 +355,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert links_count >= files_count
     assert contracts_count == result.contracts_ingested
     assert sample_sets_count == 1
+    assert sample_set_members_count == 2
 
     analytics = DuckDBAnalyticsStore(analytics_path)
     counts = analytics.row_counts()

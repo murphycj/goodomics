@@ -645,12 +645,12 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
                 subject_id=_subject_id_from_sample(sample_id),
                 row={},
             )
-        context.sample_set_members.append(
-            SampleSetMember(
-                sample_set_id=sample_set.sample_set_id,
-                run_sample_id=context.run_sample_id_for_sample(sample_id),
+            context.sample_set_members.append(
+                SampleSetMember(
+                    sample_set_id=sample_set.sample_set_id,
+                    run_sample_id=context.run_sample_id_for_sample(sample_id),
+                )
             )
-        )
 
 
 def _plan_contract_loads(context: CbioPortalParseContext) -> None:
