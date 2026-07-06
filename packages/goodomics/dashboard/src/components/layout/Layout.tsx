@@ -65,7 +65,7 @@ function LayoutContent({
   const askInset = askOpen ? askWidth : 0;
   const isTableCanvas =
     pathname === `/project/${projectId}/samples` ||
-    pathname === `/project/${projectId}/sample-groups` ||
+    pathname.startsWith(`/project/${projectId}/sample-groups`) ||
     pathname === `/project/${projectId}/runs` ||
     pathname === `/project/${projectId}/database`;
 

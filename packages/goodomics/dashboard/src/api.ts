@@ -237,6 +237,7 @@ const insightValidationSchema = z.object({
 
 const sampleSetSchema = z.object({
   sample_set_id: z.string(),
+  url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
   kind: z.string(),
@@ -610,6 +611,13 @@ export function createProjectSampleGroup(
     `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups`,
     'POST',
     payload,
+    sampleSetSchema,
+  );
+}
+
+export function getProjectSampleGroup(projectId: string, sampleGroupRef: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupRef)}`,
     sampleSetSchema,
   );
 }

@@ -53,6 +53,21 @@ const sampleGroupsRoute = createRoute({
   path: "/project/$projectId/sample-groups",
   component: SampleGroupsRouteAdapter,
 });
+const sampleGroupNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/sample-groups/new",
+  component: SampleGroupNewRouteAdapter,
+});
+const sampleGroupDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/sample-groups/$sampleGroupRef",
+  component: SampleGroupDetailRouteAdapter,
+});
+const sampleGroupEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/sample-groups/$sampleGroupRef/edit",
+  component: SampleGroupEditRouteAdapter,
+});
 const sampleDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/samples/$sampleId",
@@ -92,6 +107,9 @@ const router = createRouter({
     runsRoute,
     samplesRoute,
     sampleGroupsRoute,
+    sampleGroupNewRoute,
+    sampleGroupDetailRoute,
+    sampleGroupEditRoute,
     sampleDetailRoute,
     reportsRoute,
     insightsRoute,
@@ -136,6 +154,42 @@ function SampleGroupsRouteAdapter() {
   const { projectId } = sampleGroupsRoute.useParams();
   return (
     <ProjectDataBrowserPage activeTab="sample-groups" projectId={projectId} />
+  );
+}
+
+/** Route adapter for creating a sample group. */
+function SampleGroupNewRouteAdapter() {
+  const { projectId } = sampleGroupNewRoute.useParams();
+  return (
+    <ProjectDataBrowserPage
+      activeTab="sample-groups"
+      projectId={projectId}
+      sampleGroupTarget={{ mode: "new" }}
+    />
+  );
+}
+
+/** Route adapter for viewing a sample group. */
+function SampleGroupDetailRouteAdapter() {
+  const { projectId, sampleGroupRef } = sampleGroupDetailRoute.useParams();
+  return (
+    <ProjectDataBrowserPage
+      activeTab="sample-groups"
+      projectId={projectId}
+      sampleGroupTarget={{ mode: "view", sampleGroupRef }}
+    />
+  );
+}
+
+/** Route adapter for editing a sample group. */
+function SampleGroupEditRouteAdapter() {
+  const { projectId, sampleGroupRef } = sampleGroupEditRoute.useParams();
+  return (
+    <ProjectDataBrowserPage
+      activeTab="sample-groups"
+      projectId={projectId}
+      sampleGroupTarget={{ mode: "edit", sampleGroupRef }}
+    />
   );
 }
 

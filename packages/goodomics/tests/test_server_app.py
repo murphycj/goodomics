@@ -1849,6 +1849,7 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     assert created_group.status_code == 201
     group = created_group.json()
     assert group["sample_set_id"].startswith("sample-set-")
+    assert re.match(r"^sg_[0-9a-f]{10}-responders$", group["url_slug"])
     assert group["kind"] == "cohort"
     assert group["member_count"] == 2
     assert group["updated_at"]
@@ -1861,6 +1862,20 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     listed_body = listed.json()
     assert listed_body["total"] == 1
     assert listed_body["items"][0]["sample_set_id"] == group["sample_set_id"]
+    assert listed_body["items"][0]["url_slug"] == group["url_slug"]
+
+    fetched = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "Responders"
+    assert fetched.json()["member_count"] == 2
+
+    fetched_by_slug = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['url_slug']}"
+    )
+    assert fetched_by_slug.status_code == 200
+    assert fetched_by_slug.json()["sample_set_id"] == group["sample_set_id"]
 
     members = client.get(
         f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members"
@@ -1887,6 +1902,17 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Clinical responders"
     assert renamed.json()["kind"] == "reference_set"
+    assert renamed.json()["url_slug"].endswith("-clinical-responders")
+    assert (
+        renamed.json()["url_slug"].split("-", 1)[0]
+        == group["url_slug"].split("-", 1)[0]
+    )
+
+    old_slug_after_rename = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['url_slug']}"
+    )
+    assert old_slug_after_rename.status_code == 200
+    assert old_slug_after_rename.json()["name"] == "Clinical responders"
 
     removed = client.request(
         "DELETE",
@@ -1910,6 +1936,10 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     empty = client.get(f"/api/v1/projects/{project_id}/sample-groups")
     assert empty.status_code == 200
     assert empty.json()["total"] == 0
+    missing = client.get(
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+    )
+    assert missing.status_code == 404
 
 
 def test_report_render_exports_standalone_html(client: TestClient) -> None:

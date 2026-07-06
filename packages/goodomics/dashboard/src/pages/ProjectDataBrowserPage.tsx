@@ -16,6 +16,7 @@ import {
   addProjectSampleGroupMembers,
   createProjectSampleGroup,
   deleteProjectSampleGroup,
+  getProjectSampleGroup,
   listProjectRuns,
   listProjectSampleGroupMembers,
   listProjectSampleGroups,
@@ -58,6 +59,10 @@ type SampleGroupMemberGridRow = SampleGroupMember & { __rowId: string };
 type SampleGroupEditorTarget =
   | { mode: "new" }
   | { group: SampleGroupGridRow; mode: "edit" | "view" };
+type SampleGroupRouteTarget =
+  | { mode: "new" }
+  | { mode: "edit" | "view"; sampleGroupRef: string };
+type OpenSampleGroupOptions = { replace?: boolean };
 
 const SAMPLE_COLUMN_OPTIONS: GridColumnOption[] = [
   { key: "sample", label: "Sample" },
@@ -94,9 +99,11 @@ const SAMPLE_GROUP_MEMBER_COLUMN_OPTIONS: GridColumnOption[] = [
 export function ProjectDataBrowserPage({
   activeTab,
   projectId,
+  sampleGroupTarget,
 }: {
   activeTab: DataBrowserTab;
   projectId: string;
+  sampleGroupTarget?: SampleGroupRouteTarget;
 }) {
   const navigate = useNavigate();
   const openTab = (tab: DataBrowserTab) => {
@@ -147,7 +154,10 @@ export function ProjectDataBrowserPage({
         {activeTab === "samples" ? (
           <SamplesTab projectId={projectId} />
         ) : activeTab === "sample-groups" ? (
-          <SampleGroupsTab projectId={projectId} />
+          <SampleGroupsTab
+            projectId={projectId}
+            routeTarget={sampleGroupTarget}
+          />
         ) : (
           <RunsTab projectId={projectId} />
         )}
@@ -287,22 +297,36 @@ function RunsTab({ projectId }: { projectId: string }) {
   );
 }
 
-/** Paginated sample-group grid tab with create and edit flows. */
-function SampleGroupsTab({ projectId }: { projectId: string }) {
+/** Paginated sample-group grid tab with route-backed create and edit flows. */
+function SampleGroupsTab({
+  projectId,
+  routeTarget,
+}: {
+  projectId: string;
+  routeTarget?: SampleGroupRouteTarget;
+}) {
+  const navigate = useNavigate();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DATA_PAGE_SIZE);
   const [search, setSearch] = useState("");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(
     () => new Set(["created_at"]),
   );
-  const [editorTarget, setEditorTarget] =
-    useState<SampleGroupEditorTarget | null>(null);
   const offset = page * pageSize;
   const groups = useQuery({
     queryKey: ["sample-groups", projectId, offset, pageSize, search],
     queryFn: () =>
       listProjectSampleGroups({ projectId, limit: pageSize, offset, search }),
     placeholderData: (previous) => previous,
+  });
+  const routeSampleGroupRef =
+    routeTarget && routeTarget.mode !== "new"
+      ? routeTarget.sampleGroupRef
+      : undefined;
+  const routeGroup = useQuery({
+    queryKey: ["sample-group", projectId, routeSampleGroupRef],
+    queryFn: () => getProjectSampleGroup(projectId, routeSampleGroupRef ?? ""),
+    enabled: Boolean(routeSampleGroupRef),
   });
   const data = groups.data;
   const rows = useMemo<SampleGroupGridRow[]>(
@@ -314,18 +338,67 @@ function SampleGroupsTab({ projectId }: { projectId: string }) {
     [data?.items],
   );
   const columns = useSampleGroupColumns(hiddenColumns);
-  const openGroup = (group: SampleSet, mode: "edit" | "view" = "view") =>
-    setEditorTarget({
-      group: { __rowId: group.sample_set_id, ...group },
-      mode,
+  const openList = (options?: OpenSampleGroupOptions) => {
+    void navigate({
+      to: "/project/$projectId/sample-groups",
+      params: { projectId },
+      replace: options?.replace,
     });
+  };
+  const openNewGroup = () => {
+    void navigate({
+      to: "/project/$projectId/sample-groups/new",
+      params: { projectId },
+    });
+  };
+  const openGroup = (
+    group: SampleSet,
+    mode: "edit" | "view" = "view",
+    options?: OpenSampleGroupOptions,
+  ) => {
+    void navigate({
+      to:
+        mode === "edit"
+          ? "/project/$projectId/sample-groups/$sampleGroupRef/edit"
+          : "/project/$projectId/sample-groups/$sampleGroupRef",
+      params: { projectId, sampleGroupRef: group.url_slug },
+      replace: options?.replace,
+    });
+  };
 
-  if (editorTarget) {
+  if (routeTarget) {
+    const editorTarget =
+      routeTarget.mode === "new"
+        ? routeTarget
+        : routeGroup.data
+          ? {
+              group: {
+                __rowId: routeGroup.data.sample_set_id,
+                ...routeGroup.data,
+              },
+              mode: routeTarget.mode,
+            }
+          : null;
+    if (!editorTarget) {
+      return (
+        <div className="flex h-full items-center justify-center bg-white p-6 text-sm text-[#657082]">
+          {routeGroup.error ? (
+            <span className="text-[#b42318]">
+              {queryError(routeGroup.error)?.message ??
+                "Unable to load sample group."}
+            </span>
+          ) : (
+            <span>Loading sample group...</span>
+          )}
+        </div>
+      );
+    }
     return (
       <SampleGroupEditorPage
         projectId={projectId}
         target={editorTarget}
-        onBack={() => setEditorTarget(null)}
+        onBack={() => openList({ replace: true })}
+        routeSampleGroupRef={routeSampleGroupRef}
         onOpenGroup={openGroup}
       />
     );
@@ -351,7 +424,7 @@ function SampleGroupsTab({ projectId }: { projectId: string }) {
       searchValue={search}
       sortValueGetter={sampleGroupSortValue}
       toolbarActions={
-        <Button onClick={() => setEditorTarget({ mode: "new" })} type="button">
+        <Button onClick={openNewGroup} type="button">
           <Plus className="h-4 w-4" /> New group
         </Button>
       }
@@ -526,11 +599,17 @@ function SampleGroupEditorPage({
   onBack,
   onOpenGroup,
   projectId,
+  routeSampleGroupRef,
   target,
 }: {
   onBack: () => void;
-  onOpenGroup: (group: SampleSet, mode?: "edit" | "view") => void;
+  onOpenGroup: (
+    group: SampleSet,
+    mode?: "edit" | "view",
+    options?: OpenSampleGroupOptions,
+  ) => void;
   projectId: string;
+  routeSampleGroupRef?: string;
   target: SampleGroupEditorTarget;
 }) {
   const group = target.mode === "new" ? null : target.group;
@@ -633,8 +712,12 @@ function SampleGroupEditorPage({
       });
     },
     onSuccess: (savedGroup) => {
-      void invalidateSampleGroups(projectId, savedGroup.sample_set_id);
-      onOpenGroup(savedGroup);
+      void invalidateSampleGroups(
+        projectId,
+        savedGroup.sample_set_id,
+        routeSampleGroupRef,
+      );
+      onOpenGroup(savedGroup, "view", { replace: true });
     },
   });
   const remove = useMutation({
@@ -646,7 +729,7 @@ function SampleGroupEditorPage({
       ),
     onSuccess: () => {
       setSelectedRunSamples(new Set());
-      void invalidateSampleGroups(projectId, groupId);
+      void invalidateSampleGroups(projectId, groupId, routeSampleGroupRef);
     },
   });
   const destroy = useMutation({
@@ -662,7 +745,7 @@ function SampleGroupEditorPage({
   const ActionIcon = groupId ? Save : Plus;
   const handleBack = () => {
     if (target.mode === "edit" && group) {
-      onOpenGroup(group);
+      onOpenGroup(group, "view", { replace: true });
       return;
     }
     onBack();
@@ -1286,10 +1369,24 @@ function queryError(error: unknown): Error | null {
   return error instanceof Error ? error : null;
 }
 
-async function invalidateSampleGroups(projectId: string, sampleSetId?: string) {
+async function invalidateSampleGroups(
+  projectId: string,
+  sampleSetId?: string,
+  sampleGroupRef?: string,
+) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["sample-groups", projectId] }),
     queryClient.invalidateQueries({ queryKey: ["sample-sets", projectId] }),
+    sampleSetId
+      ? queryClient.invalidateQueries({
+          queryKey: ["sample-group", projectId, sampleSetId],
+        })
+      : Promise.resolve(),
+    sampleGroupRef && sampleGroupRef !== sampleSetId
+      ? queryClient.invalidateQueries({
+          queryKey: ["sample-group", projectId, sampleGroupRef],
+        })
+      : Promise.resolve(),
     sampleSetId
       ? queryClient.invalidateQueries({
           queryKey: ["sample-group-members", projectId, sampleSetId],

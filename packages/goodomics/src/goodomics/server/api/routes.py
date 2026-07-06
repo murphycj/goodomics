@@ -13,7 +13,9 @@ the shared catalog registry.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast, get_args, get_origin
@@ -352,6 +354,7 @@ class SampleSetRead(BaseModel):
     """Canonical sample-set/cohort context option."""
 
     sample_set_id: str
+    url_slug: str
     project_id: str | None = None
     name: str
     kind: str
@@ -1847,6 +1850,23 @@ async def create_project_sample_group(
         return await _sample_set_read(session, row)
 
 
+@router.get(
+    "/projects/{project_id}/sample-groups/{sample_set_id}",
+    response_model=SampleSetRead,
+)
+async def get_project_sample_group(
+    project_id: str,
+    sample_set_id: str,
+    request: Request,
+) -> SampleSetRead:
+    """Return one project-scoped sample group with its member count."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = await _require_project_sample_group(session, project, sample_set_id)
+        return await _sample_set_read(session, row, project_id=project.project_id)
+
+
 @router.patch(
     "/projects/{project_id}/sample-groups/{sample_set_id}",
     response_model=SampleSetRead,
@@ -2386,6 +2406,7 @@ async def _sample_set_read(
     metadata_json = row.metadata_json if isinstance(row.metadata_json, dict) else {}
     return SampleSetRead(
         sample_set_id=row.sample_set_id,
+        url_slug=_sample_set_url_slug(row),
         project_id=project_id
         if project_id is not None
         else await _public_label(
@@ -2431,19 +2452,64 @@ async def _sample_set_member_counts(
 async def _require_project_sample_group(
     session: AsyncSession,
     project: ProjectRecord,
-    sample_set_id: str,
+    sample_set_ref: str,
 ) -> SampleSetRecord:
     """Return a sample group only when it belongs to the project."""
+
+    row = await _get_project_sample_group_by_ref(session, project, sample_set_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sample group not found")
+    return row
+
+
+async def _get_project_sample_group_by_ref(
+    session: AsyncSession,
+    project: ProjectRecord,
+    sample_set_ref: str,
+) -> SampleSetRecord | None:
+    """Resolve a sample group by raw sample-set ID or readable URL slug."""
 
     row = await get_record_where(
         session,
         SampleSetRecord,
         SampleSetRecord.project_id == project.id,
-        SampleSetRecord.sample_set_id == sample_set_id,
+        SampleSetRecord.sample_set_id == sample_set_ref,
     )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Sample group not found")
-    return row
+    if row is not None:
+        return row
+    url_key = _sample_set_url_key_from_slug(sample_set_ref)
+    if not url_key:
+        return None
+    rows = (
+        await session.exec(
+            select(SampleSetRecord).where(SampleSetRecord.project_id == project.id)
+        )
+    ).all()
+    return next(
+        (candidate for candidate in rows if _sample_set_url_key(candidate) == url_key),
+        None,
+    )
+
+
+def _sample_set_url_slug(row: SampleSetRecord) -> str:
+    """Return a stable readable URL segment for a sample group."""
+
+    return f"{_sample_set_url_key(row)}-{_slugify_url_part(row.name)}"
+
+
+def _sample_set_url_key(row: SampleSetRecord) -> str:
+    digest = hashlib.sha256(row.sample_set_id.encode("utf-8")).hexdigest()
+    return f"sg_{digest[:10]}"
+
+
+def _sample_set_url_key_from_slug(value: str) -> str | None:
+    match = re.match(r"^(sg_[0-9a-f]{10})(?:-|$)", value)
+    return match.group(1) if match else None
+
+
+def _slugify_url_part(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "sample-group"
 
 
 async def _sample_group_members_page(
