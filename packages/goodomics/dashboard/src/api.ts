@@ -244,7 +244,32 @@ const sampleSetSchema = z.object({
   definition_json: z.record(z.string(), z.unknown()).default({}),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
   created_at: z.string(),
+  updated_at: z.string(),
   member_count: z.number(),
+});
+
+const sampleSetPageSchema = z.object({
+  items: z.array(sampleSetSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+const sampleGroupMemberSchema = z.object({
+  run_sample_id: z.string(),
+  sample_id: z.string(),
+  sample_name: z.string().nullable(),
+  subject_id: z.string().nullable(),
+  run_id: z.string(),
+  run_name: z.string().nullable(),
+  status: z.string(),
+});
+
+const sampleGroupMemberPageSchema = z.object({
+  items: z.array(sampleGroupMemberSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
 });
 
 const aiMessageSchema = z.object({
@@ -287,6 +312,9 @@ export type ReportResult = z.infer<typeof reportResultSchema>['result'];
 export type InsightCatalog = z.infer<typeof insightCatalogSchema>;
 export type InsightValidation = z.infer<typeof insightValidationSchema>;
 export type SampleSet = z.infer<typeof sampleSetSchema>;
+export type SampleSetPage = z.infer<typeof sampleSetPageSchema>;
+export type SampleGroupMember = z.infer<typeof sampleGroupMemberSchema>;
+export type SampleGroupMemberPage = z.infer<typeof sampleGroupMemberPageSchema>;
 export type AiMessage = z.infer<typeof aiMessageSchema>;
 export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
 export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
@@ -299,6 +327,28 @@ async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   return schema.parse(await response.json());
 }
 
+async function sendJson<T>(
+  path: string,
+  method: 'POST' | 'PATCH' | 'DELETE',
+  payload: Record<string, unknown> | null,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  const response = await fetch(path, {
+    method,
+    headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail =
+      body && typeof body === 'object' && 'detail' in body
+        ? String(body.detail)
+        : `Request failed: ${response.status}`;
+    throw new Error(detail);
+  }
+  return schema.parse(await response.json());
+}
+
 export function fileContentUrl(file: Pick<StoredFile, 'file_id'>, projectId?: string) {
   if (projectId) {
     return `/api/v1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.file_id)}/content`;
@@ -306,8 +356,17 @@ export function fileContentUrl(file: Pick<StoredFile, 'file_id'>, projectId?: st
   return `/api/v1/files/${encodeURIComponent(file.file_id)}/content`;
 }
 
-export function listRuns({ limit, offset }: { limit: number; offset: number }) {
+export function listRuns({
+  limit,
+  offset,
+  search,
+}: {
+  limit: number;
+  offset: number;
+  search?: string;
+}) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search?.trim()) params.set('search', search.trim());
   return getJson(`/api/v1/runs?${params.toString()}`, runPageSchema);
 }
 
@@ -315,12 +374,15 @@ export function listProjectRuns({
   limit,
   offset,
   projectId,
+  search,
 }: {
   limit: number;
   offset: number;
   projectId: string;
+  search?: string;
 }) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search?.trim()) params.set('search', search.trim());
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/runs?${params.toString()}`,
     runPageSchema,
@@ -508,6 +570,127 @@ export function listSampleSets(projectId: string, kind?: string) {
   const params = new URLSearchParams({ project_id: projectId });
   if (kind) params.set('kind', kind);
   return getJson(`/api/v1/sample-sets?${params.toString()}`, z.array(sampleSetSchema));
+}
+
+export function listProjectSampleGroups({
+  kind,
+  limit,
+  offset,
+  projectId,
+  search,
+}: {
+  kind?: string;
+  limit: number;
+  offset: number;
+  projectId: string;
+  search?: string;
+}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (kind) params.set('kind', kind);
+  if (search?.trim()) params.set('search', search.trim());
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups?${params.toString()}`,
+    sampleSetPageSchema,
+  );
+}
+
+export function createProjectSampleGroup(
+  projectId: string,
+  payload: {
+    description?: string | null;
+    kind?: string;
+    name: string;
+    sample_ids?: string[];
+  },
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups`,
+    'POST',
+    payload,
+    sampleSetSchema,
+  );
+}
+
+export function patchProjectSampleGroup(
+  projectId: string,
+  sampleSetId: string,
+  payload: {
+    description?: string | null;
+    kind?: string;
+    metadata_json?: Record<string, unknown>;
+    name?: string;
+  },
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}`,
+    'PATCH',
+    payload,
+    sampleSetSchema,
+  );
+}
+
+export async function deleteProjectSampleGroup(
+  projectId: string,
+  sampleSetId: string,
+) {
+  const response = await fetch(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+}
+
+export function listProjectSampleGroupMembers({
+  limit,
+  offset,
+  projectId,
+  sampleSetId,
+  search,
+}: {
+  limit: number;
+  offset: number;
+  projectId: string;
+  sampleSetId: string;
+  search?: string;
+}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (search?.trim()) params.set('search', search.trim());
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members?${params.toString()}`,
+    sampleGroupMemberPageSchema,
+  );
+}
+
+export function addProjectSampleGroupMembers(
+  projectId: string,
+  sampleSetId: string,
+  sampleIds: string[],
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members`,
+    'POST',
+    { sample_ids: sampleIds },
+    sampleSetSchema,
+  );
+}
+
+export function removeProjectSampleGroupMembers(
+  projectId: string,
+  sampleSetId: string,
+  runSampleIds: string[],
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members`,
+    'DELETE',
+    { run_sample_ids: runSampleIds },
+    sampleSetSchema,
+  );
 }
 
 export function getProjectDataContract(projectId: string, dataContractId: string) {

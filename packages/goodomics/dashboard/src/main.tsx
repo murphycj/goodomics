@@ -10,14 +10,12 @@ import { createRoot } from "react-dom/client";
 import { Layout } from "./components/layout/Layout";
 import { getProject } from "./api";
 import { queryClient } from "./lib/queryClient";
-import { CohortsPage } from "./pages/CohortsPage";
 import { DatabasePage } from "./pages/DatabasePage";
 import { HomePage } from "./pages/HomePage";
 import { InsightsPage } from "./pages/InsightsPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
+import { ProjectDataBrowserPage } from "./pages/ProjectDataBrowserPage";
 import { ProjectHomePage } from "./pages/ProjectHomePage";
-import { ProjectRunsPage } from "./pages/ProjectRunsPage";
-import { ProjectSamplesPage } from "./pages/ProjectSamplesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { SampleDetailPage } from "./pages/SampleDetailPage";
@@ -50,6 +48,11 @@ const samplesRoute = createRoute({
   path: "/project/$projectId/samples",
   component: SamplesRouteAdapter,
 });
+const sampleGroupsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/sample-groups",
+  component: SampleGroupsRouteAdapter,
+});
 const sampleDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/samples/$sampleId",
@@ -64,11 +67,6 @@ const insightsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/insights",
   component: InsightsRouteAdapter,
-});
-const cohortsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/project/$projectId/cohorts",
-  component: CohortsPage,
 });
 const policiesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -93,10 +91,10 @@ const router = createRouter({
     runDetailRoute,
     runsRoute,
     samplesRoute,
+    sampleGroupsRoute,
     sampleDetailRoute,
     reportsRoute,
     insightsRoute,
-    cohortsRoute,
     policiesRoute,
     databaseRoute,
     settingsRoute,
@@ -124,13 +122,21 @@ function ProjectRouteAdapter() {
 /** Route adapter that injects the current project id into the runs page. */
 function RunsRouteAdapter() {
   const { projectId } = runsRoute.useParams();
-  return <ProjectRunsPage projectId={projectId} />;
+  return <ProjectDataBrowserPage activeTab="runs" projectId={projectId} />;
 }
 
 /** Route adapter that injects the current project id into the samples page. */
 function SamplesRouteAdapter() {
   const { projectId } = samplesRoute.useParams();
-  return <ProjectSamplesPage projectId={projectId} />;
+  return <ProjectDataBrowserPage activeTab="samples" projectId={projectId} />;
+}
+
+/** Route adapter that injects the current project id into the sample groups page. */
+function SampleGroupsRouteAdapter() {
+  const { projectId } = sampleGroupsRoute.useParams();
+  return (
+    <ProjectDataBrowserPage activeTab="sample-groups" projectId={projectId} />
+  );
 }
 
 /** Route adapter that injects the current project id into the reports page. */

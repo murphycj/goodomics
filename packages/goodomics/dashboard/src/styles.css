@@ -95,7 +95,7 @@ code {
   line-height: 1.45;
 }
 
-.goodomics-data-grid [aria-colindex="1"] {
+.goodomics-data-grid.goodomics-data-grid--selection-first-column [aria-colindex="1"] {
   justify-content: center;
   padding-inline: 0;
 }

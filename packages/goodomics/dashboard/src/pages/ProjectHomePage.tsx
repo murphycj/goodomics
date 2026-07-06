@@ -328,7 +328,6 @@ function dateScore(value: string | null) {
 
 function iconForRecentKind(kind: ProjectRecentKind) {
   return {
-    cohorts: Users,
     database: Database,
     insight: BarChart3,
     policies: FileText,
@@ -336,6 +335,7 @@ function iconForRecentKind(kind: ProjectRecentKind) {
     run: PlayCircle,
     runs: PlayCircle,
     sample: FlaskConical,
+    "sample-groups": Users,
     samples: FlaskConical,
     settings: Database,
   }[kind];

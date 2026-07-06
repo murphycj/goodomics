@@ -39,6 +39,26 @@ from goodomics.storage.database import create_async_database_engine
 RecordT = TypeVar("RecordT", bound=SQLModel)
 
 
+async def _repair_current_schema(connection: Any) -> None:
+    """Apply tiny current-schema repairs for local pre-release SQLite catalogs."""
+
+    if connection.dialect.name != "sqlite":
+        return
+    sample_set_columns = (
+        await connection.exec_driver_sql("PRAGMA table_info(sample_sets)")
+    ).fetchall()
+    if not sample_set_columns:
+        return
+    column_names = {str(row[1]) for row in sample_set_columns}
+    if "updated_at" not in column_names:
+        await connection.exec_driver_sql(
+            "ALTER TABLE sample_sets ADD COLUMN updated_at DATETIME"
+        )
+        await connection.exec_driver_sql(
+            "UPDATE sample_sets SET updated_at = created_at WHERE updated_at IS NULL"
+        )
+
+
 @dataclass(frozen=True)
 class CatalogWriteResult:
     project: ProjectRecord
@@ -251,11 +271,19 @@ class SampleSetRecord(SQLModel, table=True):
     description: str | None = None
     definition_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
 class SampleSetMemberRecord(SQLModel, table=True):
     __tablename__ = "sample_set_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "sample_set_id",
+            "run_sample_id",
+            name="uq_sample_set_members_sample_set_run_sample",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     sample_set_id: int = Field(foreign_key="sample_sets.id", index=True)
@@ -289,6 +317,7 @@ class SQLModelGoodomicsStore:
     async def ensure_schema(self) -> None:
         async with self._get_engine().begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
+            await _repair_current_schema(connection)
 
     async def ensure_default_project(self) -> Project:
         return await self.ensure_project(DEFAULT_PROJECT_SLUG)
@@ -588,6 +617,7 @@ class SQLModelGoodomicsStore:
                     description=sample_set.description,
                     definition_json=dict(sample_set.definition_json),
                     created_at=sample_set.created_at,
+                    updated_at=sample_set.updated_at,
                     metadata_json=dict(sample_set.metadata_json),
                 )
                 for sample_set in sample_sets or []
