@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  ChevronDown,
   ExternalLink,
   LayoutGrid,
   MoreHorizontal,
@@ -9,8 +10,8 @@ import {
   RefreshCw,
   Save,
   Search,
-  Settings2,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import GridLayout, { type Layout } from "react-grid-layout";
@@ -18,12 +19,12 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import {
   createReport,
+  deleteReport,
   executeReport,
   getProject,
   listInsights,
   listReports,
   listSampleSets,
-  patchProject,
   patchReport,
   type SavedInsight,
   type SavedReport,
@@ -67,14 +68,19 @@ import { cn } from "../lib/utils";
 
 type ReportMode = "list" | "detail";
 type ReportContextKind = "cohort" | "sample";
+type ReportTarget =
+  | { mode: "list" }
+  | { mode: "new" }
+  | { mode: "view"; reportRef: string }
+  | { mode: "edit"; reportRef: string };
 
 /** Report index and grid-layout builder for composing saved insights. */
 export function ReportsPage({
-  initialReportId,
   projectId,
+  target = { mode: "list" },
 }: {
-  initialReportId?: string | null;
   projectId: string;
+  target?: ReportTarget;
 }) {
   const project = useQuery({
     queryKey: ["project", projectId],
@@ -92,14 +98,17 @@ export function ReportsPage({
     queryKey: ["sample-sets", projectId, "cohort"],
     queryFn: () => listSampleSets(projectId, "cohort"),
   });
-  const [mode, setMode] = useState<ReportMode>(initialReportId ? "detail" : "list");
+  const mode: ReportMode = target.mode === "list" ? "list" : "detail";
+  const isNewReport = target.mode === "new";
+  const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(
-    initialReportId ?? null,
-  );
   const selectedReport = reports.data?.find(
-    (report) => report.report_id === selectedReportId,
+    (report) =>
+      target.mode !== "list" &&
+      target.mode !== "new" &&
+      (report.report_id === target.reportRef || report.url_slug === target.reportRef),
   );
+  const selectedReportId = selectedReport?.report_id ?? null;
   const [editMode, setEditMode] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [addSearch, setAddSearch] = useState("");
@@ -113,12 +122,16 @@ export function ReportsPage({
   const [items, setItems] = useState<ReportItem[]>([]);
 
   useEffect(() => {
-    if (!initialReportId) return;
-    setSelectedReportId(initialReportId);
-    setMode("detail");
-  }, [initialReportId]);
-
-  useEffect(() => {
+    if (isNewReport) {
+      setName("Project report");
+      setDescription("");
+      setContextKind("cohort");
+      setSampleId("");
+      setRunSampleId("");
+      setItems([]);
+      setEditMode(true);
+      return;
+    }
     if (!selectedReport) return;
     setName(selectedReport.name);
     setDescription(selectedReport.description ?? "");
@@ -130,7 +143,8 @@ export function ReportsPage({
     setSampleId(stringValue(context.sample_id));
     setRunSampleId(stringValue(context.run_sample_id));
     setItems(readReportItems(selectedReport.config));
-  }, [selectedReport]);
+    setEditMode(target.mode === "edit");
+  }, [isNewReport, selectedReport, target.mode]);
 
   useEffect(() => {
     if (sampleSetId || (sampleSets.data ?? []).length === 0) return;
@@ -144,7 +158,7 @@ export function ReportsPage({
     retry: false,
   });
   const saveReport = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (continueEditing: boolean) => {
       const config = {
         version: 1,
         title: name,
@@ -165,20 +179,23 @@ export function ReportsPage({
       }
       return createReport({ project_id: projectId, name, description, config });
     },
-    onSuccess: (saved) => {
-      setSelectedReportId(saved.report_id);
-      setMode("detail");
+    onSuccess: (saved, continueEditing) => {
       void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
       void queryClient.invalidateQueries({
         queryKey: ["report-result", projectId, saved.report_id],
       });
+      window.location.href = continueEditing
+        ? `/project/${projectId}/reports/${encodeURIComponent(saved.url_slug)}/edit`
+        : `/project/${projectId}/reports`;
     },
   });
-  const defaultReport = useMutation({
-    mutationFn: (reportId: string) =>
-      patchProject(projectId, { default_report_id: reportId }),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+  const removeReport = useMutation({
+    mutationFn: (reportId: string) => deleteReport(reportId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      window.location.href = `/project/${projectId}/reports`;
+    },
   });
   const layout = useMemo<Layout>(
     () =>
@@ -207,18 +224,6 @@ export function ReportsPage({
     [items],
   );
 
-  const openNewReport = () => {
-    setSelectedReportId(null);
-    setName("Project report");
-    setDescription("");
-    setContextKind("cohort");
-    setSampleId("");
-    setRunSampleId("");
-    setItems([]);
-    setEditMode(true);
-    setMode("detail");
-  };
-
   if (mode === "list") {
     return (
       <Page title="Reports" subtitle="Create and manage reusable project reports.">
@@ -232,7 +237,11 @@ export function ReportsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button onClick={openNewReport}>
+          <Button
+            onClick={() => {
+              window.location.href = `/project/${projectId}/reports/new`;
+            }}
+          >
             <Plus className="h-4 w-4" /> New report
           </Button>
         </div>
@@ -242,8 +251,9 @@ export function ReportsPage({
               defaultReportId={project.data?.default_report_id ?? null}
               reports={filterReports(data, search)}
               onOpen={(report) => {
-                setSelectedReportId(report.report_id);
-                setMode("detail");
+                window.location.href = `/project/${projectId}/reports/${encodeURIComponent(
+                  report.url_slug,
+                )}`;
               }}
             />
           )}
@@ -254,122 +264,155 @@ export function ReportsPage({
 
   return (
     <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-4">
-      <section className="shrink-0 border-b border-[#dce3eb] pb-4">
-        <div className="flex items-center gap-3">
-          <Button size="icon" variant="ghost" onClick={() => setMode("list")}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <LayoutGrid className="h-5 w-5 text-[#16784a]" />
-          <Input
-            className="h-10 flex-1 text-lg font-semibold"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button variant="outline" onClick={() => void result.refetch()}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4" /> Add
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-h-[86vh] max-w-[980px] gap-0 overflow-hidden p-0">
-              <DialogHeader className="border-b border-[#dce3eb] px-5 py-4">
-                <DialogTitle>Add insight to report</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 overflow-y-auto p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#dce3eb] bg-[#f7f8fa] p-4">
-                  <div>
-                    <div className="text-sm font-semibold">Create a new insight</div>
-                    <div className="mt-1 text-xs text-[#657082]">
-                      Build a chart, metric, or table, then add it to this report.
+      {isEditingDetails ? (
+        <ReportBuilderHeader
+          description={description}
+          isSaving={saveReport.isPending}
+          title={name}
+          onBack={() => {
+            window.location.href = selectedReport?.url_slug
+              ? `/project/${projectId}/reports/${encodeURIComponent(
+                  selectedReport.url_slug,
+                )}`
+              : `/project/${projectId}/reports`;
+          }}
+          onDescriptionChange={setDescription}
+          onSave={() => saveReport.mutate(false)}
+          onSaveContinue={() => saveReport.mutate(true)}
+          onTitleChange={setName}
+        />
+      ) : (
+        <ReportReadHeader
+          description={description}
+          isDeleting={removeReport.isPending}
+          isLayoutEditing={editMode}
+          projectName={project.data?.name ?? projectId}
+          report={selectedReport}
+          title={name}
+          onBack={() => {
+            window.location.href = `/project/${projectId}/reports`;
+          }}
+          onChangeLayout={() => setEditMode(true)}
+          onDelete={() => {
+            if (!selectedReportId) return;
+            const confirmed = window.confirm(
+              `Delete "${name}"? This cannot be undone.`,
+            );
+            if (confirmed) removeReport.mutate(selectedReportId);
+          }}
+          onEdit={() => {
+            if (!selectedReport?.url_slug) return;
+            window.location.href = `/project/${projectId}/reports/${encodeURIComponent(
+              selectedReport.url_slug,
+            )}/edit`;
+          }}
+          onRefresh={() => void result.refetch()}
+          onSaveLayout={() => saveReport.mutate(false)}
+        />
+      )}
+
+      {isEditingDetails || editMode ? (
+        <section className="shrink-0 border-b border-[#dce3eb] pb-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+              <DialogTrigger asChild>
+                <Button disabled={!editMode}>
+                  <Plus className="h-4 w-4" /> Add
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-h-[86vh] max-w-[980px] gap-0 overflow-hidden p-0">
+                <DialogHeader className="border-b border-[#dce3eb] px-5 py-4">
+                  <DialogTitle>Add insight to report</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 overflow-y-auto p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#dce3eb] bg-[#f7f8fa] p-4">
+                    <div>
+                      <div className="text-sm font-semibold">
+                        Create a new insight
+                      </div>
+                      <div className="mt-1 text-xs text-[#657082]">
+                        Build a chart, metric, or table, then add it to this report.
+                      </div>
                     </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        window.location.href = `/project/${projectId}/insights/new`;
+                      }}
+                    >
+                      <ExternalLink className="h-4 w-4" /> New insight
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      window.location.href = `/project/${projectId}/insights?new=1`;
-                    }}
-                  >
-                    <ExternalLink className="h-4 w-4" /> New insight
-                  </Button>
+                  <div className="relative max-w-[320px]">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+                    <Input
+                      className="pl-9"
+                      placeholder="Search insights..."
+                      value={addSearch}
+                      onChange={(event) => setAddSearch(event.target.value)}
+                    />
+                  </div>
+                  <AsyncBlock query={insights} empty="No saved insights yet.">
+                    {(data) => (
+                      <div className="max-h-[52vh] overflow-y-auto rounded-lg border border-[#dce3eb]">
+                        <InsightListTable
+                          insights={filterInsights(data, addSearch)}
+                          selectedInsightIds={selectedInsightIds}
+                          onAdd={(insight) =>
+                            setItems((current) => {
+                              if (
+                                current.some(
+                                  (item) => item.insight_id === insight.insight_id,
+                                )
+                              ) {
+                                return current;
+                              }
+                              return [
+                                ...current,
+                                {
+                                  insight_id: insight.insight_id,
+                                  x: 0,
+                                  y: Infinity,
+                                  w: 6,
+                                  h: 5,
+                                },
+                              ];
+                            })
+                          }
+                        />
+                      </div>
+                    )}
+                  </AsyncBlock>
                 </div>
-                <div className="relative max-w-[320px]">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
-                  <Input
-                    className="pl-9"
-                    placeholder="Search insights..."
-                    value={addSearch}
-                    onChange={(event) => setAddSearch(event.target.value)}
-                  />
-                </div>
-                <AsyncBlock query={insights} empty="No saved insights yet.">
-                  {(data) => (
-                    <div className="max-h-[52vh] overflow-y-auto rounded-lg border border-[#dce3eb]">
-                      <InsightListTable
-                        insights={filterInsights(data, addSearch)}
-                        selectedInsightIds={selectedInsightIds}
-                        onAdd={(insight) =>
-                          setItems((current) => {
-                            if (
-                              current.some(
-                                (item) => item.insight_id === insight.insight_id,
-                              )
-                            ) {
-                              return current;
-                            }
-                            return [
-                              ...current,
-                              {
-                                insight_id: insight.insight_id,
-                                x: 0,
-                                y: Infinity,
-                                w: 6,
-                                h: 5,
-                              },
-                            ];
-                          })
-                        }
-                      />
-                    </div>
-                  )}
-                </AsyncBlock>
-              </div>
-            </DialogContent>
-          </Dialog>
-          <Button variant="secondary" onClick={() => setEditMode((value) => !value)}>
-            <LayoutGrid className="h-4 w-4" /> {editMode ? "View" : "Edit layout"}
-          </Button>
-          <Button
-            disabled={!selectedReportId}
-            variant="outline"
-            onClick={() => selectedReportId && defaultReport.mutate(selectedReportId)}
-          >
-            <Settings2 className="h-4 w-4" /> Default
-          </Button>
-          <Button disabled={saveReport.isPending} onClick={() => saveReport.mutate()}>
-            <Save className="h-4 w-4" /> Save
-          </Button>
-        </div>
-        <Input
-          className="mt-3"
-          placeholder="Enter description (optional)"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-        />
-        <ReportContextControls
-          contextKind={contextKind}
-          runSampleId={runSampleId}
-          sampleId={sampleId}
-          sampleSetId={sampleSetId}
-          sampleSets={sampleSets.data ?? []}
-          onContextKindChange={setContextKind}
-          onRunSampleIdChange={setRunSampleId}
-          onSampleIdChange={setSampleId}
-          onSampleSetIdChange={setSampleSetId}
-        />
-      </section>
+              </DialogContent>
+            </Dialog>
+            <Button
+              variant="secondary"
+              onClick={() => setEditMode((value) => !value)}
+            >
+              <LayoutGrid className="h-4 w-4" /> {editMode ? "View" : "Edit layout"}
+            </Button>
+            {selectedReportId && isEditingDetails ? (
+              <Button variant="outline" onClick={() => void result.refetch()}>
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </Button>
+            ) : null}
+          </div>
+          {isEditingDetails ? (
+            <ReportContextControls
+              contextKind={contextKind}
+              runSampleId={runSampleId}
+              sampleId={sampleId}
+              sampleSetId={sampleSetId}
+              sampleSets={sampleSets.data ?? []}
+              onContextKindChange={setContextKind}
+              onRunSampleIdChange={setRunSampleId}
+              onSampleIdChange={setSampleId}
+              onSampleSetIdChange={setSampleSetId}
+            />
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="min-h-0 flex-1">
         <Card className="mt-0 min-h-0 overflow-auto p-0">
@@ -420,7 +463,11 @@ export function ReportsPage({
                         {insightTitle(insights.data ?? [], item.insight_id)}
                       </span>
                       <InsightCardMenu
-                        insightId={item.insight_id}
+                        insightRef={
+                          insights.data?.find(
+                            (insight) => insight.insight_id === item.insight_id,
+                          )?.url_slug ?? item.insight_id
+                        }
                         projectId={projectId}
                         onRefresh={() => void result.refetch()}
                         onRemove={() =>
@@ -446,14 +493,204 @@ export function ReportsPage({
   );
 }
 
+function ReportBuilderHeader({
+  title,
+  description,
+  isSaving,
+  onBack,
+  onDescriptionChange,
+  onSave,
+  onSaveContinue,
+  onTitleChange,
+}: {
+  title: string;
+  description: string;
+  isSaving: boolean;
+  onBack: () => void;
+  onDescriptionChange: (value: string) => void;
+  onSave: () => void;
+  onSaveContinue: () => void;
+  onTitleChange: (value: string) => void;
+}) {
+  const hasDescription = Boolean(description.trim());
+  const [showDescription, setShowDescription] = useState(hasDescription);
+
+  useEffect(() => {
+    if (description.trim()) setShowDescription(true);
+  }, [description]);
+
+  return (
+    <section className="shrink-0 border-b border-[#dce3eb] pb-4">
+      <div className="flex items-center gap-3">
+        <Button size="icon" variant="ghost" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <LayoutGrid className="h-5 w-5 text-[#16784a]" />
+        <Input
+          className="h-10 flex-1 text-lg font-semibold"
+          value={title}
+          onChange={(event) => onTitleChange(event.target.value)}
+        />
+        <Button
+          className="bg-[#eef2f6] text-[#526071] hover:bg-[#e3e9f0] hover:text-[#1f2937]"
+          type="button"
+          variant="ghost"
+          onClick={() => setShowDescription(true)}
+        >
+          {hasDescription ? (
+            <>
+              <Pencil className="h-4 w-4" /> Description
+            </>
+          ) : (
+            <>
+              <Plus className="h-4 w-4" /> Description
+            </>
+          )}
+        </Button>
+        <div className="flex overflow-hidden rounded-lg shadow-sm">
+          <Button
+            className="rounded-r-none"
+            disabled={isSaving}
+            onClick={onSave}
+          >
+            <Save className="h-4 w-4" /> Save
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label="Save options"
+                className="rounded-l-none border-l border-[#16864f] px-2.5"
+                disabled={isSaving}
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[240px]">
+              <DropdownMenuItem onClick={onSaveContinue}>
+                <Save className="h-4 w-4" /> Save & continue editing
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      {showDescription ? (
+        <div className="mt-3 flex items-start gap-2">
+          <textarea
+            className="h-10 min-h-10 flex-1 resize-y rounded-md border border-[#d6dee8] bg-white px-3 py-2 text-sm text-[#1f2937] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#16784a] focus:ring-2 focus:ring-[#16784a]/15"
+            placeholder="Enter description (optional)"
+            rows={1}
+            value={description}
+            onChange={(event) => onDescriptionChange(event.target.value)}
+          />
+          <Button
+            aria-label="Hide description"
+            className="mt-1 shrink-0 text-[#657082] hover:text-[#1f2937]"
+            size="icon"
+            type="button"
+            variant="ghost"
+            onClick={() => setShowDescription(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ReportReadHeader({
+  description,
+  isDeleting,
+  isLayoutEditing,
+  projectName,
+  report,
+  title,
+  onBack,
+  onChangeLayout,
+  onDelete,
+  onEdit,
+  onRefresh,
+  onSaveLayout,
+}: {
+  description: string;
+  isDeleting: boolean;
+  isLayoutEditing: boolean;
+  projectName: string;
+  report: SavedReport | undefined;
+  title: string;
+  onBack: () => void;
+  onChangeLayout: () => void;
+  onDelete: () => void;
+  onEdit: () => void;
+  onRefresh: () => void;
+  onSaveLayout: () => void;
+}) {
+  return (
+    <section className="shrink-0 border-b border-[#dce3eb] pb-4">
+      <div className="flex items-start gap-3">
+        <Button size="icon" variant="ghost" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <LayoutGrid className="mt-2 h-5 w-5 shrink-0 text-[#16784a]" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-xl font-semibold text-[#1d2430]">
+            {title}
+          </h1>
+          <div className="mt-1 text-xs font-medium uppercase text-[#657082]">
+            {projectName}
+          </div>
+          {description.trim() ? (
+            <p className="mt-2 max-w-[860px] text-sm text-[#526071]">
+              {description}
+            </p>
+          ) : null}
+        </div>
+        {isLayoutEditing ? (
+          <Button onClick={onSaveLayout}>
+            <Save className="h-4 w-4" /> Save layout
+          </Button>
+        ) : null}
+        <Button disabled={!report} variant="outline" onClick={onRefresh}>
+          <RefreshCw className="h-4 w-4" /> Refresh
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="Report actions"
+              disabled={!report || isDeleting}
+              size="icon"
+              variant="ghost"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Report</DropdownMenuLabel>
+            <DropdownMenuItem onClick={onEdit}>
+              <Pencil className="h-4 w-4" /> Edit details
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onChangeLayout}>
+              <LayoutGrid className="h-4 w-4" /> Change layout
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-[#b42318]" onClick={onDelete}>
+              <Trash2 className="h-4 w-4" /> Delete report
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </section>
+  );
+}
+
 /** Per-insight action menu shown in report cards. */
 function InsightCardMenu({
-  insightId,
+  insightRef,
   onRefresh,
   onRemove,
   projectId,
 }: {
-  insightId: string;
+  insightRef: string;
   onRefresh: () => void;
   onRemove: () => void;
   projectId: string;
@@ -474,9 +711,9 @@ function InsightCardMenu({
         <DropdownMenuLabel>Insight</DropdownMenuLabel>
         <DropdownMenuItem
           onClick={() => {
-            window.location.href = `/project/${projectId}/insights?insight=${encodeURIComponent(
-              insightId,
-            )}`;
+            window.location.href = `/project/${projectId}/insights/${encodeURIComponent(
+              insightRef,
+            )}/edit`;
           }}
         >
           <Pencil className="h-4 w-4" /> Edit insight

@@ -48,10 +48,12 @@ from goodomics.server.db.catalog import CATALOG_TABLES, EDITABLE_TABLES
 from goodomics.server.db.models import (
     CohortRecord,
     InsightRecord,
+    InsightResultCacheRecord,
     InsightRevisionRecord,
     QCPolicyRecord,
     RenderedReportRecord,
     ReportRecord,
+    ReportResultCacheRecord,
     ReportRevisionRecord,
 )
 from goodomics.server.insight_catalog import insight_catalog
@@ -246,6 +248,7 @@ class SavedInsightRead(SavedInsightBase):
     """Saved insight response with stable ID and timestamps."""
 
     insight_id: str
+    url_slug: str
     project_id: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -278,6 +281,7 @@ class SavedReportRead(SavedReportBase):
     """Saved report response with stable ID and timestamps."""
 
     report_id: str
+    url_slug: str
     project_id: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -1388,7 +1392,7 @@ async def list_insights(
         if project_id is not None:
             statement = statement.where(InsightRecord.project_id == project_id)
         rows = (await session.exec(statement)).all()
-    return [SavedInsightRead.model_validate(row.model_dump()) for row in rows]
+    return [_saved_insight_read(row) for row in rows]
 
 
 @router.get("/insights/catalog")
@@ -1441,21 +1445,21 @@ async def create_insight(
     return await get_insight(insight_id, request)
 
 
-@router.get("/insights/{insight_id}", response_model=SavedInsightRead)
-async def get_insight(insight_id: str, request: Request) -> SavedInsightRead:
-    """Return a saved insight by ID."""
+@router.get("/insights/{insight_ref}", response_model=SavedInsightRead)
+async def get_insight(insight_ref: str, request: Request) -> SavedInsightRead:
+    """Return a saved insight by ID or stable URL slug."""
 
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(InsightRecord, insight_id)
+        row = await _get_insight_by_ref(session, insight_ref)
     if row is None:
         raise HTTPException(status_code=404, detail="Insight not found")
-    return SavedInsightRead.model_validate(row.model_dump())
+    return _saved_insight_read(row)
 
 
-@router.patch("/insights/{insight_id}", response_model=SavedInsightRead)
+@router.patch("/insights/{insight_ref}", response_model=SavedInsightRead)
 async def patch_insight(
-    insight_id: str, payload: SavedInsightPatch, request: Request
+    insight_ref: str, payload: SavedInsightPatch, request: Request
 ) -> SavedInsightRead:
     """Patch a saved insight and record a revision when config changes."""
 
@@ -1463,9 +1467,10 @@ async def patch_insight(
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session(request) as session:
-            insight = await session.get(InsightRecord, insight_id)
+            insight = await _get_insight_by_ref(session, insight_ref)
             if insight is None:
                 raise HTTPException(status_code=404, detail="Insight not found")
+            insight_id = insight.insight_id
             updated_at = datetime.now(UTC)
             for key, value in values.items():
                 setattr(insight, key, value)
@@ -1480,23 +1485,46 @@ async def patch_insight(
                     )
                 )
             await session.commit()
-    return await get_insight(insight_id, request)
+    return await get_insight(insight_ref, request)
 
 
-@router.get("/insights/{insight_id}/export.yaml")
-async def export_insight_yaml(insight_id: str, request: Request) -> Response:
+@router.delete("/insights/{insight_ref}", status_code=204)
+async def delete_insight(insight_ref: str, request: Request) -> Response:
+    """Delete a saved insight, its revisions, and cached results."""
+
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        insight = await _get_insight_by_ref(session, insight_ref)
+        if insight is None:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        insight_id = insight.insight_id
+        insight_revision_id = cast(Any, InsightRevisionRecord.insight_id)
+        insight_cache_id = cast(Any, InsightResultCacheRecord.insight_id)
+        await session.exec(
+            delete(InsightRevisionRecord).where(insight_revision_id == insight_id)
+        )
+        await session.exec(
+            delete(InsightResultCacheRecord).where(insight_cache_id == insight_id)
+        )
+        await session.delete(insight)
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/insights/{insight_ref}/export.yaml")
+async def export_insight_yaml(insight_ref: str, request: Request) -> Response:
     """Export a saved insight as portable YAML."""
 
-    insight = await get_insight(insight_id, request)
+    insight = await get_insight(insight_ref, request)
     body = yaml.safe_dump(_saved_insight_export(insight), sort_keys=False)
     return Response(content=body, media_type="application/yaml")
 
 
-@router.get("/insights/{insight_id}/export.json")
-async def export_insight_json(insight_id: str, request: Request) -> dict[str, Any]:
+@router.get("/insights/{insight_ref}/export.json")
+async def export_insight_json(insight_ref: str, request: Request) -> dict[str, Any]:
     """Export a saved insight as portable JSON."""
 
-    insight = await get_insight(insight_id, request)
+    insight = await get_insight(insight_ref, request)
     return _saved_insight_export(insight)
 
 
@@ -1524,9 +1552,9 @@ async def execute_adhoc_insight(
     return InsightResultRead(result=result)
 
 
-@router.post("/insights/{insight_id}/execute", response_model=InsightResultRead)
+@router.post("/insights/{insight_ref}/execute", response_model=InsightResultRead)
 async def execute_saved_insight(
-    insight_id: str,
+    insight_ref: str,
     payload: InsightExecuteRequest,
     request: Request,
 ) -> InsightResultRead:
@@ -1534,7 +1562,7 @@ async def execute_saved_insight(
 
     await _ensure_schema(request)
     async with _session(request) as session:
-        insight = await session.get(InsightRecord, insight_id)
+        insight = await _get_insight_by_ref(session, insight_ref)
         if insight is None:
             raise HTTPException(status_code=404, detail="Insight not found")
         project_id = payload.project_id or insight.project_id
@@ -1570,7 +1598,7 @@ async def list_reports(
         if project_id is not None:
             statement = statement.where(ReportRecord.project_id == project_id)
         rows = (await session.exec(statement)).all()
-    return [SavedReportRead.model_validate(row.model_dump()) for row in rows]
+    return [_saved_report_read(row) for row in rows]
 
 
 @router.post("/reports", response_model=SavedReportRead, status_code=201)
@@ -1668,21 +1696,21 @@ async def render_standalone_report(
     )
 
 
-@router.get("/reports/{report_id}", response_model=SavedReportRead)
-async def get_saved_report(report_id: str, request: Request) -> SavedReportRead:
-    """Return a saved report by ID."""
+@router.get("/reports/{report_ref}", response_model=SavedReportRead)
+async def get_saved_report(report_ref: str, request: Request) -> SavedReportRead:
+    """Return a saved report by ID or stable URL slug."""
 
     await _ensure_schema(request)
     async with _session(request) as session:
-        row = await session.get(ReportRecord, report_id)
+        row = await _get_report_by_ref(session, report_ref)
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    return SavedReportRead.model_validate(row.model_dump())
+    return _saved_report_read(row)
 
 
-@router.patch("/reports/{report_id}", response_model=SavedReportRead)
+@router.patch("/reports/{report_ref}", response_model=SavedReportRead)
 async def patch_report(
-    report_id: str, payload: SavedReportPatch, request: Request
+    report_ref: str, payload: SavedReportPatch, request: Request
 ) -> SavedReportRead:
     """Patch a saved report and record a revision when config changes."""
 
@@ -1690,9 +1718,10 @@ async def patch_report(
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session(request) as session:
-            report = await session.get(ReportRecord, report_id)
+            report = await _get_report_by_ref(session, report_ref)
             if report is None:
                 raise HTTPException(status_code=404, detail="Report not found")
+            report_id = report.report_id
             updated_at = datetime.now(UTC)
             for key, value in values.items():
                 setattr(report, key, value)
@@ -1707,29 +1736,62 @@ async def patch_report(
                     )
                 )
             await session.commit()
-    return await get_saved_report(report_id, request)
+    return await get_saved_report(report_ref, request)
 
 
-@router.get("/reports/{report_id}/export.yaml")
-async def export_report_yaml(report_id: str, request: Request) -> Response:
+@router.delete("/reports/{report_ref}", status_code=204)
+async def delete_report(report_ref: str, request: Request) -> Response:
+    """Delete a saved report, its revisions, cached results, and default pointer."""
+
+    await _ensure_schema(request)
+    async with _session(request) as session:
+        report = await _get_report_by_ref(session, report_ref)
+        if report is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        report_id = report.report_id
+        default_project_rows = (
+            await session.exec(
+                select(ProjectRecord).where(
+                    ProjectRecord.default_report_id == report_id
+                )
+            )
+        ).all()
+        for project_row in default_project_rows:
+            project_row.default_report_id = None
+            session.add(project_row)
+        report_revision_id = cast(Any, ReportRevisionRecord.report_id)
+        report_cache_id = cast(Any, ReportResultCacheRecord.report_id)
+        await session.exec(
+            delete(ReportRevisionRecord).where(report_revision_id == report_id)
+        )
+        await session.exec(
+            delete(ReportResultCacheRecord).where(report_cache_id == report_id)
+        )
+        await session.delete(report)
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/reports/{report_ref}/export.yaml")
+async def export_report_yaml(report_ref: str, request: Request) -> Response:
     """Export a saved report as portable YAML."""
 
-    report = await get_saved_report(report_id, request)
+    report = await get_saved_report(report_ref, request)
     body = yaml.safe_dump(_saved_report_export(report), sort_keys=False)
     return Response(content=body, media_type="application/yaml")
 
 
-@router.get("/reports/{report_id}/export.json")
-async def export_report_json(report_id: str, request: Request) -> dict[str, Any]:
+@router.get("/reports/{report_ref}/export.json")
+async def export_report_json(report_ref: str, request: Request) -> dict[str, Any]:
     """Export a saved report as portable JSON."""
 
-    report = await get_saved_report(report_id, request)
+    report = await get_saved_report(report_ref, request)
     return _saved_report_export(report)
 
 
-@router.post("/reports/{report_id}/execute", response_model=ReportResultRead)
+@router.post("/reports/{report_ref}/execute", response_model=ReportResultRead)
 async def execute_saved_report(
-    report_id: str,
+    report_ref: str,
     payload: ReportExecuteRequest,
     request: Request,
 ) -> ReportResultRead:
@@ -1737,7 +1799,7 @@ async def execute_saved_report(
 
     await _ensure_schema(request)
     async with _session(request) as session:
-        report = await session.get(ReportRecord, report_id)
+        report = await _get_report_by_ref(session, report_ref)
         if report is None:
             raise HTTPException(status_code=404, detail="Report not found")
         project_id = payload.project_id or report.project_id
@@ -2491,10 +2553,100 @@ async def _get_project_sample_group_by_ref(
     )
 
 
+def _saved_insight_read(row: InsightRecord) -> SavedInsightRead:
+    values = row.model_dump()
+    values["url_slug"] = _saved_entity_url_slug(
+        row.insight_id,
+        row.name,
+        prefix="ins",
+        fallback="insight",
+    )
+    return SavedInsightRead.model_validate(values)
+
+
+def _saved_report_read(row: ReportRecord) -> SavedReportRead:
+    values = row.model_dump()
+    values["url_slug"] = _saved_entity_url_slug(
+        row.report_id,
+        row.name,
+        prefix="rep",
+        fallback="report",
+    )
+    return SavedReportRead.model_validate(values)
+
+
+async def _get_insight_by_ref(
+    session: AsyncSession,
+    insight_ref: str,
+) -> InsightRecord | None:
+    row = await session.get(InsightRecord, insight_ref)
+    if row is not None:
+        return row
+    url_key = _saved_entity_url_key_from_slug(insight_ref, prefix="ins")
+    if not url_key:
+        return None
+    rows = (await session.exec(select(InsightRecord))).all()
+    return next(
+        (
+            candidate
+            for candidate in rows
+            if _saved_entity_url_key(candidate.insight_id, prefix="ins") == url_key
+        ),
+        None,
+    )
+
+
+async def _get_report_by_ref(
+    session: AsyncSession,
+    report_ref: str,
+) -> ReportRecord | None:
+    row = await session.get(ReportRecord, report_ref)
+    if row is not None:
+        return row
+    url_key = _saved_entity_url_key_from_slug(report_ref, prefix="rep")
+    if not url_key:
+        return None
+    rows = (await session.exec(select(ReportRecord))).all()
+    return next(
+        (
+            candidate
+            for candidate in rows
+            if _saved_entity_url_key(candidate.report_id, prefix="rep") == url_key
+        ),
+        None,
+    )
+
+
+def _saved_entity_url_slug(
+    entity_id: str,
+    name: str,
+    *,
+    prefix: str,
+    fallback: str,
+) -> str:
+    """Return a stable readable URL segment for an insight or report."""
+
+    return (
+        f"{_saved_entity_url_key(entity_id, prefix=prefix)}-"
+        f"{_slugify_url_part(name, fallback=fallback)}"
+    )
+
+
+def _saved_entity_url_key(entity_id: str, *, prefix: str) -> str:
+    digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()
+    return f"{prefix}_{digest[:10]}"
+
+
+def _saved_entity_url_key_from_slug(value: str, *, prefix: str) -> str | None:
+    match = re.match(rf"^({re.escape(prefix)}_[0-9a-f]{{10}})(?:-|$)", value)
+    return match.group(1) if match else None
+
+
 def _sample_set_url_slug(row: SampleSetRecord) -> str:
     """Return a stable readable URL segment for a sample group."""
 
-    return f"{_sample_set_url_key(row)}-{_slugify_url_part(row.name)}"
+    name_slug = _slugify_url_part(row.name, fallback="sample-group")
+    return f"{_sample_set_url_key(row)}-{name_slug}"
 
 
 def _sample_set_url_key(row: SampleSetRecord) -> str:
@@ -2507,9 +2659,9 @@ def _sample_set_url_key_from_slug(value: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _slugify_url_part(value: str) -> str:
+def _slugify_url_part(value: str, *, fallback: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug or "sample-group"
+    return slug or fallback
 
 
 async def _sample_group_members_page(

@@ -192,6 +192,7 @@ const dataContractSchema = z.object({
 
 const insightSchema = z.object({
   insight_id: z.string(),
+  url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
@@ -202,6 +203,7 @@ const insightSchema = z.object({
 
 const reportSchema = z.object({
   report_id: z.string(),
+  url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
@@ -779,6 +781,13 @@ export async function patchInsight(
   return insightSchema.parse(await response.json());
 }
 
+export async function deleteInsight(insightId: string) {
+  const response = await fetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+}
+
 export async function executeInsight({
   insightId,
   projectId,
@@ -844,6 +853,13 @@ export async function patchReport(
   });
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
   return reportSchema.parse(await response.json());
+}
+
+export async function deleteReport(reportId: string) {
+  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
 }
 
 export async function executeReport({

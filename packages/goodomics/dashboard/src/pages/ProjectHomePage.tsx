@@ -296,16 +296,14 @@ function buildRecentViews({
   ];
   const reportViews = reports.slice(0, 3).map((report) => ({
     description: "Report",
-    href: `/project/${projectId}/reports`,
+    href: `/project/${projectId}/reports/${encodeURIComponent(report.url_slug)}`,
     icon: FileText,
     timestamp: report.updated_at,
     title: report.name,
   }));
   const insightViews = insights.slice(0, 3).map((insight) => ({
     description: "Insight",
-    href: `/project/${projectId}/insights?insight=${encodeURIComponent(
-      insight.insight_id,
-    )}`,
+    href: `/project/${projectId}/insights/${encodeURIComponent(insight.url_slug)}/edit`,
     icon: BarChart3,
     timestamp: insight.updated_at,
     title: insight.name,

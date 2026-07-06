@@ -61,6 +61,10 @@ import { queryClient } from "../lib/queryClient";
 
 type Store = DatabaseTable["store"];
 type InsightMode = "list" | "detail";
+type InsightTarget =
+  | { mode: "list" }
+  | { mode: "new" }
+  | { mode: "edit"; insightRef: string };
 type QueryMode = "contract" | "table";
 type ContextKind = "cohort" | "sample";
 type BuilderMode =
@@ -77,7 +81,13 @@ type ResultPolicyMode =
   | "export_full_data";
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
-export function InsightsPage({ projectId }: { projectId: string }) {
+export function InsightsPage({
+  projectId,
+  target = { mode: "list" },
+}: {
+  projectId: string;
+  target?: InsightTarget;
+}) {
   // These queries feed both the list view and the builder. Contracts provide the
   // semantic route; database tables provide the lower-level escape hatch.
   const insights = useQuery({
@@ -104,14 +114,21 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     queryKey: ["sample-sets", projectId, "cohort"],
     queryFn: () => listSampleSets(projectId, "cohort"),
   });
-  const [mode, setMode] = useState<InsightMode>("list");
+  const [mode, setMode] = useState<InsightMode>(
+    target.mode === "list" ? "list" : "detail",
+  );
   const [search, setSearch] = useState("");
   const [selectedInsightId, setSelectedInsightId] = useState<string | null>(
     null,
   );
   const selectedInsight = insights.data?.find(
-    (insight) => insight.insight_id === selectedInsightId,
+    (insight) =>
+      (target.mode === "edit" &&
+        (insight.insight_id === target.insightRef ||
+          insight.url_slug === target.insightRef)) ||
+      insight.insight_id === selectedInsightId,
   );
+  const effectiveSelectedInsightId = selectedInsight?.insight_id ?? selectedInsightId;
   const [title, setTitle] = useState("New insight");
   const [description, setDescription] = useState("");
   const [contextKind, setContextKind] = useState<ContextKind>("cohort");
@@ -198,11 +215,12 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   };
 
   useEffect(() => {
-    // URL parameters are only an entry affordance from other dashboard pages.
-    // Once consumed, clear them so normal builder edits do not keep rewriting
-    // browser history or reopening the same insight on refresh.
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("new") === "1") {
+    if (target.mode === "list") {
+      setMode("list");
+      return;
+    }
+    setMode("detail");
+    if (target.mode === "new") {
       setSelectedInsightId(null);
       setTitle("New insight");
       setDescription("");
@@ -220,16 +238,10 @@ export function InsightsPage({ projectId }: { projectId: string }) {
       setAdvancedSql("");
       setQueryMode("contract");
       setSeries([blankSeries(0, "", "")]);
-      setMode("detail");
-      window.history.replaceState(null, "", window.location.pathname);
       return;
     }
-    const insightId = params.get("insight");
-    if (!insightId) return;
-    setSelectedInsightId(insightId);
-    setMode("detail");
-    window.history.replaceState(null, "", window.location.pathname);
-  }, []);
+    if (selectedInsight) setSelectedInsightId(selectedInsight.insight_id);
+  }, [selectedInsight, target.mode]);
 
   useEffect(() => {
     if (sampleSetId || (sampleSets.data ?? []).length === 0) return;
@@ -448,10 +460,15 @@ export function InsightsPage({ projectId }: { projectId: string }) {
   const preview = useQuery({
     // Preview executes the config as the user edits. React Query keys include
     // the generated config object so chart changes naturally refetch.
-    queryKey: ["insight-preview", projectId, selectedInsightId, previewConfig],
+    queryKey: [
+      "insight-preview",
+      projectId,
+      effectiveSelectedInsightId,
+      previewConfig,
+    ],
     queryFn: () =>
       executeInsight({
-        insightId: selectedInsightId ?? undefined,
+        insightId: effectiveSelectedInsightId ?? undefined,
         projectId,
         config: previewConfig,
       }),
@@ -472,8 +489,8 @@ export function InsightsPage({ projectId }: { projectId: string }) {
     // Saved insights keep the same config shape that report templates consume,
     // so the dashboard builder and portable YAML/JSON exports stay aligned.
     mutationFn: (continueEditing: boolean) =>
-      selectedInsightId
-        ? patchInsight(selectedInsightId, { name: title, description, config })
+      effectiveSelectedInsightId
+        ? patchInsight(effectiveSelectedInsightId, { name: title, description, config })
         : createInsight({
             project_id: projectId,
             name: title,
@@ -482,36 +499,16 @@ export function InsightsPage({ projectId }: { projectId: string }) {
           }),
     onSuccess: (saved, continueEditing) => {
       setSelectedInsightId(saved.insight_id);
-      setMode(continueEditing ? "detail" : "list");
       void queryClient.invalidateQueries({ queryKey: ["insights", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
       void queryClient.invalidateQueries({
         queryKey: ["insight-preview", projectId, saved.insight_id],
       });
+      window.location.href = continueEditing
+        ? `/project/${projectId}/insights/${encodeURIComponent(saved.url_slug)}/edit`
+        : `/project/${projectId}/insights`;
     },
   });
-
-  const openNewInsight = () => {
-    // Preserve the currently selected contract/field when starting another
-    // insight; this makes repeated chart authoring less jumpy.
-    setSelectedInsightId(null);
-    setTitle("New insight");
-    setDescription("");
-    setContextKind("cohort");
-    setSampleId("");
-    setRunSampleId("");
-    setBuilderMode("contract_metrics");
-    setVisualization("bar");
-    setLinkerKind("auto");
-    setResultPolicyMode("preview");
-    setResultLimit(5000);
-    setRandomSeed("goodomics");
-    setDisplayOptions(DEFAULT_DISPLAY_OPTIONS);
-    setAdvancedSql("");
-    setQueryMode("contract");
-    setSeries([blankSeries(0, contractId, fieldId)]);
-    setMode("detail");
-  };
 
   if (mode === "list") {
     return (
@@ -529,7 +526,11 @@ export function InsightsPage({ projectId }: { projectId: string }) {
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button onClick={openNewInsight}>
+          <Button
+            onClick={() => {
+              window.location.href = `/project/${projectId}/insights/new`;
+            }}
+          >
             <Plus className="h-4 w-4" /> New insight
           </Button>
         </div>
@@ -539,8 +540,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
               insights={filterInsights(data, search)}
               reportCounts={reportCounts}
               onOpen={(insight) => {
-                setSelectedInsightId(insight.insight_id);
-                setMode("detail");
+                window.location.href = `/project/${projectId}/insights/${encodeURIComponent(
+                  insight.url_slug,
+                )}/edit`;
               }}
             />
           )}
@@ -555,7 +557,9 @@ export function InsightsPage({ projectId }: { projectId: string }) {
         description={description}
         isSaving={save.isPending}
         title={title}
-        onBack={() => setMode("list")}
+        onBack={() => {
+          window.location.href = `/project/${projectId}/insights`;
+        }}
         onDescriptionChange={setDescription}
         onSave={() => save.mutate(false)}
         onSaveContinue={() => save.mutate(true)}

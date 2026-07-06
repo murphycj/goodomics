@@ -78,10 +78,40 @@ const reportsRoute = createRoute({
   path: "/project/$projectId/reports",
   component: ReportsRouteAdapter,
 });
+const reportNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/reports/new",
+  component: ReportNewRouteAdapter,
+});
+const reportDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/reports/$reportRef",
+  component: ReportDetailRouteAdapter,
+});
+const reportEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/reports/$reportRef/edit",
+  component: ReportEditRouteAdapter,
+});
 const insightsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/insights",
   component: InsightsRouteAdapter,
+});
+const insightNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/insights/new",
+  component: InsightNewRouteAdapter,
+});
+const insightDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/insights/$insightRef",
+  component: InsightDetailRouteAdapter,
+});
+const insightEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/project/$projectId/insights/$insightRef/edit",
+  component: InsightEditRouteAdapter,
 });
 const policiesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -112,7 +142,13 @@ const router = createRouter({
     sampleGroupEditRoute,
     sampleDetailRoute,
     reportsRoute,
+    reportNewRoute,
+    reportDetailRoute,
+    reportEditRoute,
     insightsRoute,
+    insightNewRoute,
+    insightDetailRoute,
+    insightEditRoute,
     policiesRoute,
     databaseRoute,
     settingsRoute,
@@ -129,7 +165,7 @@ function ProjectRouteAdapter() {
   if (project.data?.default_report_id) {
     return (
       <ReportsPage
-        initialReportId={project.data.default_report_id}
+        target={{ mode: "view", reportRef: project.data.default_report_id }}
         projectId={projectId}
       />
     );
@@ -199,10 +235,46 @@ function ReportsRouteAdapter() {
   return <ReportsPage projectId={projectId} />;
 }
 
+/** Route adapter for creating a report. */
+function ReportNewRouteAdapter() {
+  const { projectId } = reportNewRoute.useParams();
+  return <ReportsPage projectId={projectId} target={{ mode: "new" }} />;
+}
+
+/** Route adapter for viewing a report. */
+function ReportDetailRouteAdapter() {
+  const { projectId, reportRef } = reportDetailRoute.useParams();
+  return <ReportsPage projectId={projectId} target={{ mode: "view", reportRef }} />;
+}
+
+/** Route adapter for editing a report. */
+function ReportEditRouteAdapter() {
+  const { projectId, reportRef } = reportEditRoute.useParams();
+  return <ReportsPage projectId={projectId} target={{ mode: "edit", reportRef }} />;
+}
+
 /** Route adapter that injects the current project id into the insights page. */
 function InsightsRouteAdapter() {
   const { projectId } = insightsRoute.useParams();
   return <InsightsPage projectId={projectId} />;
+}
+
+/** Route adapter for creating an insight. */
+function InsightNewRouteAdapter() {
+  const { projectId } = insightNewRoute.useParams();
+  return <InsightsPage projectId={projectId} target={{ mode: "new" }} />;
+}
+
+/** Route adapter for viewing an insight. */
+function InsightDetailRouteAdapter() {
+  const { projectId, insightRef } = insightDetailRoute.useParams();
+  return <InsightsPage projectId={projectId} target={{ mode: "edit", insightRef }} />;
+}
+
+/** Route adapter for editing an insight. */
+function InsightEditRouteAdapter() {
+  const { projectId, insightRef } = insightEditRoute.useParams();
+  return <InsightsPage projectId={projectId} target={{ mode: "edit", insightRef }} />;
 }
 
 /** Route adapter for run detail params. */

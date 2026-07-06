@@ -1427,6 +1427,12 @@ def test_insight_and_report_round_trip_execute_and_cache(
         },
     )
     assert created_insight.status_code == 201
+    insight_slug = created_insight.json()["url_slug"]
+    assert re.match(r"^ins_[0-9a-f]{10}-runs-by-kind$", insight_slug)
+
+    fetched_insight_by_slug = client.get(f"/api/v1/insights/{insight_slug}")
+    assert fetched_insight_by_slug.status_code == 200
+    assert fetched_insight_by_slug.json()["insight_id"] == "runs-by-kind"
 
     first_result = client.post(
         "/api/v1/insights/runs-by-kind/execute",
@@ -1456,13 +1462,19 @@ def test_insight_and_report_round_trip_execute_and_cache(
         },
     )
     assert created_report.status_code == 201
+    report_slug = created_report.json()["url_slug"]
+    assert re.match(r"^rep_[0-9a-f]{10}-project-overview$", report_slug)
+
+    fetched_report_by_slug = client.get(f"/api/v1/reports/{report_slug}")
+    assert fetched_report_by_slug.status_code == 200
+    assert fetched_report_by_slug.json()["report_id"] == "project-overview"
 
     yaml_export = client.get("/api/v1/reports/project-overview/export.yaml")
     assert yaml_export.status_code == 200
     assert "report_id: project-overview" in yaml_export.text
 
     report_result = client.post(
-        "/api/v1/reports/project-overview/execute",
+        f"/api/v1/reports/{report_slug}/execute",
         json={"project_id": project_id, "refresh": True},
     )
     assert report_result.status_code == 200
@@ -1474,6 +1486,28 @@ def test_insight_and_report_round_trip_execute_and_cache(
     )
     assert default_project.status_code == 200
     assert default_project.json()["default_report_id"] == "project-overview"
+
+    renamed_report = client.patch(
+        f"/api/v1/reports/{report_slug}",
+        json={"name": "Project summary"},
+    )
+    assert renamed_report.status_code == 200
+    assert renamed_report.json()["url_slug"].endswith("-project-summary")
+    assert (
+        renamed_report.json()["url_slug"].split("-", 1)[0]
+        == report_slug.split("-", 1)[0]
+    )
+    old_report_slug_after_rename = client.get(f"/api/v1/reports/{report_slug}")
+    assert old_report_slug_after_rename.status_code == 200
+    assert old_report_slug_after_rename.json()["name"] == "Project summary"
+
+    deleted_report = client.delete(f"/api/v1/reports/{report_slug}")
+    assert deleted_report.status_code == 204
+    project_after_delete = client.get(f"/api/v1/projects/{project_id}")
+    assert project_after_delete.status_code == 200
+    assert project_after_delete.json()["default_report_id"] is None
+    deleted_insight = client.delete(f"/api/v1/insights/{insight_slug}")
+    assert deleted_insight.status_code == 204
 
     rejected = client.post(
         "/api/v1/insights/execute",
