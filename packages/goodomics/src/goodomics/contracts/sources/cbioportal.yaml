@@ -148,11 +148,11 @@ contracts:
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:gene_panel_matrix
     name: cBioPortal gene panel matrix
-    data_type: contract_payload
+    data_type: result_payload
     producer_tool: cbioportal
     value_type: matrix
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload, sample, contract]
     mcp_description: cBioPortal gene panel coverage matrix payload.
     metadata_json: *cbio_metadata
@@ -169,21 +169,21 @@ contracts:
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:categorical
     name: cBioPortal generic assay categorical values
-    data_type: contract_payload
+    data_type: result_payload
     producer_tool: cbioportal
     value_type: categorical
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload, sample, feature]
     mcp_description: Categorical generic assay data imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:binary
     name: cBioPortal generic assay binary values
-    data_type: contract_payload
+    data_type: result_payload
     producer_tool: cbioportal
     value_type: boolean
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload, sample, feature]
     mcp_description: Binary generic assay data imported from cBioPortal.
     metadata_json: *cbio_metadata

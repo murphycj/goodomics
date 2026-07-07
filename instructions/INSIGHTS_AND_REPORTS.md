@@ -15,7 +15,7 @@ policies, report inheritance, and AI-created insight guardrails.
   - `contract_metrics`: cohort-level metric panels and “add all numeric fields”.
     The cohort selector appears below the series constructor as the first
     advanced filter option in this mode.
-  - `sample_detail`: sample or processed-sample inspection.
+  - `sample_detail`: sample or run/sample link inspection.
   - `comparison`: aligned multi-series plots such as RNA vs protein.
   - `variant_table`: variant, feature-call, and generic table outputs.
 - SQL access is selected from the per-series data source picker instead of a

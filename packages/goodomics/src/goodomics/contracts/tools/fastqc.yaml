@@ -50,13 +50,13 @@ contracts:
           tool_context: raw
           multiqc_module: general_stats
   - data_contract_id: fastqc:raw:payloads
-    name: FastQC raw payload tables
-    data_type: contract_payload
+    name: FastQC raw result payloads
+    data_type: result_payload
     producer_tool: fastqc
     value_type: table
     entity_grain: run
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload]
     mcp_description: Source tables and plot payloads from FastQC raw outputs.
     metadata_json:

@@ -20,13 +20,13 @@ contracts:
       tool: bbtools
       tool_context: bbsplit
   - data_contract_id: bbtools:bbsplit:payloads
-    name: BBTools BBSplit payload tables
-    data_type: contract_payload
+    name: BBTools BBSplit result payloads
+    data_type: result_payload
     producer_tool: bbtools
     value_type: table
     entity_grain: run
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload]
     mcp_description: Source tables and plot payloads from BBTools BBSplit outputs.
     metadata_json:

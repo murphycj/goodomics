@@ -88,13 +88,13 @@ contracts:
           producer_module: multiqc_salmon
           multiqc_module: multiqc_salmon
   - data_contract_id: salmon:payloads
-    name: Salmon payload tables
-    data_type: contract_payload
+    name: Salmon result payloads
+    data_type: result_payload
     producer_tool: salmon
     value_type: table
     entity_grain: run
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload]
     mcp_description: Source tables and plot payloads from Salmon outputs.
     metadata_json:

@@ -20,13 +20,13 @@ contracts:
       tool: cutadapt
       tool_context:
   - data_contract_id: cutadapt:payloads
-    name: Cutadapt payload tables
-    data_type: contract_payload
+    name: Cutadapt result payloads
+    data_type: result_payload
     producer_tool: cutadapt
     value_type: table
     entity_grain: run
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload]
     mcp_description: Source tables and plot payloads from Cutadapt outputs.
     metadata_json:

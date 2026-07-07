@@ -4,7 +4,7 @@ Use a custom parser when your lab has a table, dataframe, notebook object, or
 internal result format that Goodomics does not parse yet.
 
 Users write parsers. Goodomics handles ingestion: creating runs, samples,
-processed samples, data imports, data contracts, and DuckDB analytical records.
+sample/run links, data imports, data contracts, and DuckDB analytical records.
 
 ## Minimal notebook parser
 

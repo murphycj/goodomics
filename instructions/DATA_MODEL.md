@@ -34,10 +34,10 @@ The guiding identity rule:
 | Sample           | Biological or material sample users recognize and navigate  | Stable sample identity across runs                                                 |
 | Data import      | Data entry/audit event                                      | Records how files/results entered Goodomics                                        |
 | Run              | Computational, benchmark, or imported analytical result     | Captures one result-producing execution or result snapshot                         |
-| Processed sample | A sample within a specific run                              | Internal `run_sample` grain for latest-run lookup, comparison, and metrics         |
+| Run sample      | A sample included in a specific run                         | Simple `run_sample` linker for sample/run lookup, comparison, and metrics          |
 | File             | Original or derived file                                    | Tracks physical evidence and outputs                                               |
 | Data contract     | Smallest logical queryable dataset                          | Declares data type, provenance, and query behavior                                 |
-| Sample set       | Saved group of processed samples                            | General primitive behind cohorts and reference sets                                |
+| Sample set       | Saved group of sample/run links                             | General primitive behind cohorts and reference sets                                |
 | Cohort           | Sample set used for grouping or comparison                  | Specialized sample set                                                             |
 | Reference set    | Sample set used as a baseline                               | Specialized sample set                                                             |
 | Feature          | Thing being measured                                        | Metric, gene, transcript, protein, antibody, variant, interval, pathway, signature |
@@ -50,10 +50,10 @@ Short version:
 | Sample               | The biological sample users care about                      |
 | Data import          | How data entered Goodomics                                  |
 | Run                  | Analytical or computational result represented in Goodomics |
-| Processed sample     | That sample in that run                                     |
+| Run sample          | That sample in that run                                     |
 | Data contract         | What kind of data was produced                              |
 | Observation          | A value/call/measurement inside that contract                |
-| Cohort/reference set | Selected processed samples                                  |
+| Cohort/reference set | Selected sample/run links                                 |
 
 ## SQL Control Store
 
@@ -93,8 +93,8 @@ show the latest run data for that sample while still preserving older runs for
 comparison. The same sample can be processed by many pipelines, rerun by a newer
 pipeline version, or appear in many imports.
 
-Use sample metadata for stable biological context. Use runs and processed
-samples for execution context, tool outputs, and per-run status.
+Use sample metadata for stable biological context. Use runs and sample/run links
+for execution context and tool outputs.
 
 | Column          | Notes                                     |
 | --------------- | ----------------------------------------- |
@@ -168,26 +168,35 @@ relevant data contracts.
 
 ### `run_samples`
 
-Internal linker/result table. User-facing wording should usually be
-**processed sample** or **sample result**.
+Simple linker table meaning "this run includes this sample." User-facing wording
+should usually be **run sample**, **sample in run**, or **sample/run link**.
 
-This is the key sample/run comparison grain. A sample can have many processed
-samples across time as users rerun the same pipeline, run new tools, or ingest
-new source data. Latest-run views for a sample should be derived from
-`run_samples` joined to `runs`, usually ordered by run timestamps/status rather
-than stored as a denormalized cache.
+This is the key sample/run comparison grain. A sample can have many run/sample
+links across time as users rerun the same pipeline, run new tools, or ingest new
+source data. Latest-run views for a sample should be derived from `run_samples`
+joined to `runs`, usually ordered by run timestamps/status rather than stored as
+a denormalized cache.
 
 | Column          | Notes                                                            |
 | --------------- | ---------------------------------------------------------------- |
 | `id`            | Integer primary key                                              |
-| `run_sample_id` | Stable readable processed-sample ID, unique/indexed              |
-| `project_id`    | Owning project integer ID                                        |
-| `run_id`        | Integer run ID that processed or produced this result            |
-| `sample_id`     | Nullable integer sample ID                                       |
-| `assay`         | Nullable assay label                                             |
+| `run_sample_id` | Stable readable run/sample link ID, unique/indexed               |
+| `run_id`        | Integer run ID                                                   |
+| `sample_id`     | Required integer sample ID                                       |
 | `role`          | Optional role, such as `tumor`, `normal`, `control`, `truth_set` |
-| `status`        | Processed-sample status                                          |
-| `metadata_json` | Flexible per-run sample metadata                                 |
+
+### `run_relationships`
+
+Directed run-to-run provenance edges. MultiQC uses this to represent the report
+run as a consolidation artifact over inferred upstream sample runs.
+
+| Column              | Notes                                                        |
+| ------------------- | ------------------------------------------------------------ |
+| `id`                | Integer primary key                                          |
+| `source_run_id`     | Integer source run ID                                        |
+| `target_run_id`     | Integer target run ID                                        |
+| `relationship_type` | Relationship label, such as `summarizes`                     |
+| `metadata_json`     | Source-specific relationship context                         |
 
 ### `data_contracts`
 
@@ -282,7 +291,7 @@ nullable ownership columns.
 | `project_id`      | Owning project integer ID                                          |
 | `data_import_id`  | Nullable linked data import integer ID                             |
 | `run_id`          | Nullable linked run integer ID                                     |
-| `run_sample_id`   | Nullable linked processed sample integer ID                        |
+| `run_sample_id`   | Nullable linked sample/run link integer ID                        |
 | `sample_id`       | Nullable linked raw sample integer ID                              |
 | `data_contract_id` | Nullable linked data contract integer ID                            |
 | `link_role`       | Relationship role, such as `source`, `index`, `derived`, `preview` |
@@ -305,14 +314,14 @@ General saved grouping primitive.
 
 ### `sample_set_members`
 
-Usually points to processed samples, not raw samples. Reference sets for QC
+Usually points to sample/run links, not raw samples. Reference sets for QC
 should generally be `run_sample_id` based.
 
 | Column          | Notes                                |
 | --------------- | ------------------------------------ |
 | `id`            | Integer primary key                  |
 | `sample_set_id` | Owning sample set integer ID         |
-| `run_sample_id` | Included processed sample integer ID |
+| `run_sample_id` | Included sample/run link integer ID |
 
 ### Other SQL Control Tables
 
@@ -473,10 +482,13 @@ Unified table for generic sample/run metrics: `sample_metrics`.
 | ----------------- | ------------------------------------------------- |
 | `data_contract_id` | Logical contract integer ID this metric belongs to |
 | `run_id`          | Producing/importing run integer ID                |
-| `run_sample_id`   | Nullable processed sample integer ID              |
+| `run_sample_id`   | Nullable sample/run link integer ID              |
 | `sample_id`       | Nullable sample integer ID shortcut for filtering |
 | `field_id`        | Data contract field integer ID                     |
 | `source_file_id`  | Nullable source file integer ID                   |
+| `source_observation_id` | Optional source component key, such as `multiqc:r1` |
+| `source_observation_label` | Optional source component display label, such as `SRR3192396 R1` |
+| `source_observation_metadata_json` | Source-specific observation context |
 | `value_type`      | `numeric`, `string`, or `json`                    |
 | `value_numeric`   | Numeric value when `value_type = numeric`         |
 | `value_string`    | String/categorical value when `value_type = string` |
@@ -486,8 +498,8 @@ Recommended physical layouts:
 
 | Table/layout                      | Physical order                                      | Optimized for                                            |
 | --------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| `sample_metrics`                  | `data_contract_id, run_id, run_sample_id, field_id`  | Canonical table and fast run/sample detail queries       |
-| `sample_metric_numeric_by_metric` | `data_contract_id, field_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
+| `sample_metrics`                  | `data_contract_id, run_id, run_sample_id, field_id, source_observation_id` | Canonical table and fast run/sample detail queries       |
+| `sample_metric_numeric_by_metric` | `data_contract_id, field_id, source_observation_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
 
 Keep direct table/SQL access available as an advanced mode, but use contracts and
 fields as the default report, insight, dashboard, and MCP query surface.
@@ -550,7 +562,7 @@ metric groups, interval sets, and reference feature universes.
 
 Goodomics does not maintain a separate sample/contract availability fact table.
 Observed availability is derived from the typed fact tables and
-`contract_payloads`: if a run sample has rows for a `data_contract_id`, that
+`result_payloads`: if a run sample has rows for a `data_contract_id`, that
 contract is observed for that run sample. If a source needs to preserve
 "profiled but no emitted rows" semantics later, add an explicit source-specific
 fact or coverage table for that use case rather than duplicating every
@@ -566,7 +578,7 @@ signature scores, log2 copy-number values, and quantitative assay outputs.
 | ----------------- | --------------------------------------------------------------------------- |
 | `data_contract_id` | Logical feature-value contract integer ID                                    |
 | `run_id`          | Producing/importing run integer ID                                          |
-| `run_sample_id`   | Processed sample integer ID                                                 |
+| `run_sample_id`   | Run sample integer ID                                                 |
 | `sample_id`       | Sample integer ID shortcut for filtering                                    |
 | `feature_id`      | Gene/transcript/protein/pathway/signature/generic entity integer ID         |
 | `value`           | Numeric value                                                               |
@@ -593,7 +605,7 @@ discrete instead of continuous numeric values.
 | ----------------- | ------------------------------------------------------------------------------ |
 | `data_contract_id` | Logical call contract integer ID                                                |
 | `run_id`          | Producing/importing run integer ID                                             |
-| `run_sample_id`   | Processed sample integer ID                                                    |
+| `run_sample_id`   | Run sample integer ID                                                    |
 | `sample_id`       | Sample integer ID shortcut for filtering                                       |
 | `feature_id`      | Feature integer ID being called                                                |
 | `call_code`       | Stable call code, such as `AMP`, `HOMDEL`, `GAIN`, `LOSS`, `present`, `absent` |
@@ -639,7 +651,7 @@ Per-sample measurements over genomic intervals.
 | ----------------- | ---------------------------------------------------------------------- |
 | `data_contract_id` | Logical interval-value contract integer ID                              |
 | `run_id`          | Producing/importing run integer ID                                     |
-| `run_sample_id`   | Processed sample integer ID                                            |
+| `run_sample_id`   | Run sample integer ID                                            |
 | `sample_id`       | Sample integer ID shortcut for filtering                               |
 | `interval_id`     | Genomic interval integer ID                                            |
 | `value`           | Numeric value                                                          |
@@ -657,7 +669,7 @@ Segmented copy-number data. Keep this separate from gene-level CNA calls.
 | ------------------- | ---------------------------------------- |
 | `data_contract_id`   | Logical segment contract integer ID       |
 | `run_id`            | Producing/importing run integer ID       |
-| `run_sample_id`     | Processed sample integer ID              |
+| `run_sample_id`     | Run sample integer ID              |
 | `sample_id`         | Sample integer ID shortcut for filtering |
 | `genome_build`      | Reference build                          |
 | `contig`            | Chromosome/contig                        |
@@ -740,7 +752,7 @@ Sample-level variant calls.
 | ------------------ | ---------------------------------------- |
 | `data_contract_id`  | Logical variant-call contract integer ID  |
 | `run_id`           | Producing/importing run integer ID       |
-| `run_sample_id`    | Processed sample integer ID              |
+| `run_sample_id`    | Run sample integer ID              |
 | `sample_id`        | Sample integer ID shortcut for filtering |
 | `variant_id`       | Variant integer ID                       |
 | `genotype`         | Genotype/call                            |
@@ -757,7 +769,7 @@ Recommended derived layouts:
 
 | Layout      | Physical order                                           | Optimized for                               |
 | ----------- | -------------------------------------------------------- | ------------------------------------------- |
-| Canonical   | `data_contract_id, run_sample_id, variant_id`             | Fetch all calls for one processed sample    |
+| Canonical   | `data_contract_id, run_sample_id, variant_id`             | Fetch all calls for one sample/run link    |
 | By variant  | `data_contract_id, variant_id, run_sample_id`             | Exact variant recurrence and carrier lookup |
 | By position | `genome_build, contig, pos, end_pos, variant_id`         | Genomic range queries                       |
 | By gene     | `feature_id, data_contract_id, run_sample_id, variant_id` | Gene-centric variant queries                |
@@ -790,7 +802,7 @@ Sample-level calls for structural variant events.
 | ----------------------- | ----------------------------------------- |
 | `data_contract_id`       | Logical SV contract integer ID             |
 | `run_id`                | Producing/importing run integer ID        |
-| `run_sample_id`         | Processed sample integer ID               |
+| `run_sample_id`         | Run sample integer ID               |
 | `sample_id`             | Sample integer ID shortcut for filtering  |
 | `structural_variant_id` | Structural variant event integer ID       |
 | `call_status`           | Example: `called`, `filtered`, `uncalled` |
@@ -816,7 +828,7 @@ or longitudinal data.
 | `event_id`      | Event integer ID                                                     |
 | `subject_id`    | Subject integer ID                                                   |
 | `sample_id`     | Nullable sample integer ID                                           |
-| `run_sample_id` | Nullable processed sample integer ID                                 |
+| `run_sample_id` | Nullable sample/run link integer ID                                 |
 | `event_type`    | Example: `collection`, `treatment`, `diagnosis`, `outcome`, `status` |
 | `start_time`    | Nullable start time or relative time                                 |
 | `end_time`      | Nullable end time                                                    |
@@ -826,30 +838,43 @@ or longitudinal data.
 
 Recommended physical order: `subject_id, event_type, start_time`.
 
-### `contract_payloads`
+### `result_payloads`
 
-Logical payloads for results that are naturally consumed as one object or are
-not yet worth promoting into typed facts.
+Logical payloads for non-scalar result data that is naturally consumed as one
+object, such as plot-ready x/y series, compact tables, matrices, arrays, or
+small source-shaped objects.
 
 | Column            | Notes                                                                |
 | ----------------- | -------------------------------------------------------------------- |
 | `payload_id`      | Payload integer ID                                                   |
 | `data_contract_id` | Logical contract integer ID this payload belongs to                   |
 | `run_id`          | Producing/importing run integer ID                                   |
-| `run_sample_id`   | Nullable processed sample integer ID                                 |
+| `run_sample_id`   | Nullable sample/run link integer ID                                 |
+| `sample_id`       | Nullable sample integer ID shortcut for filtering                    |
+| `field_id`        | Data contract field for the logical payload type                     |
 | `payload_name`    | Stable payload name                                                  |
-| `payload_kind`    | Example: `table`, `matrix`, `json`, `array`, `log`, `report_section` |
-| `storage_format`  | Example: `parquet`, `arrow`, `json`, `text`, `html`                  |
+| `payload_kind`    | Example: `xy_series`, `table`, `matrix`, `json`                      |
+| `storage_format`  | Example: `inline_json`, `source_file`                                |
 | `path`            | Local path if materialized                                           |
 | `uri`             | Object-store or remote URI if applicable                             |
-| `schema_json`     | Optional schema for tabular payloads                                 |
+| `schema_json`     | Plotting/shape contract for `data_json`                              |
 | `row_count`       | Nullable row count                                                   |
 | `source_file_id`  | Nullable source file integer ID                                      |
-| `metadata_json`   | Flexible payload metadata                                            |
+| `source_observation_id` | Optional source component key, such as `multiqc:r1`           |
+| `source_observation_label` | Optional source component display label                      |
+| `source_observation_metadata_json` | Source-specific observation context                 |
+| `data_json`       | Actual raw analytical payload data                                   |
+| `metadata_json`   | Minimal semantic/provenance metadata, not duplicated payload rows     |
 
-Payloads are the escape hatch, not the destination for hot analytical queries.
-Promote payload contents into typed tables when users need filters, joins,
-cohort comparisons, or dashboards over those rows.
+Result payloads should contain raw analytical data, not renderer configuration.
+For imported reports such as MultiQC, keep renderer config in the stored source
+file and reference that file through `source_file_id`. If database-side
+filtering/sorting inside large payload contents becomes necessary later, add a
+separate row/cell table for that specific need.
+
+For `payload_kind = "xy_series"`, prefer `schema_json.shape = "xy_pairs"` and
+store `data_json` as `[[x, y], ...]`. The `schema_json.columns`, `x`, and `y`
+entries name and describe those pair positions for plotting and preview.
 
 ### `gene_alteration_state`
 
@@ -859,7 +884,7 @@ expression outliers, methylation calls, protein calls, and other typed sources.
 
 | Column               | Notes                                                                                         |
 | -------------------- | --------------------------------------------------------------------------------------------- |
-| `run_sample_id`      | Processed sample integer ID                                                                   |
+| `run_sample_id`      | Run sample integer ID                                                                   |
 | `sample_id`          | Sample integer ID shortcut                                                                    |
 | `subject_id`         | Nullable subject integer ID shortcut                                                          |
 | `feature_id`         | Usually a gene feature integer ID                                                             |
@@ -919,7 +944,7 @@ Examples:
 | `sample_variant_calls`            | Yes                              | Call belongs to one variant-call contract                   |
 | `copy_number_segments`            | Yes                              | Segment belongs to one segment contract                     |
 | `sample_structural_variant_calls` | Yes                              | SV call belongs to one SV contract                          |
-| `contract_payloads`                | Yes                              | Payload belongs to one logical contract                     |
+| `result_payloads`                 | Yes                              | Payload belongs to one logical contract                     |
 | `variant_annotations`             | Usually yes                      | Annotation meaning/source can vary by contract              |
 | `variants`                        | No                               | Canonical variant identity is shared                       |
 | `features`                        | No                               | Shared feature dictionary                                  |
@@ -1056,7 +1081,7 @@ Members:
 | `1`           | `5`           |
 | `1`           | `6`           |
 
-The reference set includes processed samples from the RNA-seq 3.18 run. It does
+The reference set includes sample/run links from the RNA-seq 3.18 run. It does
 not include raw sample `P001_Tumor_RNA` by itself, because that sample was also
 processed by RNA-seq 3.19.
 

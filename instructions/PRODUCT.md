@@ -17,7 +17,7 @@ context over time.
 
 Use `instructions/DATA_MODEL.md` for detailed data model terminology, SQL
 control table direction, DuckDB analytical table direction, data contracts,
-processed samples, files, and MCP/data-query concepts. Keep this file focused
+sample/run links, files, and MCP/data-query concepts. Keep this file focused
 on product direction, user-facing framing, adoption path, boundaries, and
 priorities.
 
@@ -232,7 +232,7 @@ The ingestion and analytical storage hierarchy should stay explicit:
   gene-centric lookup, or region-centric lookup.
 
 Use `instructions/DATA_MODEL.md` as the canonical reference for data model terms
-and table direction, including processed samples, data contracts, observations,
+and table direction, including sample/run links, data contracts, observations,
 SQL control tables, DuckDB analytical tables, and derived query layouts.
 
 ## Core Concepts
@@ -242,10 +242,10 @@ The user-facing model should stay approachable:
 ```text
 Sample = what was processed.
 Run = what happened.
-Processed sample = that sample in that run.
+Run sample = that sample in that run.
 Data contract = what kind of data was produced.
 Observation = a value, call, or measurement inside that contract.
-Cohort or reference set = selected processed samples.
+Cohort or reference set = selected sample/run links.
 ```
 
 Goodomics should expose bioinformatics-shaped concepts without becoming a LIMS.
@@ -282,7 +282,7 @@ goodomics_bundle/
 - Add derived analytical tables or views for common sample-, metric-, gene-, and
   region-centric queries when useful
 - Create and export report templates for workflow integration
-- Create cohorts from previous processed samples
+- Create cohorts from previous sample/run links
 - Compare new runs against historical cohorts and trusted references
 - Define visual thresholds for metrics
 - Version QC policies, report templates, cohorts, references, and review

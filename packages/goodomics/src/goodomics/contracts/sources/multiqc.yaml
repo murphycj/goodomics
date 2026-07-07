@@ -4,13 +4,13 @@ source:
   name: MultiQC
 contracts:
   - data_contract_id: multiqc:payloads
-    name: MultiQC report payload tables
-    data_type: contract_payload
+    name: MultiQC report result payloads
+    data_type: result_payload
     producer_tool: multiqc
     value_type: table
     entity_grain: run
-    primary_table: contract_payloads
-    physical_tables: [contract_payloads]
+    primary_table: result_payloads
+    physical_tables: [result_payloads]
     query_modes: [payload]
     mcp_description: Report-level source tables and plot payloads parsed from MultiQC outputs.
     metadata_json:
