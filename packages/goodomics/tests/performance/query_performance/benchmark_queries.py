@@ -134,7 +134,7 @@ RUN_WIDE_QUERIES: tuple[str, ...] = (
     """,
     """
     SELECT *
-    FROM contract_payloads
+    FROM result_payloads
     WHERE run_id = (SELECT min(run_id) FROM sample_metric_numeric)
     """,
     f"""
@@ -372,7 +372,7 @@ QUERIES: tuple[QueryCase, ...] = (
             SELECT data_contract_id, run_sample_id
             FROM sample_structural_variant_calls
             UNION
-            SELECT data_contract_id, run_sample_id FROM contract_payloads
+            SELECT data_contract_id, run_sample_id FROM result_payloads
         )
         SELECT
             observed.data_contract_id,
@@ -380,7 +380,7 @@ QUERIES: tuple[QueryCase, ...] = (
             count(DISTINCT pp.payload_id) AS payloads,
             sum(coalesce(pp.row_count, 0)) AS declared_payload_rows
         FROM observed
-        LEFT JOIN contract_payloads pp
+        LEFT JOIN result_payloads pp
             ON pp.run_sample_id IS NOT DISTINCT FROM observed.run_sample_id
             AND pp.data_contract_id = observed.data_contract_id
         GROUP BY observed.data_contract_id

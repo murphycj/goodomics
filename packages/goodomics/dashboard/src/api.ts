@@ -104,19 +104,29 @@ const analyticsMetricSchema = z.object({
   value_type: z.string(),
   value: z.unknown().nullable(),
   source_file_id: idSchema.nullable(),
+  source_observation_id: z.string().nullable().optional(),
+  source_observation_label: z.string().nullable().optional(),
+  source_observation_metadata_json: z.record(z.string(), z.unknown()).default({}),
 });
 
 const analyticsPayloadSchema = z.object({
-  run_id: z.string(),
-  data_contract_id: z.string(),
-  run_sample_id: z.string().nullable(),
+  run_id: idSchema,
+  data_contract_id: idSchema,
+  run_sample_id: idSchema.nullable(),
+  sample_id: idSchema.nullable(),
+  field_id: idSchema,
   payload_name: z.string(),
   payload_kind: z.string(),
   storage_format: z.string(),
+  schema_json: z.record(z.string(), z.unknown()),
+  data_json: z.unknown(),
   columns: z.array(z.string()),
   rows: z.array(z.record(z.string(), z.unknown())),
   row_count: z.number(),
-  source_file_id: z.string().nullable(),
+  source_file_id: idSchema.nullable(),
+  source_observation_id: z.string().nullable().optional(),
+  source_observation_label: z.string().nullable().optional(),
+  source_observation_metadata_json: z.record(z.string(), z.unknown()).default({}),
   source_hash: z.string().nullable(),
 });
 

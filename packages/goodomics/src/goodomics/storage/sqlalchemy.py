@@ -28,6 +28,7 @@ from goodomics.schemas.models import (
     FileLink,
     Project,
     Run,
+    RunRelationship,
     RunSample,
     Sample,
     SampleSet,
@@ -67,6 +68,7 @@ class CatalogWriteResult:
     subjects: list[SubjectRecord]
     samples: list[SampleRecord]
     run_samples: list[RunSampleRecord]
+    run_relationships: list[RunRelationshipRecord]
     data_contracts: list[DataContractRecord]
     data_contract_fields: list[DataContractFieldRecord]
     files: list[FileRecord]
@@ -136,15 +138,37 @@ class SampleRecord(SQLModel, table=True):
 
 class RunSampleRecord(SQLModel, table=True):
     __tablename__ = "run_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "sample_id",
+            "role",
+            name="uq_run_samples_run_sample_role",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     run_sample_id: str = Field(max_length=512, unique=True, index=True)
-    project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     run_id: int = Field(foreign_key="runs.id", index=True)
-    sample_id: int | None = Field(default=None, foreign_key="samples.id", index=True)
-    assay: str | None = Field(default=None, max_length=255)
+    sample_id: int = Field(foreign_key="samples.id", index=True)
     role: str | None = Field(default=None, max_length=64)
-    status: str = Field(default="unknown", max_length=64)
+
+
+class RunRelationshipRecord(SQLModel, table=True):
+    __tablename__ = "run_relationships"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_run_id",
+            "target_run_id",
+            "relationship_type",
+            name="uq_run_relationships_source_target_type",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    source_run_id: int = Field(foreign_key="runs.id", index=True)
+    target_run_id: int = Field(foreign_key="runs.id", index=True)
+    relationship_type: str = Field(max_length=128, index=True)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
@@ -408,11 +432,8 @@ class SQLModelGoodomicsStore:
                     [
                         RunSampleRecord(
                             run_sample_id=f"{run.run_id}:{sample.sample_id}",
-                            project_id=project_pk,
                             run_id=run_pk,
-                            sample_id=sample_pk_by_label.get(sample.sample_id),
-                            assay=run.assay,
-                            status="unknown",
+                            sample_id=sample_pk_by_label[sample.sample_id],
                         )
                         for sample in run.samples
                     ]
@@ -427,6 +448,7 @@ class SQLModelGoodomicsStore:
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
+        run_relationships: list[RunRelationship] | None = None,
         data_contracts: list[DataContract] | None = None,
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
@@ -446,6 +468,7 @@ class SQLModelGoodomicsStore:
             subjects=subjects,
             samples=samples or run.samples,
             run_samples=run_samples,
+            run_relationships=run_relationships,
             data_contracts=data_contracts,
             data_contract_fields=data_contract_fields,
             files=files,
@@ -462,6 +485,7 @@ class SQLModelGoodomicsStore:
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
+        run_relationships: list[RunRelationship] | None = None,
         data_contracts: list[DataContract] | None = None,
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
@@ -537,21 +561,27 @@ class SQLModelGoodomicsStore:
             run_sample_rows = [
                 RunSampleRecord(
                     run_sample_id=run_sample.run_sample_id,
-                    project_id=project_pk,
                     run_id=run_pk_by_label[run_sample.run_id],
-                    sample_id=_optional_map_lookup(
-                        sample_pk_by_label, run_sample.sample_id
-                    ),
-                    assay=run_sample.assay,
+                    sample_id=sample_pk_by_label[run_sample.sample_id],
                     role=run_sample.role,
-                    status=run_sample.status,
-                    metadata_json=dict(run_sample.metadata_json),
                 )
                 for run_sample in run_samples or []
             ]
             session.add_all(run_sample_rows)
             await session.flush()
             run_sample_pk_by_label = _id_map(run_sample_rows, "run_sample_id")
+
+            run_relationship_rows = [
+                RunRelationshipRecord(
+                    source_run_id=run_pk_by_label[relationship.source_run_id],
+                    target_run_id=run_pk_by_label[relationship.target_run_id],
+                    relationship_type=relationship.relationship_type,
+                    metadata_json=dict(relationship.metadata_json),
+                )
+                for relationship in run_relationships or []
+            ]
+            session.add_all(run_relationship_rows)
+            await session.flush()
 
             contract_rows = await _upsert_data_contracts(
                 session, data_contracts or [], project_pk
@@ -647,6 +677,7 @@ class SQLModelGoodomicsStore:
                 subjects=_snapshot_records(subject_rows),
                 samples=_snapshot_records(sample_rows),
                 run_samples=_snapshot_records(run_sample_rows),
+                run_relationships=_snapshot_records(run_relationship_rows),
                 data_contracts=_snapshot_records(contract_rows),
                 data_contract_fields=_snapshot_records(contract_field_rows),
                 files=_snapshot_records(file_rows),
@@ -1313,6 +1344,12 @@ async def _delete_data_import_scoped_catalog(
     )
     if run_ids:
         await session.exec(
+            delete(RunRelationshipRecord).where(
+                cast(Any, RunRelationshipRecord.source_run_id).in_(list(run_ids))
+                | cast(Any, RunRelationshipRecord.target_run_id).in_(list(run_ids))
+            )
+        )
+        await session.exec(
             delete(RunSampleRecord).where(
                 cast(Any, RunSampleRecord.run_id).in_(list(run_ids))
             )
@@ -1367,6 +1404,12 @@ async def _delete_run_scoped_catalog(
                 )
             ).all()
         )
+    await session.exec(
+        delete(RunRelationshipRecord).where(
+            (RunRelationshipRecord.source_run_id == run_pk)
+            | (RunRelationshipRecord.target_run_id == run_pk)
+        )
+    )
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_pk))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_pk))
     if contract_ids:

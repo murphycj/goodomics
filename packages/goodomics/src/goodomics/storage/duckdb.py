@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     CohortSummary,
-    ContractPayload,
     CopyNumberSegment,
     DataSource,
     EntityAttribute,
@@ -28,6 +27,7 @@ from goodomics.schemas.models import (
     FeatureValueNumeric,
     GeneAlterationState,
     GenomicInterval,
+    ResultPayload,
     SampleIntervalValue,
     SampleMetric,
     SampleStructuralVariantCall,
@@ -252,7 +252,7 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "sample_metrics",
         SampleMetric,
-        "data_contract_id, run_id, run_sample_id, field_id",
+        "data_contract_id, run_id, run_sample_id, field_id, source_observation_id",
         run_column="run_id",
     ),
     AnalyticalTableSerializer(
@@ -360,8 +360,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         unique_columns=("event_id",),
     ),
     AnalyticalTableSerializer(
-        "contract_payloads",
-        ContractPayload,
+        "result_payloads",
+        ResultPayload,
         "data_contract_id, run_id, run_sample_id, payload_name",
         run_column="run_id",
         unique_columns=("payload_id",),
@@ -715,11 +715,13 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "sample_id",
             "run_sample_id",
         ),
-        "contract_payloads": (
+        "result_payloads": (
             "payload_id",
             "data_contract_id",
             "run_id",
             "run_sample_id",
+            "sample_id",
+            "field_id",
             "source_file_id",
         ),
         "gene_alteration_state": (
@@ -884,7 +886,7 @@ class DuckDBAnalyticsStore:
         batch: AnalyticsIngestBatch | None = None,
         *,
         metrics: Sequence[SampleMetric] | None = None,
-        payloads: Sequence[ContractPayload] | None = None,
+        payloads: Sequence[ResultPayload] | None = None,
         tool_versions: Sequence[ToolVersion] | None = None,
         data_sources: Sequence[DataSource] | None = None,
     ) -> None:
@@ -893,7 +895,7 @@ class DuckDBAnalyticsStore:
         if batch is None:
             batch = AnalyticsIngestBatch(
                 sample_metrics=list(metrics or []),
-                contract_payloads=list(payloads or []),
+                result_payloads=list(payloads or []),
                 tool_versions=list(tool_versions or []),
                 data_sources=list(data_sources or []),
             )
@@ -969,15 +971,10 @@ class DuckDBAnalyticsStore:
             )
         ]
 
-    def list_contract_payloads(self, run_id: Any) -> list[ContractPayload]:
-        """List contract payload rows for a run."""
+    def list_result_payloads(self, run_id: Any) -> list[ResultPayload]:
+        """List result payload rows for a run."""
 
-        return self.fetch_records("contract_payloads", ContractPayload, run_id=run_id)
-
-    def list_table_payloads(self, run_id: Any) -> list[ContractPayload]:
-        """Backward-compatible alias for listing contract payload rows."""
-
-        return self.list_contract_payloads(run_id)
+        return self.fetch_records("result_payloads", ResultPayload, run_id=run_id)
 
     def row_counts(self) -> dict[str, int]:
         """Return row counts for each registered analytical table."""
@@ -1090,13 +1087,17 @@ class DuckDBAnalyticsStore:
                 sample_id,
                 field_id,
                 source_file_id,
+                source_observation_id,
+                source_observation_label,
+                source_observation_metadata_json,
                 value_numeric AS value
             FROM sample_metrics
             WHERE value_type = 'numeric'
             ORDER BY {
             _physical_order_by(
                 INTEGER_KEYED_TABLES["sample_metrics"],
-                "data_contract_id, field_id, value_numeric, run_sample_id",
+                "data_contract_id, field_id, source_observation_id, "
+                "value_numeric, run_sample_id",
             )
         }
             """)

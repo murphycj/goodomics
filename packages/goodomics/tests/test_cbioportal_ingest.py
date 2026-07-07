@@ -21,11 +21,11 @@ from goodomics.ingest.cbioportal import ingest_cbioportal_study
 from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.schemas.models import (
-    ContractPayload,
     CopyNumberSegment,
     EntityAttribute,
     FeatureCall,
     FeatureValueNumeric,
+    ResultPayload,
     SampleStructuralVariantCall,
     SampleVariantCall,
 )
@@ -132,7 +132,7 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
         "small_variants",
         "copy_number_segments",
         "structural_variants",
-        "contract_payload",
+        "result_payload",
     }
     contract_ids = {contract.data_contract_id for contract in parsed.data_contracts}
     assert CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS in contract_ids
@@ -365,7 +365,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert counts["copy_number_segments"] == 1
     assert counts["sample_variant_calls"] == 1
     assert counts["sample_structural_variant_calls"] == 1
-    assert counts["contract_payloads"] == 1
+    assert counts["result_payloads"] == 1
     with analytics._connect() as connection:
         physical_columns_by_table = {
             table_name: {
@@ -381,7 +381,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
                 "copy_number_segments",
                 "sample_variant_calls",
                 "sample_structural_variant_calls",
-                "contract_payloads",
+                "result_payloads",
             )
         }
     for table_columns in physical_columns_by_table.values():
@@ -444,7 +444,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     )
     assert sv_calls[0].split_read_count == 4
     payloads = analytics.fetch_records(
-        "contract_payloads", ContractPayload, run_id=_run_pk(database_url, "run-cbio")
+        "result_payloads", ResultPayload, run_id=_run_pk(database_url, "run-cbio")
     )
     assert payloads[0].payload_kind == "gene_panel_matrix"
     numeric_attributes = analytics.fetch_records(

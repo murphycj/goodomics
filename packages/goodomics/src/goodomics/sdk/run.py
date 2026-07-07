@@ -293,16 +293,10 @@ class GoodomicsRun:
             for sample_id in sample_ids
         ]
         run_samples = [
-            # run_sample_id is the processed-sample identity: this sample in
-            # this run. The SDK uses "<run_id>:<sample_id>" as a stable label.
             RunSample(
                 run_sample_id=f"{run_id}:{sample_id}",
-                project_id=project.project_id,
                 run_id=run_id,
                 sample_id=sample_id,
-                assay=self.assay,
-                status="complete",
-                metadata_json={"source": "goodomics-sdk"},
             )
             for sample_id in sample_ids
         ]

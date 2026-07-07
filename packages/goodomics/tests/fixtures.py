@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
+
+import duckdb
 
 
 def write_multiqc_fixture(
@@ -55,7 +59,228 @@ def write_multiqc_fixture(
         f"Sample\t0\t1\t2\n{sample_id}\t(0, 0.1)\t(1, 0.2)\t(2, 0.3)\n",
         encoding="utf-8",
     )
+    (data_dir / "multiqc.log").write_text("MultiQC fixture log\n", encoding="utf-8")
+    _write_multiqc_parquet_fixture(data_dir / "multiqc.parquet", sample_id=sample_id)
     return multiqc_dir
+
+
+def _write_multiqc_parquet_fixture(path: Path, *, sample_id: str) -> None:
+    columns = (
+        "anchor",
+        "type",
+        "creation_date",
+        "plot_type",
+        "plot_input_data",
+        "dt_anchor",
+        "section_key",
+        "section_order",
+        "sample",
+        "row_sample",
+        "metric",
+        "val_raw",
+        "val_raw_type",
+        "val_mod",
+        "val_mod_type",
+        "val_fmt",
+        "column_meta",
+        "show_table_by_default",
+        "pconfig",
+        "config",
+        "data_sources",
+        "multiqc_version",
+        "modules",
+        "software_versions",
+    )
+    fastqc_meta = {
+        "rid": "fastqc_raw-percent_gc",
+        "clean_rid": "fastqc_raw-percent_gc",
+        "title": "GC",
+        "namespace": "FastQC: raw",
+        "suffix": "%",
+    }
+    salmon_meta = {
+        "rid": "salmon-percent_mapped",
+        "clean_rid": "salmon-percent_mapped",
+        "title": "Mapped",
+        "namespace": "Salmon",
+        "suffix": "%",
+    }
+    rows = [
+        (
+            None,
+            "run_metadata",
+            datetime(2026, 1, 1),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "1.35",
+            json.dumps([{"name": "Salmon", "anchor": "salmon"}]),
+            json.dumps(
+                {
+                    "Salmon": {"Salmon": ["1.10.3"]},
+                    "FastQC": {"FastQC": ["0.12.1"]},
+                }
+            ),
+        ),
+        (
+            "salmon_plot",
+            "plot_input",
+            None,
+            "x/y line",
+            json.dumps({"rows": [{"Sample": sample_id, "0": "(0, 0.1)"}]}),
+            None,
+            "salmon",
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            json.dumps({sample_id: [f"/work/{sample_id}/libParams/flenDist.txt"]}),
+            None,
+            None,
+            None,
+        ),
+        _parquet_metric_row(sample_id, sample_id, "percent_mapped", 95.5, salmon_meta),
+        _parquet_metric_row(sample_id, sample_id, "percent_gc", 48.1, fastqc_meta),
+        _parquet_metric_row(
+            sample_id,
+            f"{sample_id} R1",
+            "percent_gc",
+            47.9,
+            fastqc_meta,
+        ),
+        (
+            "general_stats_table",
+            "plot_input_row",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            sample_id,
+            sample_id,
+            "status",
+            None,
+            None,
+            None,
+            None,
+            "pass",
+            json.dumps(
+                {
+                    "rid": "salmon-status",
+                    "clean_rid": "salmon-status",
+                    "title": "Status",
+                    "namespace": "Salmon",
+                }
+            ),
+            True,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    ]
+    with duckdb.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE fixture_multiqc_parquet (
+                anchor VARCHAR,
+                type VARCHAR,
+                creation_date TIMESTAMP,
+                plot_type VARCHAR,
+                plot_input_data VARCHAR,
+                dt_anchor VARCHAR,
+                section_key VARCHAR,
+                section_order BIGINT,
+                sample VARCHAR,
+                row_sample VARCHAR,
+                metric VARCHAR,
+                val_raw DOUBLE,
+                val_raw_type VARCHAR,
+                val_mod DOUBLE,
+                val_mod_type VARCHAR,
+                val_fmt VARCHAR,
+                column_meta VARCHAR,
+                show_table_by_default BOOLEAN,
+                pconfig VARCHAR,
+                config VARCHAR,
+                data_sources VARCHAR,
+                multiqc_version VARCHAR,
+                modules VARCHAR,
+                software_versions VARCHAR
+            )
+            """
+        )
+        placeholders = ", ".join("?" for _ in columns)
+        connection.executemany(
+            f"INSERT INTO fixture_multiqc_parquet VALUES ({placeholders})",
+            rows,
+        )
+        connection.execute(
+            "COPY fixture_multiqc_parquet TO ? (FORMAT PARQUET)",
+            [str(path)],
+        )
+
+
+def _parquet_metric_row(
+    sample_id: str,
+    row_sample: str,
+    metric: str,
+    value: float,
+    column_meta: dict[str, object],
+) -> tuple[object, ...]:
+    return (
+        "general_stats_table",
+        "plot_input_row",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        sample_id,
+        row_sample,
+        metric,
+        value,
+        "float",
+        value,
+        "float",
+        f"{value:.1f}",
+        json.dumps(column_meta),
+        True,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 def write_cbioportal_fixture(root: Path) -> Path:

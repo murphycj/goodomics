@@ -56,6 +56,7 @@ from goodomics.storage.sqlalchemy import (
     DataContractFieldRecord,
     DataContractRecord,
     ProjectRecord,
+    RunRecord,
     RunSampleRecord,
     SampleRecord,
     SampleSetMemberRecord,
@@ -725,7 +726,7 @@ def _contract_table(contract: DataContractRecord) -> str:
         "copy_number_segments",
         "sample_variant_calls",
         "sample_structural_variant_calls",
-        "contract_payloads",
+        "result_payloads",
         "gene_alteration_state",
     }:
         raise ValueError(
@@ -746,9 +747,12 @@ async def _series_value_column(
         return synthetic[field_id]
     if table == "feature_value_numeric":
         return "value"
-    if table in {"sample_metrics", "entity_attributes"}:
+    if table in {"sample_metrics", "entity_attributes", "result_payloads"}:
         if not field_id:
-            raise ValueError("Metric and attribute contract series require a field_id.")
+            raise ValueError(
+                "Metric, attribute, and result payload contract series require "
+                "a field_id."
+            )
         rows = await _get_contract_field_records(
             session, contract_id=_record_pk(contract), field_ids=[field_id]
         )
@@ -760,7 +764,7 @@ async def _series_value_column(
         "copy_number_segments": "segment_mean",
         "sample_variant_calls": "allele_fraction",
         "sample_structural_variant_calls": "split_read_count",
-        "contract_payloads": "payload_name",
+        "result_payloads": "data_json",
         "gene_alteration_state": "value_numeric",
     }.get(table)
     if fallback is None:
@@ -775,7 +779,7 @@ async def _series_field_record(
     table: str,
     field_id: str,
 ) -> DataContractFieldRecord | None:
-    if table not in {"sample_metrics", "entity_attributes"}:
+    if table not in {"sample_metrics", "entity_attributes", "result_payloads"}:
         return None
     if not field_id:
         raise ValueError("Metric and attribute contract series require a field_id.")
@@ -1189,8 +1193,9 @@ async def _run_sample_pk(
         RunSampleRecord.run_sample_id == run_sample_id
     )
     if project_id is not None:
-        statement = statement.where(
-            RunSampleRecord.project_id == await _project_pk(session, project_id)
+        statement = (
+            statement.join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+            .where(RunRecord.project_id == await _project_pk(session, project_id))
         )
     row = (await session.exec(statement)).first()
     return row.id if row is not None else None
@@ -1259,7 +1264,7 @@ async def _compile_contract_query(
         "copy_number_segments",
         "sample_variant_calls",
         "sample_structural_variant_calls",
-        "contract_payloads",
+        "result_payloads",
     }:
         raise ValueError(
             f"Contract-first queries are not available for table: {table or 'unknown'}"
@@ -1327,14 +1332,14 @@ async def _compile_contract_query(
     )
     if not dimensions and isinstance(query_config.get("entity"), str):
         # Entity grain provides sensible default dimensions. A run_sample insight
-        # should naturally group by processed sample unless the config says
+        # should naturally group by sample/run link unless the config says
         # otherwise.
         entity = str(query_config["entity"])
         if entity in {"run_sample", "sample"} and table == "sample_metrics":
             dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
         elif table == "entity_attributes":
             dimensions = ["entity_id"]
-        elif table != "contract_payloads":
+        elif table != "result_payloads":
             dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
 
     columns = _columns_for_source("analytics", table)
@@ -2196,6 +2201,7 @@ def _contract_value_column(field: DataContractFieldRecord) -> str:
         "value_boolean",
         "value_datetime",
         "value_json",
+        "data_json",
     }:
         return value_column
     return {
@@ -2241,9 +2247,12 @@ def _synthetic_contract_fields(table: str | None) -> dict[str, dict[str, str]]:
             "split_read_count": "split_read_count",
             "paired_end_read_count": "paired_end_read_count",
         },
-        "contract_payloads": {
+        "result_payloads": {
             "payload_kind": "payload_kind",
             "payload_name": "payload_name",
+            "schema_json": "schema_json",
+            "source_observation_id": "source_observation_id",
+            "source_observation_label": "source_observation_label",
         },
     }
     if table == "feature_value_numeric":
@@ -2283,8 +2292,15 @@ def _default_contract_dimensions(table: str | None) -> list[str]:
         "sample_structural_variant_calls",
     }:
         return ["run_sample_id", "sample_id"]
-    if table == "contract_payloads":
-        return ["run_id", "payload_name"]
+    if table == "result_payloads":
+        return [
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "source_observation_label",
+            "payload_name",
+            "payload_kind",
+        ]
     return []
 
 

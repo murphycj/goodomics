@@ -178,6 +178,8 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
         metric.field_id,
         metric.value,
         metric.source_file_id,
+        metric.source_observation_id,
+        metric.source_observation_label,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(term)),
@@ -204,16 +206,24 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
                   <TableHead>Contract</TableHead>
                   <TableHead>Field</TableHead>
                   <TableHead>Value</TableHead>
+                  <TableHead>Source observation</TableHead>
                   <TableHead>Source</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {metrics.map((metric, index) => (
-                  <TableRow key={`${metric.field_id}-${metric.run_sample_id}-${index}`}>
+                  <TableRow
+                    key={`${metric.field_id}-${metric.run_sample_id}-${metric.source_observation_id ?? "source"}-${index}`}
+                  >
                     <TableCell>{metric.sample_id ?? metric.run_sample_id ?? "—"}</TableCell>
                     <TableCell>{metric.data_contract_id}</TableCell>
                     <TableCell className="font-mono">{metric.field_id}</TableCell>
                     <TableCell>{formatMetricValue(metric)}</TableCell>
+                    <TableCell>
+                      {metric.source_observation_label ??
+                        metric.source_observation_id ??
+                        "—"}
+                    </TableCell>
                     <TableCell className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">
                       {metric.source_file_id ?? "—"}
                     </TableCell>
@@ -232,7 +242,7 @@ function MetricsTable({ query }: { query: QueryState<AnalyticsMetric[]> }) {
 function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   const [selected, setSelected] = useState<AnalyticsPayload | null>(null);
   return (
-    <AsyncBlock query={query} empty="No table payloads were stored.">
+    <AsyncBlock query={query} empty="No result payloads were stored.">
       {(payloads) => (
         <>
           <TableWrap>
@@ -240,7 +250,9 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Payload</TableHead>
+                  <TableHead>Field</TableHead>
                   <TableHead>Sample</TableHead>
+                  <TableHead>Source observation</TableHead>
                   <TableHead>Contract</TableHead>
                   <TableHead>Rows</TableHead>
                   <TableHead>Columns</TableHead>
@@ -249,9 +261,17 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
               </TableHeader>
               <TableBody>
                 {payloads.map((payload) => (
-                  <TableRow key={`${payload.payload_name}-${payload.run_sample_id ?? "run"}`}>
+                  <TableRow
+                    key={`${payload.payload_name}-${payload.run_sample_id ?? "run"}-${payload.source_observation_id ?? "source"}`}
+                  >
                     <TableCell className="font-bold">{payload.payload_name}</TableCell>
-                    <TableCell>{payload.run_sample_id ?? "—"}</TableCell>
+                    <TableCell>{payload.field_id}</TableCell>
+                    <TableCell>{payload.sample_id ?? payload.run_sample_id ?? "—"}</TableCell>
+                    <TableCell>
+                      {payload.source_observation_label ??
+                        payload.source_observation_id ??
+                        "—"}
+                    </TableCell>
                     <TableCell>{payload.data_contract_id}</TableCell>
                     <TableCell>{payload.row_count}</TableCell>
                     <TableCell>{payload.columns.length}</TableCell>
@@ -272,7 +292,7 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
   );
 }
 
-/** Snapshot preview of the first rows and columns in a table payload. */
+/** Snapshot preview of the first rows and columns in a result payload. */
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
   return (
@@ -281,7 +301,8 @@ function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
         <div>
           <CardTitle>{payload.payload_name}</CardTitle>
           <p className="mb-0 mt-1 text-[#657082]">
-            {payload.row_count} rows from {payload.source_file_id ?? "stored payload"}
+            {payload.payload_kind} - {payload.row_count} rows from{" "}
+            {payload.source_file_id ?? "stored payload"}
           </p>
         </div>
       </CardHeader>

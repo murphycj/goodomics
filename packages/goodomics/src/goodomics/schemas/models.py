@@ -81,15 +81,20 @@ class Run(MutableGoodomicsModel):
 
 
 class RunSample(GoodomicsModel):
-    """A sample within a run, used as the processed-sample comparison grain."""
+    """Simple linker indicating that a run includes a sample."""
 
     run_sample_id: str
-    project_id: str | None = None
     run_id: str
-    sample_id: str | None = None
-    assay: str | None = None
+    sample_id: str
     role: str | None = None
-    status: str = "unknown"
+
+
+class RunRelationship(GoodomicsModel):
+    """Directed provenance relationship between two runs."""
+
+    source_run_id: str
+    target_run_id: str
+    relationship_type: str
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -186,7 +191,7 @@ class FileLink(GoodomicsModel):
 
 
 class SampleSet(GoodomicsModel):
-    """Saved group of processed samples, such as a cohort or reference set."""
+    """Saved group of sample/run links, such as a cohort or reference set."""
 
     sample_set_id: str
     project_id: str | None = None
@@ -200,7 +205,7 @@ class SampleSet(GoodomicsModel):
 
 
 class SampleSetMember(GoodomicsModel):
-    """Membership row linking a sample set to a processed sample."""
+    """Membership row linking a sample set to a run/sample link."""
 
     sample_set_id: str
     run_sample_id: str
@@ -273,7 +278,7 @@ class EntityAttribute(AnalyticalRecord):
 
 
 class SampleMetric(AnalyticalRecord):
-    """Unified metric value measured for a sample or processed sample."""
+    """Unified metric value measured for a sample/run link."""
 
     data_contract_id: int
     run_id: int
@@ -281,6 +286,9 @@ class SampleMetric(AnalyticalRecord):
     sample_id: int | None = None
     field_id: int
     source_file_id: int | None = None
+    source_observation_id: str | None = None
+    source_observation_label: str | None = None
+    source_observation_metadata_json: JsonObject = Field(default_factory=dict)
     value_type: Literal["numeric", "string", "json"]
     value_numeric: float | None = None
     value_string: str | None = None
@@ -328,7 +336,7 @@ class FeatureSetMember(AnalyticalRecord):
 
 
 class FeatureValueNumeric(AnalyticalRecord):
-    """Numeric value for a feature in a processed sample and data contract."""
+    """Numeric value for a feature in a sample/run link and data contract."""
 
     data_contract_id: int
     run_id: int
@@ -340,7 +348,7 @@ class FeatureValueNumeric(AnalyticalRecord):
 
 
 class FeatureCall(AnalyticalRecord):
-    """Categorical feature-level call for a processed sample."""
+    """Categorical feature-level call for a sample/run link."""
 
     data_contract_id: int
     run_id: int
@@ -371,7 +379,7 @@ class GenomicInterval(AnalyticalRecord):
 
 
 class SampleIntervalValue(AnalyticalRecord):
-    """Numeric value assigned to a genomic interval for a processed sample."""
+    """Numeric value assigned to a genomic interval for a sample/run link."""
 
     data_contract_id: int
     run_id: int
@@ -383,7 +391,7 @@ class SampleIntervalValue(AnalyticalRecord):
 
 
 class CopyNumberSegment(AnalyticalRecord):
-    """Copy-number segment call for a processed sample."""
+    """Copy-number segment call for a sample/run link."""
 
     data_contract_id: int
     run_id: int
@@ -517,13 +525,15 @@ class TimelineEvent(AnalyticalRecord):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
-class ContractPayload(AnalyticalRecord):
-    """Stored payload attached to a data contract, such as a table or blob."""
+class ResultPayload(AnalyticalRecord):
+    """Logical non-scalar result data attached to a data contract."""
 
     payload_id: int
     data_contract_id: int
     run_id: int
     run_sample_id: int | None = None
+    sample_id: int | None = None
+    field_id: int
     payload_name: str
     payload_kind: str
     storage_format: str
@@ -535,6 +545,10 @@ class ContractPayload(AnalyticalRecord):
     )
     row_count: int | None = None
     source_file_id: int | None = None
+    source_observation_id: str | None = None
+    source_observation_label: str | None = None
+    source_observation_metadata_json: JsonObject = Field(default_factory=dict)
+    data_json: JsonValue = Field(default_factory=list)
     metadata_json: JsonObject = Field(default_factory=dict)
 
     @field_validator("payload_schema_json", mode="before")
@@ -542,21 +556,43 @@ class ContractPayload(AnalyticalRecord):
     def _blank_schema_to_empty_dict(cls, value: object) -> object:
         return {} if value is None else value
 
-    @property
-    def sample_id(self) -> str | None:
-        sample_id = self.metadata_json.get("sample_id")
-        return sample_id if isinstance(sample_id, str) else None
+    @field_validator("source_observation_metadata_json", mode="before")
+    @classmethod
+    def _blank_source_observation_metadata_to_empty_dict(
+        cls, value: object
+    ) -> object:
+        return {} if value is None else value
+
+    @field_validator("data_json", mode="before")
+    @classmethod
+    def _blank_data_to_empty_list(cls, value: object) -> object:
+        return [] if value is None else value
 
     @property
     def columns(self) -> list[str]:
-        columns = self.metadata_json.get("columns")
+        columns = self.payload_schema_json.get("columns")
+        if not isinstance(columns, list) and isinstance(self.data_json, list):
+            first_row = next(
+                (row for row in self.data_json if isinstance(row, dict)),
+                None,
+            )
+            columns = list(first_row) if first_row is not None else []
         return [str(column) for column in columns] if isinstance(columns, list) else []
 
     @property
     def rows(self) -> list[dict[str, Any]]:
-        rows = self.metadata_json.get("rows")
+        rows = self.data_json
         if not isinstance(rows, list):
             return []
+        if self.payload_schema_json.get("shape") == "xy_pairs":
+            columns = self.columns
+            if len(columns) >= 2:
+                x_column, y_column = columns[:2]
+                return [
+                    {x_column: row[0], y_column: row[1]}
+                    for row in rows
+                    if isinstance(row, list | tuple) and len(row) >= 2
+                ]
         return [row for row in rows if isinstance(row, dict)]
 
     @property
@@ -570,7 +606,7 @@ class ContractPayload(AnalyticalRecord):
 
 
 class GeneAlterationState(AnalyticalRecord):
-    """Unified alteration state for a gene-like feature in a processed sample."""
+    """Unified alteration state for a gene-like feature in a sample/run link."""
 
     run_sample_id: int
     sample_id: int | None = None
@@ -647,7 +683,7 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     structural_variant_events: list[Any] = Field(default_factory=list)
     sample_structural_variant_calls: list[Any] = Field(default_factory=list)
     timeline_events: list[Any] = Field(default_factory=list)
-    contract_payloads: list[Any] = Field(default_factory=list)
+    result_payloads: list[Any] = Field(default_factory=list)
     gene_alteration_state: list[Any] = Field(default_factory=list)
     cohort_summaries: list[Any] = Field(default_factory=list)
     tool_versions: list[Any] = Field(default_factory=list)

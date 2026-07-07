@@ -79,5 +79,5 @@ def _default_primary_table(data_type: str) -> str | None:
         "copy_number_segments": "copy_number_segments",
         "small_variants": "sample_variant_calls",
         "structural_variants": "sample_structural_variant_calls",
-        "contract_payload": "contract_payloads",
+        "result_payload": "result_payloads",
     }.get(data_type)

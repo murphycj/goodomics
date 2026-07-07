@@ -327,7 +327,7 @@ def _load_run_scoped_tables(connection: duckdb.DuckDBPyConnection) -> None:
             lambda: _insert_sample_structural_variant_calls(connection),
         ),
         ("timeline_events", lambda: _insert_timeline_events(connection)),
-        ("contract_payloads", lambda: _insert_contract_payloads(connection)),
+        ("result_payloads", lambda: _insert_result_payloads(connection)),
         ("cohort_summaries", lambda: _insert_cohort_summaries(connection)),
         ("tool_versions", lambda: _insert_tool_versions(connection)),
         ("data_sources", lambda: _insert_data_sources(connection)),
@@ -978,27 +978,50 @@ def _insert_timeline_events(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _insert_contract_payloads(connection: duckdb.DuckDBPyConnection) -> None:
+def _insert_result_payloads(connection: duckdb.DuckDBPyConnection) -> None:
     connection.execute(
         """
-        INSERT INTO contract_payloads
+        INSERT INTO result_payloads (
+            payload_id,
+            data_contract_id,
+            run_id,
+            run_sample_id,
+            sample_id,
+            field_id,
+            payload_name,
+            payload_kind,
+            storage_format,
+            path,
+            uri,
+            schema_json,
+            row_count,
+            source_file_id,
+            source_observation_id,
+            source_observation_label,
+            source_observation_metadata_json,
+            data_json,
+            metadata_json
+        )
         SELECT
             printf('payload:%s:%s', run_sample_id, payload_name),
             data_contract_id,
             run_id,
             run_sample_id,
+            sample_id,
+            payload_name,
             payload_name,
             payload_kind,
-            'inline_metadata_only',
+            'inline_json',
             NULL,
             NULL,
             schema_json,
             row_count,
             NULL,
+            NULL,
+            NULL,
+            json_object(),
+            rows_json,
             json_object(
-                'sample_id', sample_id,
-                'columns', columns_json,
-                'rows', rows_json,
                 'source_hash', printf('synthetic-%s-%s', run_sample_id, payload_name)
             )
         FROM perf_run_samples

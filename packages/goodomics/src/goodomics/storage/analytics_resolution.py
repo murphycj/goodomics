@@ -35,7 +35,9 @@ CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
         {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
     ),
     "timeline_events": frozenset({"subject_id", "sample_id", "run_sample_id"}),
-    "contract_payloads": frozenset({"data_contract_id", "run_id", "run_sample_id"}),
+    "result_payloads": frozenset(
+        {"data_contract_id", "run_id", "run_sample_id", "sample_id", "field_id"}
+    ),
     "gene_alteration_state": frozenset(
         {"run_sample_id", "sample_id", "subject_id", "data_contract_id"}
     ),

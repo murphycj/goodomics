@@ -32,9 +32,9 @@ LINKERS: dict[str, JsonObject] = {
     },
     "run_sample": {
         "id": "run_sample",
-        "label": "Processed sample",
+        "label": "Run sample",
         "column": "run_sample_id",
-        "description": "Align values by sample result within a run.",
+        "description": "Align values by sample/run link.",
     },
     "run": {
         "id": "run",
@@ -83,7 +83,7 @@ MODES: dict[str, JsonObject] = {
         "id": "sample_detail",
         "label": "Sample detail",
         "icon": "FileSearch",
-        "description": "Inspect a single sample or processed sample.",
+        "description": "Inspect a single sample or run/sample link.",
         "default_visualization": "table",
         "supports_add_all_numeric": False,
     },

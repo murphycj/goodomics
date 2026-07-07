@@ -14,6 +14,7 @@ from goodomics.schemas.models import (
     FileAsset,
     FileLink,
     Run,
+    RunRelationship,
     RunSample,
     Sample,
     SampleSet,
@@ -65,6 +66,7 @@ class NormalizedIngestResult:
     subjects: list[Subject] = field(default_factory=list)
     samples: list[Sample] = field(default_factory=list)
     run_samples: list[RunSample] = field(default_factory=list)
+    run_relationships: list[RunRelationship] = field(default_factory=list)
     data_contracts: list[DataContract] = field(default_factory=list)
     data_contract_fields: list[DataContractField] = field(default_factory=list)
     files: list[FileAsset] = field(default_factory=list)

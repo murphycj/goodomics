@@ -1489,7 +1489,28 @@ def _add_payload(
             )
             run_sample_id = _run_sample_id(payload_run_id, sample_id)
             payload_metadata["sample_id"] = sample_id
-        context.batch.contract_payloads.append(
+        field_id = _normalize_id(path.stem)
+        context.data_contract_fields[(payload_contract_id, field_id)] = (
+            DataContractField(
+                data_contract_id=payload_contract_id,
+                field_id=field_id,
+                field_role="payload",
+                entity_scope="run_sample",
+                display_name=path.stem.replace("_", " ").title(),
+                value_type="json",
+                query_ref_json={
+                    "table": "result_payloads",
+                    "field_column": "field_id",
+                    "field_value": field_id,
+                    "value_column": "data_json",
+                },
+                metadata_json={
+                    "source": "cbioportal",
+                    "payload_kind": payload_kind,
+                },
+            )
+        )
+        context.batch.result_payloads.append(
             UnresolvedAnalyticalRecord(
                 payload_id=(
                     f"{payload_run_id}:{_normalize_id(path.name)}"
@@ -1499,11 +1520,14 @@ def _add_payload(
                 data_contract_id=payload_contract_id,
                 run_id=payload_run_id,
                 run_sample_id=run_sample_id,
+                sample_id=sample_id,
+                field_id=field_id,
                 payload_name=path.stem,
                 payload_kind=payload_kind,
                 storage_format="source_file",
                 path=str(path),
                 source_file_id=source_file_id,
+                data_json=[],
                 metadata_json=payload_metadata,
             )
         )
@@ -1558,12 +1582,8 @@ def _ensure_sample(
     if run_sample_id not in context.run_samples:
         context.run_samples[run_sample_id] = RunSample(
             run_sample_id=run_sample_id,
-            project_id=context.project_id,
             run_id=sample_run_id,
             sample_id=sample_id,
-            assay=context.assay,
-            status="complete",
-            metadata_json={"source": "cbioportal_import"},
         )
     return sample
 

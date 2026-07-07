@@ -110,7 +110,7 @@ class ParserOutput:
         sample_name: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Sample:
-        """Register a biological/material sample and its processed-sample row.
+        """Register a biological/material sample and its run/sample link.
 
         Custom parser observations are stored at the run-sample grain, so adding
         a sample also creates the `RunSample` that ties this run to that sample.
@@ -121,7 +121,7 @@ class ParserOutput:
         sample = self.samples.get(sample_id)
         if sample is None:
             # Samples imply run-samples for the custom parser path because
-            # Goodomics persists observations at the processed-sample grain.
+            # Goodomics persists observations at the run/sample grain.
             sample = Sample(
                 sample_id=sample_id,
                 project_id=self.project_id,
@@ -131,12 +131,8 @@ class ParserOutput:
             self.samples[sample_id] = sample
             self.run_samples[sample_id] = RunSample(
                 run_sample_id=self.run_sample_id(sample_id),
-                project_id=self.project_id,
                 run_id=self.run_id,
                 sample_id=sample_id,
-                assay=self.assay,
-                status="complete",
-                metadata_json={"source": self.parser_key},
             )
         return sample
 
@@ -289,21 +285,34 @@ class ParserOutput:
         if sample_id is not None:
             self.sample(sample_id)
         columns = list(rows[0]) if rows else []
-        self.batch.contract_payloads.append(
+        field_id = f"{data_contract_id}:{name}"
+        self._add_payload_field(
+            field_id=field_id,
+            name=name,
+            namespace=data_contract_id,
+            payload_kind=payload_kind,
+            columns=columns,
+        )
+        self.batch.result_payloads.append(
             UnresolvedAnalyticalRecord(
-                payload_id=f"{self.run_id}:{name}:{len(self.batch.contract_payloads)}",
+                payload_id=f"{self.run_id}:{name}:{len(self.batch.result_payloads)}",
                 data_contract_id=data_contract_id,
                 run_id=self.run_id,
                 run_sample_id=(
                     self.run_sample_id(sample_id) if sample_id is not None else None
                 ),
+                sample_id=sample_id,
+                field_id=field_id,
                 payload_name=name,
                 payload_kind=payload_kind,
                 storage_format="inline_json",
-                row_count=len(rows),
-                metadata_json={
+                schema_json={
+                    "shape": "records",
                     "columns": columns,
-                    "rows": rows,
+                },
+                row_count=len(rows),
+                data_json=rows,
+                metadata_json={
                     "sample_id": sample_id,
                 },
             )
@@ -342,7 +351,7 @@ class ParserOutput:
         return file
 
     def run_sample_id(self, sample_id: str) -> str:
-        """Return the deterministic processed-sample ID for this run/sample."""
+        """Return the deterministic run-sample ID for this run/sample."""
         return f"{self.run_id}:{sample_id}"
 
     def to_normalized_result(
@@ -443,6 +452,38 @@ class ParserOutput:
                 ),
             },
             metadata_json={"producer_tool": self.parser_key},
+        )
+
+    def _add_payload_field(
+        self,
+        *,
+        field_id: str,
+        name: str,
+        namespace: str,
+        payload_kind: str,
+        columns: list[str],
+    ) -> None:
+        """Add one result payload contract field unless it is already staged."""
+        if field_id in self.data_contract_fields:
+            return
+        self.data_contract_fields[field_id] = DataContractField(
+            data_contract_id=namespace,
+            field_id=field_id,
+            field_role="payload",
+            entity_scope="run_sample",
+            display_name=name,
+            value_type="json",
+            query_ref_json={
+                "table": "result_payloads",
+                "field_column": "field_id",
+                "field_value": field_id,
+                "value_column": "data_json",
+            },
+            metadata_json={
+                "producer_tool": self.parser_key,
+                "payload_kind": payload_kind,
+                "schema_json": {"shape": "records", "columns": columns},
+            },
         )
 
     def _deduped_batch(self) -> AnalyticsIngestBatch:
@@ -549,7 +590,7 @@ class CustomParser:
                 normalized.analytics_batch.feature_value_numeric
             ),
             feature_calls_ingested=len(normalized.analytics_batch.feature_call),
-            payloads_ingested=len(normalized.analytics_batch.contract_payloads),
+            payloads_ingested=len(normalized.analytics_batch.result_payloads),
             files_registered=len(normalized.files),
             database_url=resolved_database_url,
             analytics_path=resolved_analytics_path,

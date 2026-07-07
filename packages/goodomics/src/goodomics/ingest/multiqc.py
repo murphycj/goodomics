@@ -15,6 +15,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
     discover_multiqc_outputs,
+    multiqc_upstream_run_id,
     parse_multiqc_bundle,
     parse_multiqc_outputs,
 )
@@ -24,8 +25,10 @@ from goodomics.schemas.models import (
     FileAsset,
     FileLink,
     Run,
+    RunRelationship,
     RunSample,
     Sample,
+    Subject,
 )
 from goodomics.storage.analytics_resolution import (
     resolve_analytics_batch_catalog_ids,
@@ -53,6 +56,8 @@ class MultiQCIngestResult:
     metrics_ingested: int
     payloads_ingested: int
     files_stored: int
+    upstream_runs: int
+    run_relationships: int
     database_url: str
     analytics_path: Path
     file_root: Path
@@ -137,13 +142,10 @@ def ingest_multiqc(
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
 ) -> MultiQCIngestResult:
-    """Ingest a single MultiQC bundle path as one run."""
+    """Ingest a single parquet-backed MultiQC bundle path as one report run."""
 
     resolved_run_id = run_id or default_run_id(results)
     parsed = parse_multiqc_bundle(results, run_id=resolved_run_id)
-    if not parsed.outputs:
-        raise ValueError(f"No MultiQC output found under {results}")
-
     return _save_multiqc_parse_result(
         parsed,
         run_id=resolved_run_id,
@@ -209,32 +211,82 @@ def _save_multiqc_parse_result(
             "outputs_found": len(parsed.outputs),
             "metrics_ingested": len(parsed.metrics),
             "payloads_ingested": len(parsed.payloads),
+            "canonical_samples": len(parsed.sample_ids),
+            "upstream_runs": len(parsed.sample_ids),
         },
         metadata_json={
             "source_paths": [str(output.root_dir) for output in parsed.outputs],
         },
     )
-    run = Run(
+    report_run = Run(
         run_id=run_id,
         project_id=project_record.project_id,
         data_import_id=data_import.data_import_id,
         project=project_record.slug,
+        name=f"MultiQC report {run_id}",
+        run_kind="multiqc_report",
         assay=assay,
-        samples=[
-            Sample(sample_id=sample_id, project_id=project_record.project_id)
-            for sample_id in sorted(parsed.sample_ids)
-        ],
+        pipeline_name="MultiQC",
+        metadata_json={"source": "multiqc_report"},
     )
+    subjects = [
+        Subject(subject_id=sample_id, project_id=project_record.project_id)
+        for sample_id in sorted(parsed.sample_ids)
+    ]
+    samples = [
+        Sample(
+            sample_id=sample_id,
+            project_id=project_record.project_id,
+            subject_id=sample_id,
+            sample_name=sample_id,
+            metadata_json={"source": "multiqc_general_stats"},
+        )
+        for sample_id in sorted(parsed.sample_ids)
+    ]
+    upstream_runs = [
+        Run(
+            run_id=multiqc_upstream_run_id(run_id, sample.sample_id),
+            project_id=project_record.project_id,
+            data_import_id=data_import.data_import_id,
+            project=project_record.slug,
+            name=f"{sample.sample_id} upstream analysis",
+            run_kind="pipeline_run",
+            assay=assay,
+            pipeline_name="MultiQC inferred upstream analysis",
+            status="provisional",
+            metadata_json={
+                "source": "multiqc_general_stats",
+                "provenance_strength": "inferred",
+                "multiqc_report_run_id": run_id,
+            },
+        )
+        for sample in samples
+    ]
     run_samples = [
         RunSample(
-            run_sample_id=f"{run_id}:{sample.sample_id}",
-            project_id=project_record.project_id,
-            run_id=run_id,
+            run_sample_id=(
+                f"{multiqc_upstream_run_id(run_id, sample.sample_id)}:"
+                f"{sample.sample_id}"
+            ),
+            run_id=multiqc_upstream_run_id(
+                run_id,
+                sample.sample_id,
+            ),
             sample_id=sample.sample_id,
-            assay=assay,
-            status="complete",
         )
-        for sample in run.samples
+        for sample in samples
+    ]
+    run_relationships = [
+        RunRelationship(
+            source_run_id=run_id,
+            target_run_id=upstream_run.run_id,
+            relationship_type="summarizes",
+            metadata_json={
+                "source": "multiqc",
+                "relationship": "multiqc_report_run summarizes upstream_sample_run",
+            },
+        )
+        for upstream_run in upstream_runs
     ]
 
     files = _copy_multiqc_files(
@@ -249,15 +301,20 @@ def _save_multiqc_parse_result(
             project_id=project_record.project_id,
             data_import_id=data_import.data_import_id,
             run_id=run_id,
-            link_role="source" if file.file_role == "multiqc_data" else "report",
+            link_role="source"
+            if file.file_role in {"multiqc_data", "multiqc_parquet", "multiqc_log"}
+            else "report",
         )
         for file in files
     ]
     catalog_result = asyncio.run(
-        catalog_store.replace_run_catalog(
-            run,
+        catalog_store.replace_runs_catalog(
+            [report_run, *upstream_runs],
             data_import=data_import,
+            subjects=subjects,
+            samples=samples,
             run_samples=run_samples,
+            run_relationships=run_relationships,
             data_contracts=[
                 data_contract.model_copy(
                     update={"project_id": project_record.project_id}
@@ -274,11 +331,14 @@ def _save_multiqc_parse_result(
         parsed.to_batch(run_id=run_id),
         catalog_id_maps,
     )
-    resolved_run_id = resolve_catalog_id("run_id", run_id, catalog_id_maps)
+    resolved_run_ids = [
+        resolve_catalog_id("run_id", row.run_id, catalog_id_maps)
+        for row in catalog_result.runs
+    ]
 
-    DuckDBAnalyticsStore(resolved_analytics_path).replace_run_data(
-        resolved_run_id,
+    DuckDBAnalyticsStore(resolved_analytics_path).write_batch(
         resolved_batch,
+        replace_run_ids=[run_id for run_id in resolved_run_ids if run_id is not None],
     )
 
     return MultiQCIngestResult(
@@ -288,6 +348,8 @@ def _save_multiqc_parse_result(
         metrics_ingested=len(parsed.metrics),
         payloads_ingested=len(parsed.payloads),
         files_stored=len(files),
+        upstream_runs=len(upstream_runs),
+        run_relationships=len(run_relationships),
         database_url=database_url,
         analytics_path=resolved_analytics_path,
         file_root=file_root,
@@ -336,6 +398,29 @@ def _copy_multiqc_files(
                 destination=data_destination,
             )
         )
+        parquet_destination = data_destination / output.parquet_path.name
+        if parquet_destination.exists():
+            files.append(
+                _file_metadata(
+                    run_id=run_id,
+                    project_id=project_id,
+                    kind="multiqc_parquet",
+                    source=output.parquet_path,
+                    destination=parquet_destination,
+                )
+            )
+        log_source = output.data_dir / "multiqc.log"
+        log_destination = data_destination / "multiqc.log"
+        if log_source.exists() and log_destination.exists():
+            files.append(
+                _file_metadata(
+                    run_id=run_id,
+                    project_id=project_id,
+                    kind="multiqc_log",
+                    source=log_source,
+                    destination=log_destination,
+                )
+            )
     return files
 
 

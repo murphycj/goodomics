@@ -794,23 +794,25 @@ def test_run_analytics_and_file_content_endpoints(
     contract_projects = _contract_project_ids(database_url)
     assert contract_projects["salmon:metrics"] == DEFAULT_PROJECT_ID
     assert contract_projects["fastqc:raw:metrics"] == DEFAULT_PROJECT_ID
-    assert contract_projects["multiqc:payloads"] == DEFAULT_PROJECT_ID
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
     monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
 
     with TestClient(create_app()) as test_client:
-        metrics = test_client.get("/api/v1/runs/run-1/analytics/metrics")
+        metrics = test_client.get("/api/v1/runs/run-1:S1:analysis/analytics/metrics")
         payloads = test_client.get("/api/v1/runs/run-1/analytics/payloads")
         files = test_client.get("/api/v1/runs/run-1/files").json()
         project_metrics = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/analytics/metrics"
         )
+        upstream_project_metrics = test_client.get(
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1:S1:analysis/analytics/metrics"
+        )
         project_payloads = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/analytics/payloads"
         )
         sample_metrics = test_client.get(
-            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/run-1/analytics/metrics"
+            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/run-1:S1:analysis/analytics/metrics"
         )
         project_files = test_client.get(
             f"/api/v1/projects/{DEFAULT_PROJECT_ID}/runs/run-1/files"
@@ -857,12 +859,14 @@ def test_run_analytics_and_file_content_endpoints(
         database_url, "general_stats.salmon_percent_mapped"
     )
     s1_sample_id = _sample_pk(database_url, "S1")
-    s1_run_sample_id = _run_sample_pk(database_url, "run-1:S1")
+    s1_run_sample_id = _run_sample_pk(database_url, "run-1:S1:analysis:S1")
     assert any(item["field_id"] == percent_mapped_field_id for item in metrics.json())
     assert payloads.status_code == 200
-    assert any(item["payload_name"] == "salmon_plot" for item in payloads.json())
+    assert payloads.json() == []
     assert project_metrics.status_code == 200
-    assert project_metrics.json() == metrics.json()
+    assert project_metrics.json() == []
+    assert upstream_project_metrics.status_code == 200
+    assert upstream_project_metrics.json() == metrics.json()
     assert project_payloads.status_code == 200
     assert project_payloads.json() == payloads.json()
     assert sample_metrics.status_code == 200
@@ -935,9 +939,9 @@ def test_database_summary_reports_control_and_analytics_counts(
     assert body["sqlite_size_bytes"] > 0
     assert body["duckdb_size_bytes"] > 0
     assert body["file_size_bytes"] > 0
-    assert body["total_runs"] == 1
+    assert body["total_runs"] == 2
     assert body["total_scalar_metrics"] > 0
-    assert body["total_payloads"] > 0
+    assert body["total_payloads"] == 0
 
 
 def test_contract_browser_and_contract_first_insight_execution(
@@ -1358,7 +1362,11 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
         for field in contracts[CBIOPORTAL_COPY_NUMBER_SEGMENTS].json()["fields"]
     )
     assert any(
-        field["field_id"] == "payload_kind"
+        field["field_id"] == "data_gene_panel_matrix"
+        for field in contracts[CBIOPORTAL_GENE_PANEL_MATRIX].json()["fields"]
+    )
+    assert any(
+        field["display_name"] == "Data Gene Panel Matrix"
         for field in contracts[CBIOPORTAL_GENE_PANEL_MATRIX].json()["fields"]
     )
     assert any(

@@ -55,23 +55,23 @@ def tool_payload_contract(
     *,
     name: str | None = None,
 ) -> DataContract:
-    """Build a reusable payload-table contract for a bioinformatics tool output."""
+    """Build a reusable result-payload contract for a bioinformatics tool output."""
 
     normalized_tool = _normalize_part(tool)
     normalized_context = _normalize_part(context) if context else None
     display_base = _display_name(normalized_tool, normalized_context)
-    display_name = name or f"{display_base} payload tables"
+    display_name = name or f"{display_base} result payloads"
     data_contract = contract(
         tool_contract_id(normalized_tool, normalized_context, kind="payloads"),
         name=display_name,
-        data_type="contract_payload",
+        data_type="result_payload",
         producer_tool=normalized_tool,
-        value_type="table",
-        entity_grain="run",
-        primary_table="contract_payloads",
-        physical_tables=["contract_payloads"],
+        value_type="mixed",
+        entity_grain="run_sample",
+        primary_table="result_payloads",
+        physical_tables=["result_payloads"],
         query_modes=["payload"],
-        description=f"Source tables and plot payloads from {display_base} outputs.",
+        description=f"Non-scalar result payloads from {display_base} outputs.",
     )
     return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
 

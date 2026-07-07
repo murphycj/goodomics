@@ -110,7 +110,7 @@ function contextLabel(context: Record<string, unknown> | null) {
   const sample = stringValue(context?.sample_id);
   const runSample = stringValue(context?.run_sample_id);
   if (sample) return `Sample ${sample}`;
-  if (runSample) return `Processed sample ${runSample}`;
+  if (runSample) return `Run sample ${runSample}`;
   if (sampleSet) return `Cohort ${sampleSet}`;
   return kind === "sample" ? "Sample context" : "Cohort context";
 }

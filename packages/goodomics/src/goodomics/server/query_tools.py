@@ -168,7 +168,7 @@ class GoodomicsQueryTools:
                         bucket.append(row)
             return {
                 "contracts": [
-                    _data_contract_payload(
+                    _data_result_payload(
                         contract, fields_by_contract.get(contract.id, [])
                     )
                     for contract in contracts
@@ -1060,7 +1060,7 @@ def _sample_metric_value(value: Any) -> JsonValue:
     return value.value_string
 
 
-def _data_contract_payload(
+def _data_result_payload(
     contract: DataContractRecord,
     fields: list[DataContractFieldRecord],
 ) -> dict[str, Any]:

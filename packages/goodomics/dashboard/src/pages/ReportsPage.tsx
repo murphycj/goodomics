@@ -806,7 +806,7 @@ function ReportContextControls({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Processed sample</Label>
+            <Label>Run sample</Label>
             <Input
               placeholder="run:S1"
               value={runSampleId}

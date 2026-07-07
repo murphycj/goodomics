@@ -139,12 +139,12 @@ def _custom_contract(
     return DataContract(
         data_contract_id=data_contract_id,
         name=name,
-        data_type="contract_payload",
+        data_type="result_payload",
         producer_tool="cbioportal",
         value_type="mixed",
         entity_grain="run_sample",
-        primary_table="contract_payloads",
-        physical_tables_json={"tables": ["contract_payloads"]},
+        primary_table="result_payloads",
+        physical_tables_json={"tables": ["result_payloads"]},
         query_modes_json={"modes": ["payload"]},
         mcp_description=(
             values.get("contract_description")

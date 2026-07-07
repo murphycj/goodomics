@@ -398,7 +398,7 @@ class SampleGroupPatch(BaseModel):
 
 
 class SampleGroupMemberRead(BaseModel):
-    """Processed-sample member displayed in a sample group."""
+    """Sample/run link member displayed in a sample group."""
 
     run_sample_id: str
     sample_id: str
@@ -425,7 +425,7 @@ class SampleGroupMembersAdd(BaseModel):
 
 
 class SampleGroupMembersRemove(BaseModel):
-    """Payload for removing processed samples from a sample group."""
+    """Payload for removing sample/run links from a sample group."""
 
     run_sample_ids: list[str]
 
@@ -553,21 +553,38 @@ class AnalyticsMetricRead(BaseModel):
     value_type: str
     value: float | str | bool | dict[str, Any] | list[Any] | None = None
     source_file_id: int | str | None = None
+    source_observation_id: str | None = None
+    source_observation_label: str | None = None
+    source_observation_metadata_json: dict[str, JsonValue] = Field(
+        default_factory=dict
+    )
 
 
-class AnalyticsPayloadRead(BaseModel):
-    """Tabular analytical payload read from the DuckDB analytics store."""
+class AnalyticsResultPayloadRead(BaseModel):
+    """Logical non-scalar result payload read from the analytics store."""
 
     run_id: int | str
     data_contract_id: int | str
     run_sample_id: int | str | None = None
+    sample_id: int | str | None = None
+    field_id: int | str
     payload_name: str
     payload_kind: str
     storage_format: str
+    payload_schema_json: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="schema_json",
+    )
+    data_json: JsonValue
     columns: list[str]
     rows: list[dict[str, Any]]
     row_count: int
     source_file_id: int | str | None = None
+    source_observation_id: str | None = None
+    source_observation_label: str | None = None
+    source_observation_metadata_json: dict[str, JsonValue] = Field(
+        default_factory=dict
+    )
     source_hash: str | None = None
 
 
@@ -734,18 +751,18 @@ async def list_project_run_analytics_metrics(
 
 @router.get(
     "/projects/{project_id}/runs/{run_id}/analytics/payloads",
-    response_model=list[AnalyticsPayloadRead],
+    response_model=list[AnalyticsResultPayloadRead],
 )
 async def list_project_run_analytics_payloads(
     project_id: str,
     run_id: str,
     request: Request,
-) -> list[AnalyticsPayloadRead]:
-    """Return tabular analytical payloads for a project-scoped run."""
+) -> list[AnalyticsResultPayloadRead]:
+    """Return result payloads for a project-scoped run."""
 
     run = await _get_project_run_record(request, project_id, run_id)
     return _analytics_payload_reads(
-        _analytics_store_for_project(request, project_id).list_contract_payloads(run.id)
+        _analytics_store_for_project(request, project_id).list_result_payloads(run.id)
     )
 
 
@@ -805,8 +822,9 @@ async def get_project_sample(
                         RunSampleRecord,
                         cast(Any, RunSampleRecord.sample_id) == SampleRecord.id,
                     )
+                    .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
                     .where(
-                        RunSampleRecord.project_id == project.id,
+                        RunRecord.project_id == project.id,
                         SampleRecord.sample_id == sample_id,
                     )
                 )
@@ -1245,17 +1263,17 @@ async def list_run_analytics_metrics(
 
 @router.get(
     "/runs/{run_id}/analytics/payloads",
-    response_model=list[AnalyticsPayloadRead],
+    response_model=list[AnalyticsResultPayloadRead],
 )
 async def list_run_analytics_payloads(
     run_id: str, request: Request
-) -> list[AnalyticsPayloadRead]:
-    """Return tabular analytics payloads for a run."""
+) -> list[AnalyticsResultPayloadRead]:
+    """Return result payloads for a run."""
 
     run = await _get_run_record(request, run_id)
     project_id = await _project_public_id_for_pk(request, run.project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
-    return _analytics_payload_reads(analytics_store.list_contract_payloads(run.id))
+    return _analytics_payload_reads(analytics_store.list_result_payloads(run.id))
 
 
 @router.get("/contracts", response_model=list[DataContractRead])
@@ -2001,7 +2019,7 @@ async def list_project_sample_group_members(
     offset: int = Query(default=0, ge=0),
     search: str = Query(default="", max_length=255),
 ) -> SampleGroupMemberPageRead:
-    """List processed-sample members for one sample group."""
+    """List sample/run link members for one sample group."""
 
     project = await _require_project(request, project_id)
     async with _session(request) as session:
@@ -2026,7 +2044,7 @@ async def add_project_sample_group_members(
     payload: SampleGroupMembersAdd,
     request: Request,
 ) -> SampleSetRead:
-    """Add samples to a sample group by resolving their latest processed sample."""
+    """Add samples to a sample group by resolving their latest sample/run link."""
 
     project = await _require_project(request, project_id)
     async with _session(request) as session:
@@ -2052,7 +2070,7 @@ async def remove_project_sample_group_members(
     payload: SampleGroupMembersRemove,
     request: Request,
 ) -> SampleSetRead:
-    """Remove processed-sample members from a sample group."""
+    """Remove sample/run link members from a sample group."""
 
     project = await _require_project(request, project_id)
     async with _session(request) as session:
@@ -2232,7 +2250,7 @@ async def get_database_summary(
         total_runs=control_counts.get("runs", 0),
         total_samples=control_counts.get("samples", 0),
         total_scalar_metrics=analytics_counts.get("sample_metrics", 0),
-        total_payloads=analytics_counts.get("contract_payloads", 0),
+        total_payloads=analytics_counts.get("result_payloads", 0),
         control_tables=[
             TableCountRead(name=name, rows=count)
             for name, count in sorted(control_counts.items())
@@ -2677,7 +2695,7 @@ async def _sample_group_members_page(
 
     filters: list[Any] = [
         SampleSetMemberRecord.sample_set_id == sample_set.id,
-        RunSampleRecord.project_id == project.id,
+        RunRecord.project_id == project.id,
     ]
     term = search.strip().lower()
     if term:
@@ -2759,7 +2777,7 @@ def _sample_group_member_read(
         subject_id=subject_id,
         run_id=run.run_id,
         run_name=run.name,
-        status=run_sample.status,
+        status=run.status,
     )
 
 
@@ -2788,7 +2806,7 @@ async def _add_sample_group_members_by_sample_id(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Samples must have at least one processed sample before they "
+                "Samples must have at least one run/sample link before they "
                 f"can be added to a group: {', '.join(unresolved)}"
             ),
         )
@@ -2830,15 +2848,17 @@ async def _remove_sample_group_members_by_run_sample_id(
     sample_set: SampleSetRecord,
     run_sample_ids: list[str],
 ) -> None:
-    """Remove processed-sample labels from a sample group."""
+    """Remove sample/run link labels from a sample group."""
 
     requested_run_sample_ids = _unique_nonempty(run_sample_ids)
     if not requested_run_sample_ids or sample_set.id is None:
         return
     run_samples = (
         await session.exec(
-            select(RunSampleRecord).where(
-                RunSampleRecord.project_id == project.id,
+            select(RunSampleRecord)
+            .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+            .where(
+                RunRecord.project_id == project.id,
                 cast(Any, RunSampleRecord.run_sample_id).in_(requested_run_sample_ids),
             )
         )
@@ -2999,7 +3019,6 @@ async def _list_samples(
         )
         .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
         .where(
-            RunSampleRecord.project_id == project_pk,
             RunRecord.project_id == project_pk,
         )
         .group_by(cast(Any, RunSampleRecord.sample_id))
@@ -3010,7 +3029,8 @@ async def _list_samples(
             cast(Any, RunSampleRecord.sample_id).label("sample_id"),
             func.count(func.distinct(RunSampleRecord.run_id)).label("run_count"),
         )
-        .where(RunSampleRecord.project_id == project_pk)
+        .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+        .where(RunRecord.project_id == project_pk)
         .group_by(cast(Any, RunSampleRecord.sample_id))
         .subquery()
     )
@@ -3124,7 +3144,6 @@ async def _sample_run_rows(
             )
             .where(
                 RunRecord.project_id == project.id,
-                RunSampleRecord.project_id == project.id,
                 RunSampleRecord.sample_id == sample.id,
             )
             .order_by(
@@ -3173,7 +3192,6 @@ async def _get_sample_run_link(
             .where(
                 RunRecord.project_id == project.id,
                 RunRecord.run_id == run_id,
-                RunSampleRecord.project_id == project.id,
                 RunSampleRecord.sample_id == sample.id,
             )
         )
@@ -3324,7 +3342,7 @@ async def _sample_run_from_rows_public(
         status=run.status,
         created_at=run.created_at,
         run_sample_id=run_sample.run_sample_id,
-        run_sample_status=run_sample.status,
+        run_sample_status=run.status,
     )
 
 
@@ -3341,6 +3359,9 @@ def _analytics_metric_reads(metrics: list[Any]) -> list[AnalyticsMetricRead]:
             value_type=metric.value_type,
             value=_sample_metric_value(metric),
             source_file_id=metric.source_file_id,
+            source_observation_id=metric.source_observation_id,
+            source_observation_label=metric.source_observation_label,
+            source_observation_metadata_json=metric.source_observation_metadata_json,
         )
         for metric in metrics
     ]
@@ -3356,21 +3377,30 @@ def _sample_metric_value(metric: Any) -> JsonValue:
     return metric.value_string
 
 
-def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsPayloadRead]:
+def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsResultPayloadRead]:
     """Convert DuckDB payload rows into API response models."""
 
     return [
-        AnalyticsPayloadRead(
+        AnalyticsResultPayloadRead(
             run_id=payload.run_id,
             data_contract_id=payload.data_contract_id,
             run_sample_id=payload.run_sample_id,
+            sample_id=payload.sample_id,
+            field_id=payload.field_id,
             payload_name=payload.payload_name,
             payload_kind=payload.payload_kind,
             storage_format=payload.storage_format,
-            columns=_payload_columns(payload.metadata_json),
-            rows=_payload_rows(payload.metadata_json),
-            row_count=payload.row_count or len(_payload_rows(payload.metadata_json)),
+            payload_schema_json=payload.payload_schema_json,
+            data_json=payload.data_json,
+            columns=payload.columns,
+            rows=payload.rows,
+            row_count=payload.row_count or len(payload.rows),
             source_file_id=payload.source_file_id,
+            source_observation_id=payload.source_observation_id,
+            source_observation_label=payload.source_observation_label,
+            source_observation_metadata_json=(
+                payload.source_observation_metadata_json
+            ),
             source_hash=_payload_source_hash(payload.metadata_json),
         )
         for payload in payloads
@@ -3405,22 +3435,6 @@ def _new_id(prefix: str) -> str:
     """Generate a short stable-enough local API ID with a prefix."""
 
     return f"{prefix}-{uuid4().hex[:12]}"
-
-
-def _payload_columns(metadata_json: dict[str, Any]) -> list[str]:
-    """Extract tabular payload column names from stored metadata."""
-
-    columns = metadata_json.get("columns")
-    return [str(column) for column in columns] if isinstance(columns, list) else []
-
-
-def _payload_rows(metadata_json: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract tabular payload rows from stored metadata."""
-
-    rows = metadata_json.get("rows")
-    if not isinstance(rows, list):
-        return []
-    return [row for row in rows if isinstance(row, dict)]
 
 
 def _payload_source_hash(metadata_json: dict[str, Any]) -> str | None:
@@ -3881,9 +3895,24 @@ def _synthetic_contract_fields(
                 "paired_end_read_count",
             ),
         ],
-        "contract_payloads": [
+        "result_payloads": [
             ("payload_kind", "attribute", "Payload kind", "string", "payload_kind"),
             ("payload_name", "attribute", "Payload name", "string", "payload_name"),
+            ("schema_json", "attribute", "Payload schema", "json", "schema_json"),
+            (
+                "source_observation_id",
+                "attribute",
+                "Source observation",
+                "string",
+                "source_observation_id",
+            ),
+            (
+                "source_observation_label",
+                "attribute",
+                "Source observation label",
+                "string",
+                "source_observation_label",
+            ),
         ],
     }.get(contract.primary_table or "", [])
     return [

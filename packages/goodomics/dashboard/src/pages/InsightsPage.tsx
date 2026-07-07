@@ -975,7 +975,7 @@ function InsightContextTabs({
             />
           </div>
           <div className="w-full max-w-[300px] space-y-1.5">
-            <Label>Processed sample</Label>
+            <Label>Run sample</Label>
             <Input
               placeholder="run:S1"
               value={runSampleId}
@@ -1106,10 +1106,10 @@ function tabDescription(value: string, fallback: string) {
     return "Build cohort-level metric panels and distributions from contract fields.";
   }
   if (value === "sample_detail") {
-    return "Inspect one sample or processed sample with detail and table views.";
+    return "Inspect one sample or run/sample link with detail and table views.";
   }
   if (value === "comparison") {
-    return "Align two or more values by sample, processed sample, feature, or run.";
+    return "Align two or more values by sample, run/sample link, feature, or run.";
   }
   if (value === "variant_table") {
     return "Create table-oriented outputs from contract fields or SQL-backed data.";
@@ -1121,7 +1121,7 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
   const fallback = [
     ["auto", "Auto"],
     ["sample", "Sample"],
-    ["run_sample", "Processed sample"],
+    ["run_sample", "Run sample"],
     ["run", "Run"],
     ["feature", "Feature"],
     ["entity", "Entity"],
