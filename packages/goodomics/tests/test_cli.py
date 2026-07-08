@@ -94,7 +94,7 @@ def test_ingest_command_creates_local_state(tmp_path: Path) -> None:
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_path, "run-1")
+        _run_pk(database_path, "run-1:S1:analysis")
     )
 
 
@@ -162,7 +162,7 @@ def test_ingest_command_accepts_short_flags(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "short-run" in result.stdout
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_path, "short-run")
+        _run_pk(database_path, "short-run:S1:analysis")
     )
 
 
@@ -203,7 +203,7 @@ def test_default_path_argument_ingests_multiqc_output(tmp_path: Path) -> None:
     assert database_path.exists()
     assert analytics_path.exists()
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_path, "run-default")
+        _run_pk(database_path, "run-default:S1:analysis")
     )
 
 
@@ -241,10 +241,10 @@ def test_default_path_argument_splits_multiqc_parent_directory(tmp_path: Path) -
     assert "WT_REP1" in result.stdout
     assert "WT_REP2" in result.stdout
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_path, "WT_REP1")
+        _run_pk(database_path, "WT_REP1:WT_REP1:analysis")
     )
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_path, "WT_REP2")
+        _run_pk(database_path, "WT_REP2:WT_REP2:analysis")
     )
     assert (file_root / "WT_REP1" / "multiqc").exists()
     assert (file_root / "WT_REP2" / "multiqc").exists()
