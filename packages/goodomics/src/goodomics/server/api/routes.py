@@ -3386,7 +3386,7 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsResultPayload
             payload_name=payload.payload_name,
             payload_kind=payload.payload_kind,
             storage_format=payload.storage_format,
-            payload_schema_json=payload.payload_schema_json,
+            schema_json=payload.payload_schema_json,
             data_json=payload.data_json,
             columns=payload.columns,
             rows=payload.rows,
