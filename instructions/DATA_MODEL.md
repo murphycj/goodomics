@@ -370,11 +370,12 @@ shapes, and add derived layouts only for hot query paths.
 | Logical payloads       | Queryable escape hatch for object-like outputs                   | Parsed tables, arrays, JSON payloads, logs, report sections                  |
 | Derived query layouts  | Duplicate or reshape canonical data for hot access patterns      | By-metric metrics, by-feature matrices, by-region variants, alteration state |
 
-Data contracts sit above these physical choices. A data contract names the logical
-dataset and its provenance, while the contract's `data_type` determines whether
-Goodomics stores it as scalar metrics, feature values, feature calls, variants,
-intervals, segments, structural variants, logical payloads, and/or derived query
-layouts.
+Data contracts sit above these physical choices. A data contract names the
+semantic namespace and provenance for a family of outputs. The fields inside the
+contract are the queryable units: each `data_contract_fields` row declares its
+main analytical table, physical table footprint, and value lookup hints. The
+contract's `data_type` is descriptive and useful for grouping and defaults, but
+field metadata is authoritative for query routing.
 
 Canonical tables preserve biological meaning and provenance. Derived tables
 preserve speed and query semantics. Derived tables should be reproducible from
@@ -853,7 +854,7 @@ small source-shaped objects.
 | `sample_id`       | Nullable sample integer ID shortcut for filtering                    |
 | `field_id`        | Data contract field for the logical payload type                     |
 | `payload_name`    | Stable payload name                                                  |
-| `payload_kind`    | Example: `xy_series`, `table`, `matrix`, `json`                      |
+| `payload_kind`    | Internal shape discriminator, such as `xy_series`, `table`, `matrix`, or `json`; UI may label `xy_series` as "Point series" |
 | `storage_format`  | Example: `inline_json`, `source_file`                                |
 | `path`            | Local path if materialized                                           |
 | `uri`             | Object-store or remote URI if applicable                             |

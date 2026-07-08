@@ -52,11 +52,11 @@ insights:
     query:
       source:
         kind: data_contract
-        data_contract_id: salmon:metrics
+        data_contract_id: salmon:results
       fields: [general_stats.salmon_percent_mapped]
       entity: run_sample
     series:
-      - contract_id: salmon:metrics
+      - contract_id: salmon:results
         field_id: general_stats.salmon_percent_mapped
         name: Percent mapped
         aggregation: avg

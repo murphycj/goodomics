@@ -93,8 +93,11 @@ reuse a built-in contract ID.
 
 ## Contracts
 
-A data contract is the semantic contract for a logical dataset. It says what kind
-of data the parser emits and how Goodomics tools should query it.
+A data contract is the semantic namespace for related analytical outputs. It
+groups fields under the user-facing thing they came from, such as a tool, assay,
+or source format. The fields inside the contract carry the queryable details:
+display labels, units, value types, physical analytical table, and value-column
+lookup hints.
 
 Use a custom contract when the data shape is specific to your dataset or lab:
 
