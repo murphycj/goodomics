@@ -555,9 +555,7 @@ class AnalyticsMetricRead(BaseModel):
     source_file_id: int | str | None = None
     source_observation_id: str | None = None
     source_observation_label: str | None = None
-    source_observation_metadata_json: dict[str, JsonValue] = Field(
-        default_factory=dict
-    )
+    source_observation_metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class AnalyticsResultPayloadRead(BaseModel):
@@ -582,9 +580,7 @@ class AnalyticsResultPayloadRead(BaseModel):
     source_file_id: int | str | None = None
     source_observation_id: str | None = None
     source_observation_label: str | None = None
-    source_observation_metadata_json: dict[str, JsonValue] = Field(
-        default_factory=dict
-    )
+    source_observation_metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
     source_hash: str | None = None
 
 
@@ -3390,7 +3386,7 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsResultPayload
             payload_name=payload.payload_name,
             payload_kind=payload.payload_kind,
             storage_format=payload.storage_format,
-            payload_schema_json=payload.payload_schema_json,
+            schema_json=payload.payload_schema_json,
             data_json=payload.data_json,
             columns=payload.columns,
             rows=payload.rows,
@@ -3398,9 +3394,7 @@ def _analytics_payload_reads(payloads: list[Any]) -> list[AnalyticsResultPayload
             source_file_id=payload.source_file_id,
             source_observation_id=payload.source_observation_id,
             source_observation_label=payload.source_observation_label,
-            source_observation_metadata_json=(
-                payload.source_observation_metadata_json
-            ),
+            source_observation_metadata_json=(payload.source_observation_metadata_json),
             source_hash=_payload_source_hash(payload.metadata_json),
         )
         for payload in payloads

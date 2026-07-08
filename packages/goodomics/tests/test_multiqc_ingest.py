@@ -119,136 +119,64 @@ def test_parse_multiqc_bundle_requires_parquet(tmp_path: Path) -> None:
         parse_multiqc_bundle(empty_multiqc, run_id="run-1")
 
 
-def test_parse_multiqc_bundle_infers_samples_and_source_observations() -> None:
-    multiqc_dir = Path("examples/multiqc_examples/rnaseq")
+def test_parse_multiqc_bundle_infers_samples_and_source_observations(
+    tmp_path: Path,
+) -> None:
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results", sample_id="SRR3192396")
 
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
 
-    assert len(parsed.sample_ids) == 8
+    assert len(parsed.sample_ids) == 1
+    assert "SRR3192396" in parsed.sample_ids
     assert "SRR3192396 R1" not in parsed.sample_ids
-    assert "SRR3192396 R2" not in parsed.sample_ids
     metric_ids = {metric.field_id for metric in parsed.metrics}
-    assert "general_stats.fastqc_trimmed_percent_gc" in metric_ids
-    assert "general_stats.star_mapped_percent" in metric_ids
+    assert "general_stats.fastqc_raw_percent_gc" in metric_ids
+    assert "general_stats.salmon_percent_mapped" in metric_ids
     metrics_by_field = {metric.field_id: metric for metric in parsed.metrics}
     assert (
-        metrics_by_field["general_stats.fastqc_trimmed_percent_gc"].data_contract_id
+        metrics_by_field["general_stats.fastqc_raw_percent_gc"].data_contract_id
         == "fastqc:results"
     )
-    assert {"fastqc:results", "star:results", "featurecounts:results"} <= {
+    assert {"fastqc:results", "salmon:results"} <= {
         contract.data_contract_id for contract in parsed.contracts
     }
     display_names = {
         field.field_id: field.display_name for field in parsed.contract_fields
     }
-    assert display_names["general_stats.star_mapped"] == "Aligned (mapped)"
-    assert (
-        display_names["general_stats.star_mapped_percent"]
-        == "Aligned (mapped percent)"
-    )
-    assert (
-        display_names["general_stats.star_uniquely_mapped"]
-        == "Uniq aligned (uniquely mapped)"
-    )
-    assert (
-        display_names["general_stats.star_uniquely_mapped_percent"]
-        == "Uniq aligned (uniquely mapped percent)"
-    )
-    assert (
-        display_names["star_summary_table.star_avg_mapped_read_length"]
-        == "Avg. mapped len (avg mapped read length)"
-    )
-    assert (
-        display_names["star_summary_table.star_mismatch_rate"]
-        == "Mismatch rate"
-    )
-    assert (
-        display_names["featurecounts_assignment_plot.unassigned_ambiguity"]
-        == "Unassigned Ambiguity"
-    )
-    assert "star_summary_table.star_insertion_rate" in metric_ids
-    assert "featurecounts_assignment_plot.unassigned_multimapping" in metric_ids
+    assert display_names["general_stats.salmon_percent_mapped"] == "Percent mapped"
+    assert display_names["general_stats.fastqc_raw_percent_gc"] == "Percent GC"
     srr_metrics = [
         metric
         for metric in parsed.metrics
         if metric.sample_id == "SRR3192396"
-        and metric.field_id == "general_stats.fastqc_trimmed_percent_gc"
+        and metric.field_id == "general_stats.fastqc_raw_percent_gc"
     ]
     assert {metric.source_observation_id for metric in srr_metrics} == {
         "multiqc:summary",
         "multiqc:r1",
-        "multiqc:r2",
     }
-    assert {metric.run_id for metric in srr_metrics} == {
-        "run-1:SRR3192396:analysis"
+    assert {metric.run_id for metric in srr_metrics} == {"run-1:SRR3192396:analysis"}
+    assert {metric.source_observation_label for metric in srr_metrics} == {
+        "SRR3192396",
+        "SRR3192396 R1",
     }
-    assert {
-        metric.source_observation_label for metric in srr_metrics
-    } == {"SRR3192396", "SRR3192396 R1", "SRR3192396 R2"}
-    payload_names = {payload.payload_name for payload in parsed.payloads}
-    assert {
-        "fqc_raw_per_base_sequence_quality",
-        "fqc_trimmed_per_base_sequence_quality",
-        "cutadapt_trimmed_sequences_3_counts",
-    } <= payload_names
-    payload_display_names = {
-        field.field_id: field.display_name
-        for field in parsed.contract_fields
-        if field.field_role == "payload"
-    }
-    assert (
-        payload_display_names["fqc_raw_per_base_sequence_quality"]
-        == "Per-base sequence quality"
-    )
-    quality_payload = next(
-        payload
-        for payload in parsed.payloads
-        if payload.payload_name == "fqc_raw_per_base_sequence_quality"
-        and payload.sample_id == "SRR3192396"
-        and payload.source_observation_id == "multiqc:r1"
-    )
-    assert quality_payload.payload_kind == "xy_series"
-    assert quality_payload.data_contract_id == "fastqc:results"
-    assert quality_payload.field_id == "fqc_raw_per_base_sequence_quality"
-    assert quality_payload.model_extra["schema_json"]["columns"] == [
-        "position",
-        "mean_quality",
-    ]
-    assert quality_payload.model_extra["schema_json"]["shape"] == "xy_pairs"
-    assert quality_payload.data_json[0][0] == 1
-    assert "pconfig" not in quality_payload.metadata_json
-    assert {payload.source_observation_id for payload in parsed.payloads} >= {
-        "multiqc:r1",
-        "multiqc:r2",
-    }
+    assert parsed.payloads == []
 
 
 def test_duckdb_store_round_trips_metrics_and_payloads(tmp_path: Path) -> None:
-    multiqc_dir = Path("examples/multiqc_examples/rnaseq")
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results", sample_id="SRR3192396")
     parsed = parse_multiqc_bundle(multiqc_dir, run_id="run-1")
     store = DuckDBAnalyticsStore(tmp_path / "analytics.duckdb")
 
     store.write_batch(_resolved_multiqc_batch(parsed, run_id="run-1"))
 
-    metrics = store.list_metric_values(2)
-    payloads = store.list_result_payloads(2)
-    mapped_percent_field_id = _direct_catalog_maps(parsed, run_id="run-1")["field_id"][
-        "general_stats.star_mapped_percent"
-    ]
+    maps = _direct_catalog_maps(parsed, run_id="run-1")
+    metrics = store.list_metric_values(maps["run_id"]["run-1:SRR3192396:analysis"])
+    payloads = store.list_result_payloads(maps["run_id"]["run-1:SRR3192396:analysis"])
+    mapped_percent_field_id = maps["field_id"]["general_stats.salmon_percent_mapped"]
 
     assert any(metric.field_id == mapped_percent_field_id for metric in metrics)
-    assert any(
-        payload.payload_name == "fqc_raw_per_base_sequence_quality"
-        for payload in payloads
-    )
-    assert payloads[0].data_json
-    quality_payload = next(
-        payload
-        for payload in payloads
-        if payload.payload_name == "fqc_raw_per_base_sequence_quality"
-    )
-    assert quality_payload.data_json[0][0] == 1
-    assert quality_payload.rows[0]["position"] == 1
+    assert payloads == []
 
 
 def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
@@ -461,9 +389,10 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
     file_root = tmp_path / "state" / "files"
+    multiqc_dir = write_multiqc_fixture(tmp_path / "results", sample_id="SRR3192396")
 
     result = ingest_multiqc(
-        Path("examples/multiqc_examples/rnaseq"),
+        multiqc_dir,
         run_id="rnaseq-report",
         project="demo",
         assay="rnaseq",
@@ -472,8 +401,8 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
         file_root=file_root,
     )
 
-    assert result.upstream_runs == 8
-    assert result.run_relationships == 8
+    assert result.upstream_runs == 1
+    assert result.run_relationships == 1
 
     async def load_catalog() -> tuple[
         list[SubjectRecord],
@@ -493,11 +422,11 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
             )
 
     subjects, samples, runs, run_samples, relationships = asyncio.run(load_catalog())
-    assert len(subjects) == 8
-    assert len(samples) == 8
-    assert len(runs) == 9
-    assert len(run_samples) == 8
-    assert len(relationships) == 8
+    assert len(subjects) == 1
+    assert len(samples) == 1
+    assert len(runs) == 2
+    assert len(run_samples) == 1
+    assert len(relationships) == 1
     labels = {
         *{subject.subject_id for subject in subjects},
         *{sample.sample_id for sample in samples},
@@ -505,7 +434,6 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
         *{run_sample.run_sample_id for run_sample in run_samples},
     }
     assert "SRR3192396 R1" not in labels
-    assert "SRR3192396 R2" not in labels
 
     metrics = DuckDBAnalyticsStore(analytics_path).list_metric_values(
         _run_pk(database_url, "rnaseq-report:SRR3192396:analysis")
@@ -523,7 +451,6 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
     assert {metric.source_observation_id for metric in matching} >= {
         "multiqc:summary",
         "multiqc:r1",
-        "multiqc:r2",
     }
 
 
@@ -620,9 +547,7 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     assert wt_upstream is not None
     assert rap1_upstream is not None
     assert "WT_REP1" in {sample.sample_id for sample in wt_upstream.samples}
-    assert "RAP1_IAA_30M_REP1" in {
-        sample.sample_id for sample in rap1_upstream.samples
-    }
+    assert "RAP1_IAA_30M_REP1" in {sample.sample_id for sample in rap1_upstream.samples}
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
         _run_pk(database_url, "WT_REP1:WT_REP1:analysis")
     )

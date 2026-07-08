@@ -89,6 +89,6 @@ build-backend = "hatchling.build"
 packages = ["src/goodomics"]
 
 [tool.hatch.build.targets.sdist]
-
-[tool.hatch.build.targets.sdist.force-include]
-"src/goodomics/server/web/static" = "src/goodomics/server/web/static"
+artifacts = [
+  "src/goodomics/server/web/static/**",
+]

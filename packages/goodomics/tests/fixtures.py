@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -253,7 +254,7 @@ def _parquet_metric_row(
     row_sample: str,
     metric: str,
     value: float,
-    column_meta: dict[str, object],
+    column_meta: Mapping[str, object],
 ) -> tuple[object, ...]:
     return (
         "general_stats_table",

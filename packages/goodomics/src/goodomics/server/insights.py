@@ -1222,10 +1222,9 @@ async def _run_sample_pk(
         RunSampleRecord.run_sample_id == run_sample_id
     )
     if project_id is not None:
-        statement = (
-            statement.join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
-            .where(RunRecord.project_id == await _project_pk(session, project_id))
-        )
+        statement = statement.join(
+            RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id
+        ).where(RunRecord.project_id == await _project_pk(session, project_id))
     row = (await session.exec(statement)).first()
     return row.id if row is not None else None
 
