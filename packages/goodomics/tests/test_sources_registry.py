@@ -122,7 +122,7 @@ def test_contract_providers_cover_built_in_contracts() -> None:
 
     assert "multiqc:payloads" in built_ins
     assert "goodomics:sdk_metrics" in built_ins
-    assert tool_metrics_contract("salmon").data_contract_id == "salmon:metrics"
+    assert tool_metrics_contract("salmon").data_contract_id == "salmon:results"
     assert (
         contract_for_meta(
             {
@@ -162,7 +162,7 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
     assert result.source.key == "multiqc"
     assert result.payload[0].run_id == "registry-run"
     assert DuckDBAnalyticsStore(analytics_path).list_metric_values(
-        _run_pk(database_url, "registry-run")
+        _run_pk(database_url, "registry-run:S1:analysis")
     )
 
 
@@ -211,9 +211,9 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
 
 
 def test_custom_parser_reuses_tool_contract_id(tmp_path: Path) -> None:
-    @parser(key="tool-contract-parser", contracts=["salmon:metrics"])
+    @parser(key="tool-contract-parser", contracts=["salmon:results"])
     def parse_metrics(path: object, out: ParserOutput) -> None:
-        out.metric("pct_mapped", 99.0, sample_id="S1", contract="salmon:metrics")
+        out.metric("pct_mapped", 99.0, sample_id="S1", contract="salmon:results")
 
     analytics_path = tmp_path / "analytics.duckdb"
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'goodomics.db'}"
@@ -228,7 +228,7 @@ def test_custom_parser_reuses_tool_contract_id(tmp_path: Path) -> None:
     values = DuckDBAnalyticsStore(analytics_path).list_metric_values(
         _run_pk(database_url, "builtin-contract-run")
     )
-    metrics_contract_id = _data_contract_pk(database_url, "salmon:metrics")
+    metrics_contract_id = _data_contract_pk(database_url, "salmon:results")
     assert values[0].data_contract_id == metrics_contract_id
 
 
@@ -264,7 +264,7 @@ def test_tool_contract_reuse_preserves_existing_fields(tmp_path: Path) -> None:
             contract = (
                 await session.exec(
                     select(DataContractRecord).where(
-                        DataContractRecord.data_contract_id == "salmon:metrics"
+                        DataContractRecord.data_contract_id == "salmon:results"
                     )
                 )
             ).one()
@@ -280,4 +280,4 @@ def test_tool_contract_reuse_preserves_existing_fields(tmp_path: Path) -> None:
 
     fields = asyncio.run(load_salmon_fields())
     assert "general_stats.salmon_percent_mapped" in fields
-    assert "salmon:metrics:direct_percent_mapped" in fields
+    assert "salmon:results:direct_percent_mapped" in fields

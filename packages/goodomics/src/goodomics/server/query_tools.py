@@ -1073,7 +1073,7 @@ def _data_result_payload(
         "assay": contract.assay,
         "entity_grain": contract.entity_grain,
         "value_semantics": contract.value_semantics,
-        "primary_table": contract.primary_table,
+        "description": contract.description,
         "summary": contract.summary_json,
         "fields": [_data_contract_field_payload(field) for field in fields],
     }
@@ -1091,6 +1091,8 @@ def _data_contract_field_payload(field: DataContractFieldRecord) -> dict[str, An
         "unit": field.unit,
         "direction": field.direction,
         "description": field.description,
+        "primary_table": field.primary_table,
+        "physical_tables": field.physical_tables_json,
         "summary": field.summary_json,
         "query_ref": field.query_ref_json,
     }

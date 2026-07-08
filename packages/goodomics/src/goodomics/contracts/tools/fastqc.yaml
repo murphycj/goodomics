@@ -3,28 +3,27 @@ source:
   kind: tool
   name: FastQC
 contracts:
-  - data_contract_id: fastqc:raw:metrics
-    name: FastQC raw metrics
-    data_type: generic_metrics
+  - data_contract_id: fastqc:results
+    name: FastQC
+    data_type: tool_results
     producer_tool: fastqc
-    feature_type: metric
+    feature_type: tool_output
     value_type: mixed
     entity_grain: run_sample
-    primary_table: sample_metrics
-    physical_tables: [sample_metrics]
-    query_modes: [sample, metric, cohort]
-    mcp_description: Sample-level metrics from FastQC raw outputs.
+    query_modes: [sample, metric, payload, cohort]
+    description: Metrics and result payloads from FastQC outputs.
     metadata_json:
       contract_scope: semantic_contract
       contract_family: tool_output
       tool: fastqc
-      tool_context: raw
     fields:
       - field_id: general_stats.fastqc_raw_percent_gc
         entity_scope: run_sample
         display_name: Percent GC
         value_type: numeric
         unit: percent
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -39,6 +38,8 @@ contracts:
         entity_scope: run_sample
         display_name: Total sequences
         value_type: numeric
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -49,18 +50,3 @@ contracts:
           producer_module: general_stats
           tool_context: raw
           multiqc_module: general_stats
-  - data_contract_id: fastqc:raw:payloads
-    name: FastQC raw result payloads
-    data_type: result_payload
-    producer_tool: fastqc
-    value_type: table
-    entity_grain: run
-    primary_table: result_payloads
-    physical_tables: [result_payloads]
-    query_modes: [payload]
-    mcp_description: Source tables and plot payloads from FastQC raw outputs.
-    metadata_json:
-      contract_scope: semantic_contract
-      contract_family: tool_output
-      tool: fastqc
-      tool_context: raw

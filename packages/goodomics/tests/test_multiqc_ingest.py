@@ -133,9 +133,9 @@ def test_parse_multiqc_bundle_infers_samples_and_source_observations() -> None:
     metrics_by_field = {metric.field_id: metric for metric in parsed.metrics}
     assert (
         metrics_by_field["general_stats.fastqc_trimmed_percent_gc"].data_contract_id
-        == "fastqc:trimmed:metrics"
+        == "fastqc:results"
     )
-    assert {"fastqc:trimmed:metrics", "star:metrics", "featurecounts:metrics"} <= {
+    assert {"fastqc:results", "star:results", "featurecounts:results"} <= {
         contract.data_contract_id for contract in parsed.contracts
     }
     display_names = {
@@ -194,7 +194,7 @@ def test_parse_multiqc_bundle_infers_samples_and_source_observations() -> None:
     payload_display_names = {
         field.field_id: field.display_name
         for field in parsed.contract_fields
-        if field.data_contract_id.endswith(":payloads")
+        if field.field_role == "payload"
     }
     assert (
         payload_display_names["fqc_raw_per_base_sequence_quality"]
@@ -208,7 +208,7 @@ def test_parse_multiqc_bundle_infers_samples_and_source_observations() -> None:
         and payload.source_observation_id == "multiqc:r1"
     )
     assert quality_payload.payload_kind == "xy_series"
-    assert quality_payload.data_contract_id == "fastqc:raw:payloads"
+    assert quality_payload.data_contract_id == "fastqc:results"
     assert quality_payload.field_id == "fqc_raw_per_base_sequence_quality"
     assert quality_payload.model_extra["schema_json"]["columns"] == [
         "position",

@@ -14,6 +14,7 @@ from goodomics.contracts.tool import (
     tool_contract_id,
     tool_metrics_contract,
     tool_payload_contract,
+    tool_results_contract,
 )
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "contract",
     "tool_metrics_contract",
     "tool_payload_contract",
+    "tool_results_contract",
     "tool_contract_from_id",
     "tool_contract_id",
 ]

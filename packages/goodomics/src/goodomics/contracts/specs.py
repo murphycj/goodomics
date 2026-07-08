@@ -27,6 +27,8 @@ class DataContractFieldSpec(GoodomicsModel):
     direction: str | None = None
     description: str | None = None
     priority: str | None = None
+    primary_table: str | None = None
+    physical_tables: list[str] = Field(default_factory=list)
     query_ref_json: JsonObject = Field(default_factory=dict)
     summary_json: JsonObject = Field(default_factory=dict)
     metadata_json: JsonObject = Field(default_factory=dict)
@@ -43,6 +45,8 @@ class DataContractFieldSpec(GoodomicsModel):
             direction=self.direction,
             description=self.description,
             priority=self.priority,
+            primary_table=self.primary_table,
+            physical_tables_json={"tables": list(self.physical_tables)},
             query_ref_json=dict(self.query_ref_json),
             summary_json=dict(self.summary_json),
             metadata_json=dict(self.metadata_json),
@@ -65,12 +69,10 @@ class DataContractSpec(GoodomicsModel):
     unit: str | None = None
     entity_grain: str | None = None
     value_semantics: str | None = None
-    primary_table: str | None = None
-    physical_tables: list[str] = Field(default_factory=list)
     summary_json: JsonObject = Field(default_factory=dict)
     source_fingerprint: str | None = None
     query_modes: list[str] = Field(default_factory=list)
-    mcp_description: str | None = None
+    description: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
     fields: list[DataContractFieldSpec] = Field(default_factory=list)
 
@@ -89,12 +91,10 @@ class DataContractSpec(GoodomicsModel):
             unit=self.unit,
             entity_grain=self.entity_grain,
             value_semantics=self.value_semantics,
-            primary_table=self.primary_table,
-            physical_tables_json={"tables": list(self.physical_tables)},
             summary_json=dict(self.summary_json),
             source_fingerprint=self.source_fingerprint,
             query_modes_json={"modes": list(self.query_modes)},
-            mcp_description=self.mcp_description,
+            description=self.description,
             metadata_json=dict(self.metadata_json),
         )
 

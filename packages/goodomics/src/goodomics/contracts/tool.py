@@ -10,15 +10,37 @@ def tool_contract_id(
     tool: str,
     context: str | None = None,
     *,
-    kind: str = "metrics",
+    kind: str = "results",
 ) -> str:
     """Return a stable bare contract ID for one tool output contract."""
 
-    parts = [_normalize_part(tool)]
-    if context:
-        parts.append(_normalize_part(context))
-    parts.append(_normalize_part(kind))
-    return ":".join(parts)
+    del context, kind
+    return f"{_normalize_part(tool)}:results"
+
+
+def tool_results_contract(
+    tool: str,
+    context: str | None = None,
+    *,
+    name: str | None = None,
+) -> DataContract:
+    """Build a reusable semantic contract for one bioinformatics tool."""
+
+    normalized_tool = _normalize_part(tool)
+    normalized_context = _normalize_part(context) if context else None
+    display_base = _display_name(normalized_tool, None)
+    data_contract = contract(
+        tool_contract_id(normalized_tool),
+        name=name or display_base,
+        data_type="tool_results",
+        producer_tool=normalized_tool,
+        feature_type="tool_output",
+        value_type="mixed",
+        entity_grain="run_sample",
+        query_modes=["sample", "metric", "payload", "cohort"],
+        description=f"Metrics and result payloads from {display_base} outputs.",
+    )
+    return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
 
 
 def tool_metrics_contract(
@@ -29,24 +51,7 @@ def tool_metrics_contract(
 ) -> DataContract:
     """Build a reusable metric contract for a bioinformatics tool output."""
 
-    normalized_tool = _normalize_part(tool)
-    normalized_context = _normalize_part(context) if context else None
-    display_base = _display_name(normalized_tool, normalized_context)
-    display_name = name or f"{display_base} metrics"
-    data_contract = contract(
-        tool_contract_id(normalized_tool, normalized_context, kind="metrics"),
-        name=display_name,
-        data_type="generic_metrics",
-        producer_tool=normalized_tool,
-        feature_type="metric",
-        value_type="mixed",
-        entity_grain="run_sample",
-        primary_table="sample_metrics",
-        physical_tables=["sample_metrics"],
-        query_modes=["sample", "metric", "cohort"],
-        description=f"Sample-level metrics from {display_base} outputs.",
-    )
-    return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
+    return tool_results_contract(tool, context, name=name)
 
 
 def tool_payload_contract(
@@ -57,23 +62,7 @@ def tool_payload_contract(
 ) -> DataContract:
     """Build a reusable result-payload contract for a bioinformatics tool output."""
 
-    normalized_tool = _normalize_part(tool)
-    normalized_context = _normalize_part(context) if context else None
-    display_base = _display_name(normalized_tool, normalized_context)
-    display_name = name or f"{display_base} result payloads"
-    data_contract = contract(
-        tool_contract_id(normalized_tool, normalized_context, kind="payloads"),
-        name=display_name,
-        data_type="result_payload",
-        producer_tool=normalized_tool,
-        value_type="mixed",
-        entity_grain="run_sample",
-        primary_table="result_payloads",
-        physical_tables=["result_payloads"],
-        query_modes=["payload"],
-        description=f"Non-scalar result payloads from {display_base} outputs.",
-    )
-    return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
+    return tool_results_contract(tool, context, name=name)
 
 
 def tool_contract_from_id(data_contract_id: str) -> DataContract | None:
@@ -82,19 +71,15 @@ def tool_contract_from_id(data_contract_id: str) -> DataContract | None:
     if data_contract_id.startswith(CONTRACT_NAMESPACE_PREFIXES):
         return None
     parts = data_contract_id.split(":")
-    if len(parts) < 2:
+    if len(parts) != 2:
         return None
-    kind = parts[-1]
-    if kind not in {"metrics", "payloads"}:
+    tool, kind = parts
+    if kind != "results":
         return None
-    tool = parts[0]
-    context = ":".join(parts[1:-1]) or None
-    expected = tool_contract_id(tool, context, kind=kind)
+    expected = tool_contract_id(tool)
     if expected != data_contract_id:
         return None
-    if kind == "metrics":
-        return tool_metrics_contract(tool, context)
-    return tool_payload_contract(tool, context)
+    return tool_results_contract(tool)
 
 
 def _normalize_part(value: str | None) -> str:

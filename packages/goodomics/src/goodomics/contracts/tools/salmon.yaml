@@ -3,28 +3,27 @@ source:
   kind: tool
   name: Salmon
 contracts:
-  - data_contract_id: salmon:metrics
-    name: Salmon metrics
-    data_type: generic_metrics
+  - data_contract_id: salmon:results
+    name: Salmon
+    data_type: tool_results
     producer_tool: salmon
-    feature_type: metric
+    feature_type: tool_output
     value_type: mixed
     entity_grain: run_sample
-    primary_table: sample_metrics
-    physical_tables: [sample_metrics]
-    query_modes: [sample, metric, cohort]
-    mcp_description: Sample-level metrics from Salmon outputs.
+    query_modes: [sample, metric, payload, cohort]
+    description: Metrics and result payloads from Salmon outputs.
     metadata_json:
       contract_scope: semantic_contract
       contract_family: tool_output
       tool: salmon
-      tool_context:
     fields:
       - field_id: general_stats.salmon_percent_mapped
         entity_scope: run_sample
         display_name: Percent mapped
         value_type: numeric
         unit: percent
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -39,6 +38,8 @@ contracts:
         display_name: Percent mapped
         value_type: numeric
         unit: percent
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -52,6 +53,8 @@ contracts:
         entity_scope: run_sample
         display_name: Number processed
         value_type: numeric
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -65,6 +68,8 @@ contracts:
         entity_scope: run_sample
         display_name: Number mapped
         value_type: numeric
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -78,6 +83,8 @@ contracts:
         entity_scope: run_sample
         display_name: Salmon version
         value_type: string
+        primary_table: sample_metrics
+        physical_tables: [sample_metrics]
         query_ref_json:
           table: sample_metrics
           field_column: field_id
@@ -87,18 +94,3 @@ contracts:
           producer_tool: salmon
           producer_module: multiqc_salmon
           multiqc_module: multiqc_salmon
-  - data_contract_id: salmon:payloads
-    name: Salmon result payloads
-    data_type: result_payload
-    producer_tool: salmon
-    value_type: table
-    entity_grain: run
-    primary_table: result_payloads
-    physical_tables: [result_payloads]
-    query_modes: [payload]
-    mcp_description: Source tables and plot payloads from Salmon outputs.
-    metadata_json:
-      contract_scope: semantic_contract
-      contract_family: tool_output
-      tool: salmon
-      tool_context:

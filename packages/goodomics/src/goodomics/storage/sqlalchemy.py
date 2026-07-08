@@ -197,13 +197,11 @@ class DataContractRecord(SQLModel, table=True):
     unit: str | None = Field(default=None, max_length=64)
     entity_grain: str | None = Field(default=None, max_length=128)
     value_semantics: str | None = Field(default=None, max_length=128)
-    primary_table: str | None = Field(default=None, max_length=128)
-    physical_tables_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     last_profiled_at: datetime | None = None
     source_fingerprint: str | None = Field(default=None, max_length=255)
     query_modes_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    mcp_description: str | None = None
+    description: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
@@ -221,6 +219,8 @@ class DataContractFieldRecord(SQLModel, table=True):
     direction: str | None = Field(default=None, max_length=64)
     description: str | None = None
     priority: str | None = Field(default=None, max_length=64)
+    primary_table: str | None = Field(default=None, max_length=128)
+    physical_tables_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     query_ref_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
@@ -1028,13 +1028,11 @@ async def _upsert_data_contracts(
                 unit=contract.unit,
                 entity_grain=contract.entity_grain,
                 value_semantics=contract.value_semantics,
-                primary_table=contract.primary_table,
-                physical_tables_json=dict(contract.physical_tables_json),
                 summary_json=dict(contract.summary_json),
                 last_profiled_at=contract.last_profiled_at,
                 source_fingerprint=contract.source_fingerprint,
                 query_modes_json=dict(contract.query_modes_json),
-                mcp_description=contract.mcp_description,
+                description=contract.description,
                 metadata_json=dict(contract.metadata_json),
             )
         else:
@@ -1051,13 +1049,11 @@ async def _upsert_data_contracts(
             row.unit = contract.unit
             row.entity_grain = contract.entity_grain
             row.value_semantics = contract.value_semantics
-            row.primary_table = contract.primary_table
-            row.physical_tables_json = dict(contract.physical_tables_json)
             row.summary_json = dict(contract.summary_json)
             row.last_profiled_at = contract.last_profiled_at
             row.source_fingerprint = contract.source_fingerprint
             row.query_modes_json = dict(contract.query_modes_json)
-            row.mcp_description = contract.mcp_description
+            row.description = contract.description
             row.metadata_json = dict(contract.metadata_json)
         rows.append(row)
     session.add_all(rows)
@@ -1096,6 +1092,8 @@ async def _upsert_data_contract_fields(
             direction=field.direction,
             description=field.description,
             priority=field.priority,
+            primary_table=field.primary_table,
+            physical_tables_json=dict(field.physical_tables_json),
             query_ref_json=dict(field.query_ref_json),
             summary_json=dict(field.summary_json),
             metadata_json=dict(field.metadata_json),

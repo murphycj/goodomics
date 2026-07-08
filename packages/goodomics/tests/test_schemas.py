@@ -190,8 +190,8 @@ def test_package_data_contract_specs_load_from_resources() -> None:
         contract.data_contract_id for contract in data_contracts_from_specs(spec_files)
     }
 
-    assert "salmon:metrics" in contract_ids
-    assert "fastqc:raw:metrics" in contract_ids
+    assert "salmon:results" in contract_ids
+    assert "fastqc:results" in contract_ids
     assert "multiqc:payloads" in contract_ids
     assert "cbioportal:mutations:maf" in contract_ids
     assert "goodomics:sdk_metrics" in contract_ids
@@ -254,14 +254,15 @@ def test_data_contract_specs_materialize_contract_and_field_models() -> None:
                     "data_contract_id": "demo:metrics",
                     "name": "Demo metrics",
                     "data_type": "generic_metrics",
-                    "primary_table": "sample_metrics",
-                    "physical_tables": ["sample_metrics"],
+                    "description": "Demo metric fields.",
                     "query_modes": ["sample", "metric"],
                     "fields": [
                         {
                             "field_id": "demo.value",
                             "display_name": "Demo value",
                             "unit": "count",
+                            "primary_table": "sample_metrics",
+                            "physical_tables": ["sample_metrics"],
                         }
                     ],
                 }
@@ -273,11 +274,13 @@ def test_data_contract_specs_materialize_contract_and_field_models() -> None:
     field = data_contract_fields_from_specs([spec])[0]
 
     assert contract.data_contract_id == "demo:metrics"
-    assert contract.physical_tables_json == {"tables": ["sample_metrics"]}
+    assert contract.description == "Demo metric fields."
     assert contract.query_modes_json == {"modes": ["sample", "metric"]}
     assert field.data_contract_id == "demo:metrics"
     assert field.field_id == "demo.value"
     assert field.unit == "count"
+    assert field.primary_table == "sample_metrics"
+    assert field.physical_tables_json == {"tables": ["sample_metrics"]}
 
 
 def test_cbioportal_contract_mapping_covers_fixture_formats() -> None:

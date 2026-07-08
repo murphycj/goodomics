@@ -792,8 +792,8 @@ def test_run_analytics_and_file_content_endpoints(
         file_root=file_root,
     )
     contract_projects = _contract_project_ids(database_url)
-    assert contract_projects["salmon:metrics"] == DEFAULT_PROJECT_ID
-    assert contract_projects["fastqc:raw:metrics"] == DEFAULT_PROJECT_ID
+    assert contract_projects["salmon:results"] == DEFAULT_PROJECT_ID
+    assert contract_projects["fastqc:results"] == DEFAULT_PROJECT_ID
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
     monkeypatch.setenv("GOODOMICS_FILE_ROOT", str(file_root))
@@ -967,7 +967,7 @@ def test_contract_browser_and_contract_first_insight_execution(
             "/api/v1/contracts",
         )
         contract = test_client.get(
-            "/api/v1/contracts/salmon:metrics",
+            "/api/v1/contracts/salmon:results",
         )
         result = test_client.post(
             "/api/v1/insights/execute",
@@ -979,7 +979,7 @@ def test_contract_browser_and_contract_first_insight_execution(
                     "query": {
                         "source": {
                             "kind": "data_contract",
-                            "data_contract_id": "salmon:metrics",
+                            "data_contract_id": "salmon:results",
                         },
                         "fields": ["general_stats.salmon_percent_mapped"],
                         "entity": "run_sample",
@@ -996,7 +996,7 @@ def test_contract_browser_and_contract_first_insight_execution(
         )
     assert contracts.status_code == 200
     assert any(
-        item["data_contract_id"] == "salmon:metrics" for item in contracts.json()
+        item["data_contract_id"] == "salmon:results" for item in contracts.json()
     )
     assert contract.status_code == 200
     field = next(
@@ -1038,7 +1038,7 @@ def test_contract_series_charts_match_catalog_field_ids(
         "query": {
             "source": {
                 "kind": "data_contract",
-                "data_contract_id": "salmon:metrics",
+                "data_contract_id": "salmon:results",
             },
             "fields": [field_id],
             "entity": "run_sample",
@@ -1048,7 +1048,7 @@ def test_contract_series_charts_match_catalog_field_ids(
         "series": [
             {
                 "series_id": "series-0",
-                "contract_id": "salmon:metrics",
+                "contract_id": "salmon:results",
                 "field_id": field_id,
                 "name": "Percent mapped",
                 "aggregation": "avg",
@@ -1604,11 +1604,11 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
                 "mode": "comparison",
                 "series": [
                     {
-                        "contract_id": "salmon:metrics",
+                        "contract_id": "salmon:results",
                         "field_id": "general_stats.salmon_percent_mapped",
                     },
                     {
-                        "contract_id": "fastqc:raw:metrics",
+                        "contract_id": "fastqc:results",
                         "field_id": "general_stats.fastqc_raw_percent_gc",
                     },
                 ],

@@ -443,6 +443,8 @@ class ParserOutput:
             display_name=name,
             value_type="numeric" if value_type == "numeric" else "string",
             unit=unit,
+            primary_table="sample_metrics",
+            physical_tables_json={"tables": ["sample_metrics"]},
             query_ref_json={
                 "table": "sample_metrics",
                 "field_column": "field_id",
@@ -473,6 +475,8 @@ class ParserOutput:
             entity_scope="run_sample",
             display_name=name,
             value_type="json",
+            primary_table="result_payloads",
+            physical_tables_json={"tables": ["result_payloads"]},
             query_ref_json={
                 "table": "result_payloads",
                 "field_column": "field_id",

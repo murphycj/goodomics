@@ -10,10 +10,8 @@ contracts:
     feature_type: metric
     value_type: mixed
     entity_grain: run_sample
-    primary_table: sample_metrics
-    physical_tables: [sample_metrics]
     query_modes: [sample, metric, cohort]
-    mcp_description: User-logged metrics captured through the Goodomics SDK.
+    description: User-logged metrics captured through the Goodomics SDK.
     metadata_json:
       contract_scope: semantic_contract
       source_format: goodomics-sdk

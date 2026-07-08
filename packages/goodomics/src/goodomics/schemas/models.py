@@ -115,13 +115,11 @@ class DataContract(GoodomicsModel):
     unit: str | None = None
     entity_grain: str | None = None
     value_semantics: str | None = None
-    primary_table: str | None = None
-    physical_tables_json: JsonObject = Field(default_factory=dict)
     summary_json: JsonObject = Field(default_factory=dict)
     last_profiled_at: datetime | None = None
     source_fingerprint: str | None = None
     query_modes_json: JsonObject = Field(default_factory=dict)
-    mcp_description: str | None = None
+    description: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -138,6 +136,8 @@ class DataContractField(GoodomicsModel):
     direction: str | None = None
     description: str | None = None
     priority: str | None = None
+    primary_table: str | None = None
+    physical_tables_json: JsonObject = Field(default_factory=dict)
     query_ref_json: JsonObject = Field(default_factory=dict)
     summary_json: JsonObject = Field(default_factory=dict)
     metadata_json: JsonObject = Field(default_factory=dict)
@@ -293,6 +293,13 @@ class SampleMetric(AnalyticalRecord):
     value_numeric: float | None = None
     value_string: str | None = None
     value_json: JsonValue = None
+
+    @field_validator("source_observation_metadata_json", mode="before")
+    @classmethod
+    def _blank_source_observation_metadata_to_empty_dict(
+        cls, value: object
+    ) -> object:
+        return {} if value is None else value
 
 
 class Feature(AnalyticalRecord):

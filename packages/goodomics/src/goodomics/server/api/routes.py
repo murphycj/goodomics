@@ -517,6 +517,8 @@ class DataContractFieldRead(BaseModel):
     direction: str | None = None
     description: str | None = None
     priority: str | None = None
+    primary_table: str | None = None
+    physical_tables: dict[str, JsonValue] = Field(default_factory=dict)
     query_ref: dict[str, JsonValue] = Field(default_factory=dict)
     summary: dict[str, JsonValue] = Field(default_factory=dict)
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
@@ -531,13 +533,11 @@ class DataContractRead(BaseModel):
     assay: str | None = None
     entity_grain: str | None = None
     value_semantics: str | None = None
-    primary_table: str | None = None
-    physical_tables: dict[str, JsonValue] = Field(default_factory=dict)
     summary: dict[str, JsonValue] = Field(default_factory=dict)
     last_profiled_at: datetime | None = None
     source_fingerprint: str | None = None
     query_modes: dict[str, JsonValue] = Field(default_factory=dict)
-    mcp_description: str | None = None
+    description: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
     fields: list[DataContractFieldRead] = Field(default_factory=list)
 
@@ -3838,13 +3838,11 @@ def _data_contract_read(
         assay=contract.assay,
         entity_grain=contract.entity_grain,
         value_semantics=contract.value_semantics,
-        primary_table=contract.primary_table,
-        physical_tables=dict(contract.physical_tables_json),
         summary=dict(contract.summary_json),
         last_profiled_at=contract.last_profiled_at,
         source_fingerprint=contract.source_fingerprint,
         query_modes=dict(contract.query_modes_json),
-        mcp_description=contract.mcp_description,
+        description=contract.description,
         metadata_json=dict(contract.metadata_json),
         fields=field_reads,
     )
@@ -3855,6 +3853,7 @@ def _synthetic_contract_fields(
 ) -> list[DataContractFieldRead]:
     """Return field descriptors for contract tables without field rows."""
 
+    table = _default_field_table_for_contract(contract)
     fields = {
         "feature_value_numeric": [
             ("value", "measure", "Value", "numeric", "value"),
@@ -3914,7 +3913,7 @@ def _synthetic_contract_fields(
                 "source_observation_label",
             ),
         ],
-    }.get(contract.primary_table or "", [])
+    }.get(table or "", [])
     return [
         DataContractFieldRead(
             field_id=field_id,
@@ -3924,10 +3923,12 @@ def _synthetic_contract_fields(
             value_type=value_type,
             unit=contract.unit if value_type == "numeric" else None,
             direction=None,
-            description=contract.mcp_description,
+            description=contract.description,
             priority=None,
+            primary_table=table,
+            physical_tables={"tables": [table]} if table else {},
             query_ref={
-                "table": contract.primary_table,
+                "table": table,
                 "value_column": value_column,
                 "synthetic": True,
             },
@@ -3951,10 +3952,24 @@ def _data_contract_field_read(field: DataContractFieldRecord) -> DataContractFie
         direction=field.direction,
         description=field.description,
         priority=field.priority,
+        primary_table=field.primary_table,
+        physical_tables=dict(field.physical_tables_json),
         query_ref=dict(field.query_ref_json),
         summary=dict(field.summary_json),
         metadata_json=dict(field.metadata_json),
     )
+
+
+def _default_field_table_for_contract(contract: DataContractRecord) -> str | None:
+    return {
+        "entity_attributes": "entity_attributes",
+        "feature_matrix": "feature_value_numeric",
+        "feature_calls": "feature_call",
+        "copy_number_segments": "copy_number_segments",
+        "small_variants": "sample_variant_calls",
+        "structural_variants": "sample_structural_variant_calls",
+        "result_payload": "result_payloads",
+    }.get(contract.data_type)
 
 
 async def _file_from_rows_public(

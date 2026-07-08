@@ -40,17 +40,11 @@ def contract(
     query_modes: Iterable[str],
     entity_grain: str | None = None,
     value_semantics: str | None = None,
-    primary_table: str | None = None,
-    physical_tables: Iterable[str] | None = None,
     description: str | None = None,
 ) -> DataContract:
     """Create a reusable semantic data contract."""
     # Contract records are contracts, not source/run instances; provenance stays
     # on imports, runs, files, and analytical records.
-    resolved_primary_table = primary_table or _default_primary_table(data_type)
-    resolved_physical_tables = list(physical_tables or [])
-    if resolved_primary_table and not resolved_physical_tables:
-        resolved_physical_tables = [resolved_primary_table]
     return DataContract(
         data_contract_id=data_contract_id,
         name=name,
@@ -62,22 +56,7 @@ def contract(
         value_type=value_type,
         entity_grain=entity_grain,
         value_semantics=value_semantics,
-        primary_table=resolved_primary_table,
-        physical_tables_json={"tables": resolved_physical_tables},
         query_modes_json={"modes": list(query_modes)},
-        mcp_description=description,
+        description=description,
         metadata_json={"contract_scope": "semantic_contract"},
     )
-
-
-def _default_primary_table(data_type: str) -> str | None:
-    return {
-        "generic_metrics": "sample_metrics",
-        "entity_attributes": "entity_attributes",
-        "feature_matrix": "feature_value_numeric",
-        "feature_calls": "feature_call",
-        "copy_number_segments": "copy_number_segments",
-        "small_variants": "sample_variant_calls",
-        "structural_variants": "sample_structural_variant_calls",
-        "result_payload": "result_payloads",
-    }.get(data_type)

@@ -8,10 +8,8 @@ contracts:
     data_type: entity_attributes
     producer_tool: cbioportal
     value_type: mixed
-    primary_table: entity_attributes
-    physical_tables: [entity_attributes]
     query_modes: [subject, attribute]
-    mcp_description: Patient-level clinical attributes imported from cBioPortal.
+    description: Patient-level clinical attributes imported from cBioPortal.
     metadata_json: &cbio_metadata
       contract_scope: semantic_contract
       source_format: cbioportal
@@ -20,10 +18,8 @@ contracts:
     data_type: entity_attributes
     producer_tool: cbioportal
     value_type: mixed
-    primary_table: entity_attributes
-    physical_tables: [entity_attributes]
     query_modes: [sample, attribute]
-    mcp_description: Sample-level clinical attributes imported from cBioPortal.
+    description: Sample-level clinical attributes imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:segments
     name: cBioPortal copy-number segments
@@ -31,10 +27,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: interval
     value_type: numeric
-    primary_table: copy_number_segments
-    physical_tables: [copy_number_segments]
     query_modes: [sample, region]
-    mcp_description: Segment-level copy-number values imported from cBioPortal.
+    description: Segment-level copy-number values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:discrete_calls
     name: cBioPortal discrete copy-number calls
@@ -42,10 +36,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: call
-    primary_table: feature_call
-    physical_tables: [feature_call]
     query_modes: [sample, feature, call, cohort]
-    mcp_description: Gene-level discrete copy-number calls imported from cBioPortal.
+    description: Gene-level discrete copy-number calls imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:continuous
     name: cBioPortal continuous copy-number values
@@ -53,10 +45,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Gene-level continuous copy-number values imported from cBioPortal.
+    description: Gene-level continuous copy-number values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:log2
     name: cBioPortal log2 copy-number values
@@ -64,10 +54,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Gene-level log2 copy-number values imported from cBioPortal.
+    description: Gene-level log2 copy-number values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mutations:maf
     name: cBioPortal mutation calls
@@ -75,10 +63,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: call
-    primary_table: sample_variant_calls
-    physical_tables: [sample_variant_calls]
     query_modes: [sample, variant, gene, region]
-    mcp_description: Small-variant calls imported from cBioPortal MAF files.
+    description: Small-variant calls imported from cBioPortal MAF files.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mrna_expression:continuous
     name: cBioPortal mRNA expression values
@@ -86,10 +72,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Continuous mRNA expression values imported from cBioPortal.
+    description: Continuous mRNA expression values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mrna_expression:z_score
     name: cBioPortal mRNA expression z-scores
@@ -97,10 +81,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: mRNA expression z-scores imported from cBioPortal.
+    description: mRNA expression z-scores imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:methylation:continuous_beta
     name: cBioPortal methylation beta values
@@ -108,10 +90,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Continuous methylation beta values imported from cBioPortal.
+    description: Continuous methylation beta values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:log2
     name: cBioPortal protein abundance values
@@ -119,10 +99,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: protein
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Continuous protein abundance values imported from cBioPortal.
+    description: Continuous protein abundance values imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:z_score
     name: cBioPortal protein abundance z-scores
@@ -130,10 +108,8 @@ contracts:
     producer_tool: cbioportal
     feature_type: protein
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Protein abundance z-scores imported from cBioPortal.
+    description: Protein abundance z-scores imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:structural_variants
     name: cBioPortal structural variants
@@ -141,20 +117,16 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: call
-    primary_table: sample_structural_variant_calls
-    physical_tables: [sample_structural_variant_calls]
     query_modes: [sample, feature, region]
-    mcp_description: Structural-variant calls imported from cBioPortal.
+    description: Structural-variant calls imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:gene_panel_matrix
     name: cBioPortal gene panel matrix
     data_type: result_payload
     producer_tool: cbioportal
     value_type: matrix
-    primary_table: result_payloads
-    physical_tables: [result_payloads]
     query_modes: [payload, sample, contract]
-    mcp_description: cBioPortal gene panel coverage matrix payload.
+    description: cBioPortal gene panel coverage matrix payload.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:limit_value
     name: cBioPortal generic assay limit values
@@ -162,28 +134,22 @@ contracts:
     producer_tool: cbioportal
     feature_type: generic_entity
     value_type: numeric
-    primary_table: feature_value_numeric
-    physical_tables: [feature_value_numeric]
     query_modes: [sample, feature, cohort]
-    mcp_description: Numeric limit-value generic assay data imported from cBioPortal.
+    description: Numeric limit-value generic assay data imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:categorical
     name: cBioPortal generic assay categorical values
     data_type: result_payload
     producer_tool: cbioportal
     value_type: categorical
-    primary_table: result_payloads
-    physical_tables: [result_payloads]
     query_modes: [payload, sample, feature]
-    mcp_description: Categorical generic assay data imported from cBioPortal.
+    description: Categorical generic assay data imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:binary
     name: cBioPortal generic assay binary values
     data_type: result_payload
     producer_tool: cbioportal
     value_type: boolean
-    primary_table: result_payloads
-    physical_tables: [result_payloads]
     query_modes: [payload, sample, feature]
-    mcp_description: Binary generic assay data imported from cBioPortal.
+    description: Binary generic assay data imported from cBioPortal.
     metadata_json: *cbio_metadata

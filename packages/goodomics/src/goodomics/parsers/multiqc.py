@@ -823,6 +823,8 @@ def _result_payload_field(
         entity_scope="run_sample",
         display_name=_result_payload_display_name(anchor, data_label),
         value_type="json",
+        primary_table="result_payloads",
+        physical_tables_json={"tables": ["result_payloads"]},
         query_ref_json={
             "table": "result_payloads",
             "field_column": "field_id",
@@ -999,6 +1001,8 @@ def _parse_flat_plot_scalar_metrics(
                 entity_scope="run_sample",
                 display_name=display_name,
                 value_type="numeric",
+                primary_table="sample_metrics",
+                physical_tables_json={"tables": ["sample_metrics"]},
                 query_ref_json={
                     "table": "sample_metrics",
                     "field_column": "field_id",
@@ -1505,6 +1509,9 @@ def _metric_field(
     if authored is not None:
         return authored.model_copy(
             update={
+                "primary_table": authored.primary_table or "sample_metrics",
+                "physical_tables_json": authored.physical_tables_json
+                or {"tables": ["sample_metrics"]},
                 "summary_json": {},
                 "metadata_json": dict(authored.metadata_json) | metadata,
             }
@@ -1517,6 +1524,8 @@ def _metric_field(
         display_name=display_name,
         value_type="numeric" if value_type == "numeric" else "string",
         unit=unit,
+        primary_table="sample_metrics",
+        physical_tables_json={"tables": ["sample_metrics"]},
         query_ref_json={
             "table": "sample_metrics",
             "field_column": "field_id",

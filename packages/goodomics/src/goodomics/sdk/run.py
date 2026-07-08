@@ -421,6 +421,8 @@ def _metric_contract_fields(
                 display_name=metric.name,
                 value_type=value_type,
                 unit=metric.unit,
+                primary_table="sample_metrics",
+                physical_tables_json={"tables": ["sample_metrics"]},
                 query_ref_json={
                     # query_ref_json tells contract-first query compilation how
                     # to find this field in the generic sample_metrics table.

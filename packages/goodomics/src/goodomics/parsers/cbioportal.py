@@ -262,7 +262,7 @@ def _contract_from_meta(
         "assay": assay or contract.assay,
         "project_id": project_id,
     }
-    if contract.primary_table == "feature_value_numeric":
+    if contract.data_type == "feature_matrix":
         updates["value_semantics"] = _value_semantics_from_meta(meta.values, contract)
     return contract.model_copy(update=updates)
 
@@ -444,6 +444,8 @@ def _add_attribute_definitions(
                 value_type=value_type,
                 description=table.descriptions.get(column),
                 priority=table.priorities.get(column),
+                primary_table="entity_attributes",
+                physical_tables_json={"tables": ["entity_attributes"]},
                 query_ref_json={
                     "table": "entity_attributes",
                     "field_column": "field_id",
@@ -1498,6 +1500,8 @@ def _add_payload(
                 entity_scope="run_sample",
                 display_name=path.stem.replace("_", " ").title(),
                 value_type="json",
+                primary_table="result_payloads",
+                physical_tables_json={"tables": ["result_payloads"]},
                 query_ref_json={
                     "table": "result_payloads",
                     "field_column": "field_id",

@@ -143,10 +143,8 @@ def _custom_contract(
         producer_tool="cbioportal",
         value_type="mixed",
         entity_grain="run_sample",
-        primary_table="result_payloads",
-        physical_tables_json={"tables": ["result_payloads"]},
         query_modes_json={"modes": ["payload"]},
-        mcp_description=(
+        description=(
             values.get("contract_description")
             or values.get("profile_description")
             or values.get("description")
