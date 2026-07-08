@@ -200,11 +200,11 @@ run as a consolidation artifact over inferred upstream sample runs.
 
 ### `data_contracts`
 
-Stable semantic query contracts. A data contract declares what kind of data a
-parser, SDK workflow, or user-defined source writes, how it should be queried,
-and how agents should understand it. Built-in contract IDs are stable across
+Stable semantic query contracts. A data contract declares the user-facing
+namespace for data a parser, SDK workflow, or user-defined source writes, and
+how agents should understand it. Built-in contract IDs are stable across
 projects, runs, samples, and source datasets, so MCP tools and agents can ask
-for `cbioportal:mutations:maf` or `salmon:metrics` without learning a
+for `cbioportal:mutations:maf` or `salmon:results` without learning a
 specific import run ID.
 
 A data contract is not a dataset instance and is not sample membership. Data
@@ -214,11 +214,11 @@ IDs, source filenames, generated import IDs, source `stable_id` values, and
 platform descriptions.
 
 A data contract is also not the same thing as a field definition. A contract might
-be `fastqc:raw:metrics`; the fields inside it might be
+be `fastqc:results`; the fields inside it might be
 `general_stats.fastqc_raw_percent_duplicates` and
-`general_stats.fastqc_raw_total_sequences`. Keep contract-level query behavior,
-source fingerprints, summaries, and agent descriptions on `data_contracts`, and
-keep per-field labels, units, directions, query refs, and compact summaries in
+`fqc_raw_per_base_sequence_quality`. Keep source fingerprints, summaries, and
+agent descriptions on `data_contracts`, and keep per-field labels, units,
+directions, physical table routing, query refs, and compact summaries in
 `data_contract_fields`.
 
 | Column                  | Notes                                                                                                         |
@@ -238,21 +238,19 @@ keep per-field labels, units, directions, query refs, and compact summaries in
 | `unit`                  | Nullable default unit                                                                                         |
 | `entity_grain`          | Default entity grain, such as `run_sample`, `sample`, `subject`, `feature`, or `run`                          |
 | `value_semantics`       | Contract-level meaning, such as `tpm`, `count`, `log2_cna`, `beta`, `score`, or `zscore`                       |
-| `primary_table`         | Default analytical table for contract-first queries                                                            |
-| `physical_tables_json`  | Physical tables/views used by the contract                                                                     |
 | `summary_json`          | Compact contract-level summary                                                                                 |
 | `last_profiled_at`      | Last time field/contract summaries were computed                                                               |
 | `source_fingerprint`    | Fingerprint for invalidating derived summaries/cache rows                                                     |
 | `query_modes_json`      | Supported query modes, such as sample, metric, gene, region                                                   |
-| `mcp_description`       | Agent-readable description                                                                                    |
+| `description`           | Agent-readable description used by MCP/tooling                                                                |
 | `metadata_json`         | Flexible contract metadata                                                                                     |
 
 Examples:
 
 | Data contract                      | Data type              | Producer   |
 | --------------------------------- | ---------------------- | ---------- |
-| `salmon:metrics`                  | `generic_metrics`      | Salmon     |
-| `fastqc:raw:metrics`              | `generic_metrics`      | FastQC     |
+| `salmon:results`                  | `tool_results`         | Salmon     |
+| `fastqc:results`                  | `tool_results`         | FastQC     |
 | `cbioportal:mutations:maf`        | `small_variants`       | cBioPortal |
 | `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal |
 | `picard:alignment:metrics`        | `generic_metrics`      | Picard     |
@@ -429,7 +427,7 @@ facets, and other user-facing fields inside a data contract.
 
 `data_contracts` describe a logical dataset. `data_contract_fields` describe the
 queryable columns or measures inside that dataset. For example,
-`fastqc:raw:metrics` is a data contract; `percent_duplicates` and
+`fastqc:results` is a data contract; `percent_duplicates` and
 `general_stats.fastqc_raw_percent_gc` are fields.
 
 | Column            | Notes                                                                     |
@@ -444,7 +442,9 @@ queryable columns or measures inside that dataset. For example,
 | `direction`       | Example: `higher_is_better`, `lower_is_better`                            |
 | `description`     | Field description                                                         |
 | `priority`        | Optional UI/report priority                                               |
-| `query_ref_json`  | Physical table/value column hints for the query resolver                  |
+| `primary_table`   | Main analytical table for this field, such as `sample_metrics` or `result_payloads` |
+| `physical_tables_json` | Physical table footprint for this field, usually `{"tables": [...]}` |
+| `query_ref_json`  | Exact field/value lookup hints for the query resolver                     |
 | `summary_json`    | Compact min/max/top-values/examples summary                               |
 | `metadata_json`   | Flexible field metadata                                                   |
 
@@ -1016,11 +1016,11 @@ display and user input, but table relationships use the integer `id` columns.
 
 | id  | data_contract_id                   | data_type              | producer_tool | Notes                                          |
 | --- | --------------------------------- | ---------------------- | ------------- | ---------------------------------------------- |
-| `1` | `salmon:metrics`                  | `generic_metrics`      | Salmon        | Tool-owned metric contract reused across runs  |
+| `1` | `salmon:results`                  | `tool_results`         | Salmon        | Tool-owned metric/payload contract reused across runs |
 | `2` | `cbioportal:mutations:maf`        | `small_variants`       | cBioPortal    | Built-in cBioPortal mutation contract          |
 | `3` | `cbioportal:copy_number:segments` | `copy_number_segments` | cBioPortal    | Built-in segment-level CNA contract            |
 | `4` | `goodomics:sdk_metrics`           | `generic_metrics`      | goodomics-sdk | Native SDK metric contract                     |
-| `5` | `fastqc:raw:metrics`              | `generic_metrics`      | FastQC        | Tool-owned raw-read QC metric contract         |
+| `5` | `fastqc:results`                  | `tool_results`         | FastQC        | Tool-owned QC metric/payload contract          |
 | `6` | `project_rnaseq:salmon_gene_tpm`  | `feature_matrix`       | Salmon        | Example project-defined contract                |
 
 ### Files
