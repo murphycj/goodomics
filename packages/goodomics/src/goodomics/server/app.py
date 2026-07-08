@@ -46,6 +46,17 @@ def _dashboard_dev_redirect(
     return RedirectResponse(url=f"{base}{suffix}", status_code=307)
 
 
+def _dashboard_static_file(path: str) -> Path | None:
+    candidate = (STATIC_DIR / path).resolve()
+    try:
+        candidate.relative_to(STATIC_DIR.resolve())
+    except ValueError:
+        return None
+    if candidate.is_file() and candidate != INDEX_HTML.resolve():
+        return candidate
+    return None
+
+
 def create_app() -> FastAPI:
     """Build the Goodomics server app with API, MCP stream endpoint, and UI routes."""
 
@@ -100,6 +111,9 @@ def create_app() -> FastAPI:
     async def dashboard_fallback(path: str) -> Response:
         if path.startswith(("api/v1", "mcp", "assets")):
             raise HTTPException(status_code=404, detail="Not found")
+        static_file = _dashboard_static_file(path)
+        if static_file is not None:
+            return FileResponse(static_file)
         if not INDEX_HTML.exists():
             redirect = _dashboard_dev_redirect(settings, path)
             if redirect is not None:

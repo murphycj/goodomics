@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Activity, Search, Sparkles } from "lucide-react";
+import { Search, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { GoodomicsProject } from "../../api";
 import { useSearch } from "../search/SearchProvider";
@@ -24,10 +24,11 @@ export function AppHeader({
     >
       <div className="flex min-w-0 items-center gap-3">
         <Link
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-[#2bbf7a] text-[#07130d] no-underline"
+          aria-label="Goodomics home"
+          className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-md no-underline"
           to="/"
         >
-          <Activity size={18} />
+          <img alt="" className="h-full w-full" src="/goodomics.svg" />
         </Link>
         <span className="h-[22px] w-px bg-[#333333]" />
         {project ? (

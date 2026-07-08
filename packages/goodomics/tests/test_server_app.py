@@ -2039,6 +2039,34 @@ def test_root_serves_dashboard_index_when_built(
     assert "dashboard" in response.text
 
 
+def test_dashboard_serves_root_static_asset_when_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    static_dir = tmp_path / "web" / "static"
+    static_dir.mkdir(parents=True)
+    index_html = static_dir / "index.html"
+    index_html.write_text("<html><body>dashboard</body></html>", encoding="utf-8")
+    icon_svg = static_dir / "goodomics.svg"
+    icon_svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv(
+        "GOODOMICS_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    )
+    monkeypatch.setattr(server_app, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(server_app, "ASSETS_DIR", static_dir / "assets")
+    monkeypatch.setattr(server_app, "INDEX_HTML", index_html)
+
+    with TestClient(create_app()) as test_client:
+        response = test_client.get("/goodomics.svg")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.text.startswith("<svg")
+
+
 def test_root_returns_setup_response_when_dashboard_not_built(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
