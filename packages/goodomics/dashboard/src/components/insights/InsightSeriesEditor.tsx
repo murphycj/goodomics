@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { DataContract, DataContractField, DatabaseTable } from "../../api";
 import { CHART_COLORS } from "../../lib/chartColors";
+import { fieldShapeSummary, fieldTypeLabel } from "../../lib/resultShapes";
 import {
   Button,
   Dialog,
@@ -823,7 +824,7 @@ function ContractSourceList({
                     </span>
                   </span>
                   <span className="rounded bg-[#eef3f7] px-2 py-1 text-xs text-[#526071]">
-                    {candidate.value_type}
+                    {fieldTypeLabel(candidate)}
                   </span>
                   <span className="pointer-events-none absolute left-2 top-full z-50 mt-1 w-[300px] rounded-md border border-[#d6dee8] bg-white p-2 text-xs leading-5 text-[#526071] opacity-0 shadow-[0_12px_30px_rgb(0_0_0/0.14)] transition-opacity delay-700 group-hover:opacity-100">
                     <span className="block font-semibold text-[#1f2937]">
@@ -995,7 +996,8 @@ function filterContractGroups(contracts: DataContract[], search: string) {
             return [
               field.display_name,
               field.field_id,
-              field.value_type,
+              fieldTypeLabel(field),
+              fieldShapeSummary(field),
               field.description,
             ]
               .filter(Boolean)
@@ -1134,7 +1136,8 @@ function updateSeries(
 function FieldSummary({ field }: { field: DataContractField | undefined }) {
   if (!field) return null;
   const parts = [
-    field.value_type,
+    fieldTypeLabel(field),
+    fieldShapeSummary(field),
     field.unit,
     summaryRange(field.summary),
     topValues(field.summary),

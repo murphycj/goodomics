@@ -8,6 +8,7 @@ import type {
   GoodomicsRun,
   StoredFile,
 } from "../api";
+import { payloadKindLabel, payloadShapeSummary } from "../lib/resultShapes";
 import {
   fileContentUrl,
   getProjectRun,
@@ -295,13 +296,15 @@ function PayloadsTable({ query }: { query: QueryState<AnalyticsPayload[]> }) {
 /** Snapshot preview of the first rows and columns in a result payload. */
 function PayloadPreview({ payload }: { payload: AnalyticsPayload }) {
   const rows = payload.rows.slice(0, 25);
+  const shapeSummary = payloadShapeSummary(payload);
   return (
     <Card>
       <CardHeader>
         <div>
           <CardTitle>{payload.payload_name}</CardTitle>
           <p className="mb-0 mt-1 text-[#657082]">
-            {payload.payload_kind} - {payload.row_count} rows from{" "}
+            {payloadKindLabel(payload)}
+            {shapeSummary ? ` - ${shapeSummary}` : ""} from{" "}
             {payload.source_file_id ?? "stored payload"}
           </p>
         </div>

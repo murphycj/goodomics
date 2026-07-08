@@ -578,19 +578,19 @@ async def _execute_single_series_count_query(
 ) -> tuple[list[str], list[JsonObject]]:
     alias = "count"
     contract = await _series_contract(session, project_id, series_item)
-    table = _contract_table(contract)
     field_id = _series_field_id(series_item)
     field = await _series_field_record(
         session=session,
         contract=contract,
-        table=table,
         field_id=field_id,
     )
+    table = _series_table(contract, field, field_id)
     value_column = await _series_value_column(
         session=session,
         contract=contract,
         table=table,
         field_id=field_id,
+        field=field,
     )
     source = _series_source_sql(table)
     columns = _columns_for_source("analytics", table)
@@ -650,19 +650,19 @@ async def _contract_series_sql(
     linker_column: str | None,
 ) -> tuple[str, list[Any]]:
     contract = await _series_contract(session, project_id, series_item)
-    table = _contract_table(contract)
     field_id = _series_field_id(series_item)
     field = await _series_field_record(
         session=session,
         contract=contract,
-        table=table,
         field_id=field_id,
     )
+    table = _series_table(contract, field, field_id)
     value_column = await _series_value_column(
         session=session,
         contract=contract,
         table=table,
         field_id=field_id,
+        field=field,
     )
     source = _series_source_sql(table)
     columns = _columns_for_source("analytics", table)
@@ -716,8 +716,19 @@ async def _series_contract(
     return contract
 
 
-def _contract_table(contract: DataContractRecord) -> str:
-    table = contract.primary_table
+def _series_table(
+    contract: DataContractRecord,
+    field: DataContractFieldRecord | None,
+    field_id: str,
+) -> str:
+    if field is not None:
+        table = _field_primary_table(field)
+    else:
+        table = _default_contract_table(contract)
+        if field_id and field_id not in _synthetic_contract_fields(table).get(
+            table or "", {}
+        ):
+            raise ValueError(f"Unknown contract field: {field_id}")
     if table not in {
         "sample_metrics",
         "entity_attributes",
@@ -735,12 +746,32 @@ def _contract_table(contract: DataContractRecord) -> str:
     return table
 
 
+def _field_primary_table(field: DataContractFieldRecord) -> str | None:
+    query_table = field.query_ref_json.get("table")
+    if isinstance(query_table, str) and query_table:
+        return query_table
+    return field.primary_table
+
+
+def _default_contract_table(contract: DataContractRecord) -> str | None:
+    return {
+        "entity_attributes": "entity_attributes",
+        "feature_matrix": "feature_value_numeric",
+        "feature_calls": "feature_call",
+        "copy_number_segments": "copy_number_segments",
+        "small_variants": "sample_variant_calls",
+        "structural_variants": "sample_structural_variant_calls",
+        "result_payload": "result_payloads",
+    }.get(contract.data_type)
+
+
 async def _series_value_column(
     *,
     session: AsyncSession,
     contract: DataContractRecord,
     table: str,
     field_id: str,
+    field: DataContractFieldRecord | None,
 ) -> str:
     synthetic = _synthetic_contract_fields(table).get(table, {})
     if field_id in synthetic:
@@ -753,12 +784,9 @@ async def _series_value_column(
                 "Metric, attribute, and result payload contract series require "
                 "a field_id."
             )
-        rows = await _get_contract_field_records(
-            session, contract_id=_record_pk(contract), field_ids=[field_id]
-        )
-        if field_id not in rows:
+        if field is None:
             raise ValueError(f"Unknown contract field: {field_id}")
-        return _contract_value_column(rows[field_id])
+        return _contract_value_column(field)
     fallback = {
         "feature_call": "call_rank",
         "copy_number_segments": "segment_mean",
@@ -776,19 +804,14 @@ async def _series_field_record(
     *,
     session: AsyncSession,
     contract: DataContractRecord,
-    table: str,
     field_id: str,
 ) -> DataContractFieldRecord | None:
-    if table not in {"sample_metrics", "entity_attributes", "result_payloads"}:
-        return None
     if not field_id:
-        raise ValueError("Metric and attribute contract series require a field_id.")
+        return None
     rows = await _get_contract_field_records(
         session, contract_id=_record_pk(contract), field_ids=[field_id]
     )
     field = rows.get(field_id)
-    if field is None:
-        raise ValueError(f"Unknown contract field: {field_id}")
     return field
 
 
@@ -802,7 +825,13 @@ async def _resolve_contract_series_linker(
     column_sets = []
     for series_item in series_items:
         contract = await _series_contract(session, project_id, series_item)
-        table = _contract_table(contract)
+        field_id = _series_field_id(series_item)
+        field = await _series_field_record(
+            session=session,
+            contract=contract,
+            field_id=field_id,
+        )
+        table = _series_table(contract, field, field_id)
         column_sets.append(set(_columns_for_source("analytics", table)))
     valid = [
         linker_id
@@ -1231,9 +1260,8 @@ async def _compile_contract_query(
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]] | None:
-    # Contract queries start from a stable semantic data_contract_id rather than a
-    # physical table name. That keeps insight configs portable across projects
-    # and lets the contract decide which analytical table is authoritative.
+    # Contract queries start from a stable semantic data_contract_id, then use
+    # the selected field to choose the physical analytical table.
 
     source = query_config.get("source")
     if not isinstance(source, Mapping) or source.get("kind") != "data_contract":
@@ -1254,7 +1282,52 @@ async def _compile_contract_query(
     if contract is None:
         raise ValueError(f"Unknown data contract: {contract_public_id}")
 
-    table = contract.primary_table
+    requested_fields = _contract_requested_fields(query_config, config)
+    field_rows: dict[str, DataContractFieldRecord] = {}
+    table: str | None = None
+
+    if requested_fields:
+        field_rows = await _get_contract_field_records(
+            session,
+            contract_id=_record_pk(contract),
+            field_ids=requested_fields,
+        )
+        if any(field_id not in field_rows for field_id in requested_fields):
+            # The dashboard often sends safe aliases for fields with punctuation.
+            # If direct lookup misses, load all fields and map aliases back to
+            # canonical field IDs.
+            field_rows = await _get_all_contract_field_records(
+                session,
+                contract_id=_record_pk(contract),
+            )
+        field_aliases = {
+            _safe_alias(row.field_id, fallback="value"): field_id
+            for field_id, row in field_rows.items()
+        }
+        requested_fields = list(
+            dict.fromkeys(
+                field_aliases.get(field_id, field_id) for field_id in requested_fields
+            )
+        )
+        missing = [field for field in requested_fields if field not in field_rows]
+        if missing:
+            table = _default_contract_table(contract)
+            synthetic_fields = _synthetic_contract_fields(table).get(table or "", {})
+            if not all(field_id in synthetic_fields for field_id in requested_fields):
+                raise ValueError(f"Unknown contract field(s): {', '.join(missing)}")
+        else:
+            field_tables = {
+                _field_primary_table(field_rows[field_id])
+                for field_id in requested_fields
+            }
+            if len(field_tables) != 1:
+                raise ValueError(
+                    "Contract queries cannot mix fields from different analytical "
+                    "tables in one series."
+                )
+            table = next(iter(field_tables))
+    else:
+        table = _default_contract_table(contract)
 
     if table not in {
         "sample_metrics",
@@ -1270,7 +1343,6 @@ async def _compile_contract_query(
             f"Contract-first queries are not available for table: {table or 'unknown'}"
         )
 
-    requested_fields = _contract_requested_fields(query_config, config)
     synthetic_fields = _synthetic_contract_fields(table)
 
     # Some analytical tables expose meaningful columns directly instead of
@@ -1297,31 +1369,6 @@ async def _compile_contract_query(
         field_id = requested_fields[0]
         value_column = synthetic_fields[table][field_id]
     else:
-        field_rows = await _get_contract_field_records(
-            session,
-            contract_id=_record_pk(contract),
-            field_ids=requested_fields,
-        )
-        if any(field_id not in field_rows for field_id in requested_fields):
-            # The dashboard often sends safe aliases for fields with punctuation.
-            # If direct lookup misses, load all fields and map aliases back to
-            # canonical field IDs.
-            field_rows = await _get_all_contract_field_records(
-                session,
-                contract_id=_record_pk(contract),
-            )
-        field_aliases = {
-            _safe_alias(row.field_id, fallback="value"): field_id
-            for field_id, row in field_rows.items()
-        }
-        requested_fields = list(
-            dict.fromkeys(
-                field_aliases.get(field_id, field_id) for field_id in requested_fields
-            )
-        )
-        missing = [field for field in requested_fields if field not in field_rows]
-        if missing:
-            raise ValueError(f"Unknown contract field(s): {', '.join(missing)}")
         field = field_rows[requested_fields[0]]
         field_id = field.field_id
         value_column = _contract_value_column(field)
