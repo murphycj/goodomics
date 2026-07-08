@@ -681,9 +681,7 @@ def _flatten_plot_input_rows(
     rows: list[dict[str, Any]] = []
     for dataset_index, dataset in enumerate(_plot_datasets(plot_input.get("data"))):
         data_label = (
-            data_labels[dataset_index]
-            if dataset_index < len(data_labels)
-            else None
+            data_labels[dataset_index] if dataset_index < len(data_labels) else None
         )
         if isinstance(dataset, dict):
             rows.extend(_flatten_mapping_plot(anchor, plot_type, dataset, data_label))
@@ -1350,9 +1348,7 @@ def _parse_payloads(
                 data_contract_id=data_contract_id,
                 run_id=run_id,
                 run_sample_id=(
-                    _run_sample_id(run_id, sample_id)
-                    if sample_id is not None
-                    else None
+                    _run_sample_id(run_id, sample_id) if sample_id is not None else None
                 ),
                 sample_id=sample_id,
                 field_id=path.stem,

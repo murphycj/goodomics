@@ -296,9 +296,7 @@ class SampleMetric(AnalyticalRecord):
 
     @field_validator("source_observation_metadata_json", mode="before")
     @classmethod
-    def _blank_source_observation_metadata_to_empty_dict(
-        cls, value: object
-    ) -> object:
+    def _blank_source_observation_metadata_to_empty_dict(cls, value: object) -> object:
         return {} if value is None else value
 
 
@@ -565,9 +563,7 @@ class ResultPayload(AnalyticalRecord):
 
     @field_validator("source_observation_metadata_json", mode="before")
     @classmethod
-    def _blank_source_observation_metadata_to_empty_dict(
-        cls, value: object
-    ) -> object:
+    def _blank_source_observation_metadata_to_empty_dict(cls, value: object) -> object:
         return {} if value is None else value
 
     @field_validator("data_json", mode="before")
