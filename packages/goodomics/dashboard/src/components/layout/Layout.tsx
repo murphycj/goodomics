@@ -68,6 +68,10 @@ function LayoutContent({
     pathname.startsWith(`/project/${projectId}/sample-groups`) ||
     pathname === `/project/${projectId}/runs` ||
     pathname === `/project/${projectId}/database`;
+  const isInsightBuilderCanvas =
+    pathname === `/project/${projectId}/insights/new` ||
+    (pathname.startsWith(`/project/${projectId}/insights/`) &&
+      pathname.endsWith("/edit"));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -105,7 +109,11 @@ function LayoutContent({
       <section
         className={cn(
           "transition-[margin-left] duration-[170ms]",
-          isTableCanvas ? "px-0 pt-[48px]" : "px-4 pb-8 pt-[72px] md:px-8",
+          isTableCanvas
+            ? "px-0 pt-[48px]"
+            : isInsightBuilderCanvas
+              ? "px-3 pb-8 pt-[72px] md:px-6"
+              : "px-4 pb-8 pt-[72px] md:px-8",
           projectId && "md:ml-[58px]",
           projectId && sidebarMode === "expanded" && "md:ml-[232px]",
           !projectId && "mx-auto max-w-[1160px]",
