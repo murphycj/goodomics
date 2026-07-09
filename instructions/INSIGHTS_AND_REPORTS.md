@@ -1,35 +1,47 @@
 # Goodomics Insights And Reports Guide
 
 Use this file as the source of truth for saved insight and report behavior,
-including builder modes, chart grammar, context, linker rules, result-size
+including analysis grains, chart grammar, context, linker rules, result-size
 policies, report inheritance, and AI-created insight guardrails.
 
 ## Builder Model
 
-- Insight builders expose tab-style modes. **Cohort analysis** is first,
-  **Sample** is second, followed by **Comparison** and **Table**.
+- Insight builders are grain-first. The primary workflow is
+  **Analyze by** → **Choose data** → **Filter** → **Matched by** → **View as**.
+- `analysis_grain` is the entity grain and replaces saved insight `mode`.
+  Supported grains are `run_sample`, `sample`, `subject`, `run`, `feature`,
+  `variant`, and `file`.
+- New insights default to `analysis_grain: run_sample` and
+  `visualization: table`.
+- `visualization` is the output choice: `table`, `bar`, `scatter`, `line`,
+  `histogram`, `boxplot`, `metric`, and related chart types.
 - Cohort context uses canonical `sample_sets` and `sample_set_members`.
   Do not expand the legacy lightweight `cohorts` placeholder for new builder
   behavior.
-- The mode-first v1 builder supports:
-  - `contract_metrics`: cohort-level metric panels and “add all numeric fields”.
-    The cohort selector appears below the series constructor as the first
-    advanced filter option in this mode.
-  - `sample_detail`: sample or run/sample link inspection.
-  - `comparison`: aligned multi-series plots such as RNA vs protein.
-  - `variant_table`: variant, feature-call, and generic table outputs.
+- The builder supports quick-start templates such as QC metrics across run
+  samples, build a table, compare two fields, inspect one sample, explore a
+  gene/feature, and variant/call table. Templates prefill editable config only;
+  they do not create a separate workflow.
 - SQL access is selected from the per-series data source picker instead of a
   top-level Advanced SQL mode tab.
-- Saved insight configs should include `context`, `mode`, `series`, `linker`,
-  `filters`, and `result_policy`.
+- Saved insight configs should include `analysis_grain`, `visualization`,
+  `context`, `series`, `table_columns`, `linker`, `filters`,
+  `result_policy`, and `display`.
+- Chart values are configured as `series`. Table-specific columns are
+  configured as `table_columns` and should use raw values by default.
+- Each chart value owns its `aggregation` / **Show** control. Supported choices
+  are raw values, count rows, count distinct, average, sum, min, and max.
+- Global quick filters live in `context` for broad cohort/sample/run-sample
+  restrictions. Field-level conditions live in `filters` or
+  `series[].filters`.
 - Report configs may define `context`, `filters`, `linker`, or `result_policy`.
   Referenced insights inherit those values unless they explicitly override them.
 
 ## Server Catalog
 
-- The server owns the insight catalog endpoint. It defines modes, chart IDs,
-  icons, series constraints, linker rules, result policies, and validation
-  messages.
+- The server owns the insight catalog endpoint. It defines `analysis_grains`,
+  templates, chart IDs, icons, value constraints, linker rules, result
+  policies, and validation messages.
 - Dashboard UI, API execution, report rendering, and future AI insight drafting
   should consume the catalog and shared validator instead of duplicating chart
   rules.
@@ -48,8 +60,8 @@ policies, report inheritance, and AI-created insight guardrails.
     gene filters, linker `sample` or `run_sample`.
   - Protein expression vs RNA expression: two contracts, two feature filters,
     shared linker `sample`.
-  - All KRAS mutations: `variant_table` mode, mutations contract, gene filter
-    `KRAS`, table output.
+  - All KRAS mutations: `analysis_grain: variant`, mutations contract, gene
+    filter `KRAS`, table output.
 
 ## Plot Rules
 
