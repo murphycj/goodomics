@@ -1,6 +1,8 @@
-<div style="display: flex; align-items: center; justify-content: center; margin-bottom: 24px">
+<div align="center">
   <img src="public/logo-name.png" alt="Goodomics logo" height="64">
 </div>
+
+<br>
 
 > ⚠️ Warning: Goodomics is under heavy development and is not ready for production use.
 
