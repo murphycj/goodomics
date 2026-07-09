@@ -152,6 +152,29 @@ class SampleRunRead(BaseModel):
     run_sample_status: str
 
 
+class RunSampleListItemRead(BaseModel):
+    """Compact run/sample link row used by project-scoped pickers."""
+
+    run_sample_id: str
+    run_id: str
+    run_name: str | None = None
+    sample_id: str
+    sample_name: str | None = None
+    subject_id: str | None = None
+    role: str | None = None
+    status: str
+    created_at: datetime
+
+
+class RunSamplePageRead(BaseModel):
+    """Paginated project run/sample link list response."""
+
+    items: list[RunSampleListItemRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ProjectCreate(BaseModel):
     """Payload for creating a project."""
 
@@ -714,6 +737,25 @@ async def list_project_run_samples(
 
     run = await _get_project_run(request, project_id, run_id)
     return run.samples
+
+
+@router.get("/projects/{project_id}/run-samples", response_model=RunSamplePageRead)
+async def list_project_run_sample_links(
+    project_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=255),
+) -> RunSamplePageRead:
+    """List project run/sample links for picker-style filters."""
+
+    return await _list_project_run_sample_links(
+        request,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+    )
 
 
 @router.get("/projects/{project_id}/runs/{run_id}/files", response_model=list[FileRead])
@@ -3091,6 +3133,88 @@ async def _list_samples(
                 )
             )
     return SamplePageRead(items=items, total=total, limit=limit, offset=offset)
+
+
+async def _list_project_run_sample_links(
+    request: Request,
+    *,
+    project_id: str,
+    limit: int,
+    offset: int,
+    search: str = "",
+) -> RunSamplePageRead:
+    """List project-scoped run/sample links with picker-friendly labels."""
+
+    await _ensure_schema(request)
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        filters: list[Any] = [RunRecord.project_id == project.id]
+        term = search.strip().lower()
+        if term:
+            pattern = f"%{term}%"
+            filters.append(
+                or_(
+                    func.lower(RunSampleRecord.run_sample_id).like(pattern),
+                    func.lower(RunRecord.run_id).like(pattern),
+                    func.lower(RunRecord.name).like(pattern),
+                    func.lower(SampleRecord.sample_id).like(pattern),
+                    func.lower(SampleRecord.sample_name).like(pattern),
+                    func.lower(SubjectRecord.subject_id).like(pattern),
+                )
+            )
+        base = (
+            select(RunSampleRecord)
+            .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+            .join(SampleRecord, cast(Any, SampleRecord.id) == RunSampleRecord.sample_id)
+            .outerjoin(
+                SubjectRecord,
+                cast(Any, SubjectRecord.id) == SampleRecord.subject_id,
+            )
+            .where(*filters)
+        )
+        total = int(
+            (
+                await session.exec(
+                    select(func.count()).select_from(base.subquery())
+                )
+            ).one()
+        )
+        rows = (
+            await session.exec(
+                select(RunSampleRecord, RunRecord, SampleRecord, SubjectRecord)
+                .join(RunRecord, cast(Any, RunRecord.id) == RunSampleRecord.run_id)
+                .join(
+                    SampleRecord,
+                    cast(Any, SampleRecord.id) == RunSampleRecord.sample_id,
+                )
+                .outerjoin(
+                    SubjectRecord,
+                    cast(Any, SubjectRecord.id) == SampleRecord.subject_id,
+                )
+                .where(*filters)
+                .order_by(
+                    cast(Any, RunRecord.created_at).desc(),
+                    RunSampleRecord.run_sample_id,
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+        items = [
+            RunSampleListItemRead(
+                run_sample_id=run_sample.run_sample_id,
+                run_id=run.run_id,
+                run_name=run.name,
+                sample_id=sample.sample_id,
+                sample_name=sample.sample_name,
+                subject_id=subject.subject_id if subject is not None else None,
+                role=run_sample.role,
+                status=run.status,
+                created_at=run.created_at,
+            )
+            for run_sample, run, sample, subject in rows
+        ]
+    return RunSamplePageRead(items=items, total=total, limit=limit, offset=offset)
 
 
 async def _require_project_sample(

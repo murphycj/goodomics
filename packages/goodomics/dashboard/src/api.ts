@@ -73,6 +73,25 @@ const sampleRunSchema = z.object({
   run_sample_status: z.string(),
 });
 
+const runSampleListItemSchema = z.object({
+  run_sample_id: z.string(),
+  run_id: z.string(),
+  run_name: z.string().nullable(),
+  sample_id: z.string(),
+  sample_name: z.string().nullable(),
+  subject_id: z.string().nullable(),
+  role: z.string().nullable(),
+  status: z.string(),
+  created_at: z.string(),
+});
+
+const runSamplePageSchema = z.object({
+  items: z.array(runSampleListItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
 const searchResultSchema = z.object({
   kind: z.string(),
   project_id: z.string().nullable(),
@@ -232,7 +251,8 @@ const reportResultSchema = z.object({
 
 const insightCatalogSchema = z.object({
   version: z.number(),
-  modes: z.array(z.record(z.string(), z.unknown())).default([]),
+  analysis_grains: z.array(z.record(z.string(), z.unknown())).default([]),
+  templates: z.array(z.record(z.string(), z.unknown())).default([]),
   charts: z.array(z.record(z.string(), z.unknown())).default([]),
   linkers: z.array(z.record(z.string(), z.unknown())).default([]),
   result_policies: z.array(z.record(z.string(), z.unknown())).default([]),
@@ -309,6 +329,8 @@ export type GoodomicsSample = z.infer<typeof sampleSchema>;
 export type SampleListItem = z.infer<typeof sampleListItemSchema>;
 export type SamplesPage = z.infer<typeof samplePageSchema>;
 export type SampleRun = z.infer<typeof sampleRunSchema>;
+export type RunSampleListItem = z.infer<typeof runSampleListItemSchema>;
+export type RunSamplesPage = z.infer<typeof runSamplePageSchema>;
 export type SearchResult = z.infer<typeof searchResultSchema>;
 export type StoredFile = z.infer<typeof fileSchema>;
 export type AnalyticsMetric = z.infer<typeof analyticsMetricSchema>;
@@ -418,6 +440,25 @@ export function listProjectSamples({
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/samples?${params.toString()}`,
     samplePageSchema,
+  );
+}
+
+export function listProjectRunSamples({
+  limit,
+  offset,
+  projectId,
+  search,
+}: {
+  limit: number;
+  offset: number;
+  projectId: string;
+  search?: string;
+}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search?.trim()) params.set("search", search.trim());
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/run-samples?${params.toString()}`,
+    runSamplePageSchema,
   );
 }
 
@@ -823,7 +864,14 @@ export async function executeInsight({
       }),
     },
   );
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail =
+      body && typeof body === 'object' && 'detail' in body
+        ? String(body.detail)
+        : `Request failed: ${response.status}`;
+    throw new Error(detail);
+  }
   return insightResultSchema.parse(await response.json()).result;
 }
 
