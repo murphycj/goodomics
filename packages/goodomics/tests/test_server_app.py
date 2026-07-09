@@ -291,6 +291,24 @@ def test_project_sample_list_and_sample_runs_are_sample_first(
     assert [run["run_id"] for run in run_body] == ["run-new", "run-old"]
     assert run_body[0]["run_sample_id"] == "run-new:S1"
 
+    run_samples = client.get(f"/api/v1/projects/{project_id}/run-samples")
+    assert run_samples.status_code == 200
+    run_sample_body = run_samples.json()
+    assert run_sample_body["total"] == 3
+    assert {item["run_sample_id"] for item in run_sample_body["items"]} == {
+        "run-new:S1",
+        "run-new:S2",
+        "run-old:S1",
+    }
+
+    run_sample_search = client.get(
+        f"/api/v1/projects/{project_id}/run-samples",
+        params={"search": "control"},
+    )
+    assert run_sample_search.status_code == 200
+    assert run_sample_search.json()["total"] == 1
+    assert run_sample_search.json()["items"][0]["run_sample_id"] == "run-new:S2"
+
 
 def test_query_tools_resolve_project_and_list_read_only_context(
     client: TestClient,
@@ -1034,7 +1052,7 @@ def test_contract_series_charts_match_catalog_field_ids(
         "version": 1,
         "title": "Salmon mapped",
         "context": {"kind": "cohort"},
-        "mode": "contract_metrics",
+        "analysis_grain": "run_sample",
         "query": {
             "source": {
                 "kind": "data_contract",
@@ -1066,9 +1084,22 @@ def test_contract_series_charts_match_catalog_field_ids(
         table_config = {
             **base_config,
             "visualization": "table",
+            "series": [],
+            "table_columns": [
+                {"kind": "identity", "column": "run_sample_id"},
+                {"kind": "identity", "column": "sample_id"},
+                {"kind": "identity", "column": "run_id"},
+                {
+                    "kind": "contract_field",
+                    "contract_id": "salmon:results",
+                    "field_id": field_id,
+                    "value_mode": "raw",
+                },
+            ],
             "query": {
                 **base_config["query"],
-                "columns": [field_alias],
+                "dimensions": ["run_sample_id", "sample_id", "run_id"],
+                "columns": ["run_sample_id", "sample_id", "run_id", field_alias],
             },
         }
         histogram_config = {
@@ -1095,8 +1126,16 @@ def test_contract_series_charts_match_catalog_field_ids(
     assert table_response.status_code == 200
     table_result = table_response.json()["result"]
     assert table_result["rows"]
-    assert table_result["columns"] == ["sample_id", "percent_mapped"]
-    assert isinstance(table_result["rows"][0]["percent_mapped"], float)
+    assert table_result["analysis_grain"] == "run_sample"
+    assert table_result["columns"] == [
+        "run_sample_id",
+        "sample_id",
+        "run_id",
+        "general_stats_salmon_percent_mapped",
+    ]
+    assert isinstance(
+        table_result["rows"][0]["general_stats_salmon_percent_mapped"], float
+    )
 
     assert histogram_response.status_code == 200
     histogram_result = histogram_response.json()["result"]
@@ -1104,7 +1143,7 @@ def test_contract_series_charts_match_catalog_field_ids(
     assert histogram_result["columns"] == ["percent_mapped"]
     assert (
         histogram_result["rows"][0]["percent_mapped"]
-        == table_result["rows"][0]["percent_mapped"]
+        == table_result["rows"][0]["general_stats_salmon_percent_mapped"]
     )
     assert histogram_result["echarts_options"]["series"][0]["data"]
 
@@ -1601,7 +1640,7 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
         json={
             "config": {
                 "visualization": "scatter",
-                "mode": "comparison",
+                "analysis_grain": "run_sample",
                 "series": [
                     {
                         "contract_id": "salmon:results",
@@ -1621,10 +1660,15 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
     assert catalog.status_code == 200
     body = catalog.json()
     assert {chart["id"] for chart in body["charts"]} >= {"scatter", "table"}
-    assert {mode["id"] for mode in body["modes"]} >= {
-        "contract_metrics",
-        "comparison",
-        "advanced_sql",
+    assert {grain["id"] for grain in body["analysis_grains"]} >= {
+        "run_sample",
+        "sample",
+        "variant",
+    }
+    assert {template["id"] for template in body["templates"]} >= {
+        "qc_metrics_run_samples",
+        "compare_two_fields",
+        "variant_call_table",
     }
     assert validation.status_code == 200
     validation_body = validation.json()
