@@ -2071,7 +2071,7 @@ IDENTITY_COLUMN_LABELS = {
 
 def _identity_column_label(column: str) -> str:
     """Return a readable label for an identity column name."""
-    return IDENTITY_COLUMN_LABELS.get(column, column.replace("_", " ").title())
+    return IDENTITY_COLUMN_LABELS.get(column, column)
 
 
 def _apply_result_policy(

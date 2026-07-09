@@ -2043,7 +2043,7 @@ def _to_db_value(value: Any) -> Any:
 
 
 def _from_db_value(column: str, value: Any) -> Any:
-    if isinstance(value, str) and value and value[0] in "[{":
+    if _is_json_column(column) and isinstance(value, str) and value:
         try:
             return json.loads(value)
         except json.JSONDecodeError:
