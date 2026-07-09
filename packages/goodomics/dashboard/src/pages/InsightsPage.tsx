@@ -1,6 +1,41 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AreaChart,
+  BarChart2,
+  BarChart3,
+  Box,
+  Braces,
+  ChartScatter,
+  Check,
+  ChevronDown,
+  CircleDot,
+  CirclePlay,
+  Database,
+  Dna,
+  File,
+  FlaskConical,
+  Grid2X2,
+  Hash,
+  LineChart,
+  MoreHorizontal,
+  Pencil,
+  PieChart,
+  Plus,
+  Search,
+  Table2,
+  Trash2,
+  User,
+  Users,
+} from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type UIEvent,
+} from "react";
 import {
   createInsight,
   executeInsight,
@@ -8,25 +43,31 @@ import {
   listInsights,
   listProjectDatabaseTables,
   listProjectDataContracts,
+  listProjectRunSamples,
+  listProjectSampleGroups,
   listProjectSamples,
   listReports,
-  listSampleSets,
   patchInsight,
   validateInsightConfig,
   type DataContract,
+  type DataContractField,
   type DatabaseTable,
   type InsightCatalog,
   type InsightValidation,
+  type RunSampleListItem,
+  type SampleSet,
   type SampleListItem,
   type SavedInsight,
 } from "../api";
 import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
+import { InsightChartControls } from "../components/insights/InsightChartControls";
 import { InsightPreviewPanel } from "../components/insights/InsightPreviewPanel";
 import {
   InsightSeriesEditor,
   blankSeries,
   fieldForSeries,
   contractSeries,
+  filterContractGroups,
   seriesDisplayName,
   type BuilderSeries,
   type SqlSourceSelection,
@@ -38,17 +79,31 @@ import {
   Button,
   Card,
   CardContent,
-  DelayedHoverPopover,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Label,
   Page,
-  SearchSuggestionInput,
-  type SearchSuggestionOption,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "../components/ui";
 import {
   DEFAULT_DISPLAY_OPTIONS,
@@ -66,12 +121,14 @@ type InsightTarget =
   | { mode: "new" }
   | { mode: "edit"; insightRef: string };
 type QueryMode = "contract" | "table";
-type ContextKind = "cohort" | "sample";
-type BuilderMode =
-  | "contract_metrics"
-  | "comparison"
-  | "sample_detail"
-  | "variant_table";
+type AnalysisGrain =
+  | "run_sample"
+  | "sample"
+  | "subject"
+  | "run"
+  | "feature"
+  | "variant"
+  | "file";
 type LinkerKind = "auto" | "sample" | "run_sample" | "run" | "feature" | "entity";
 type ResultPolicyMode =
   | "preview"
@@ -79,6 +136,7 @@ type ResultPolicyMode =
   | "random_sample"
   | "all_rows"
   | "export_full_data";
+type FilterTab = "sample" | "sample_group" | "run_sample";
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
 export function InsightsPage({
@@ -110,10 +168,6 @@ export function InsightsPage({
     queryKey: ["insight-catalog"],
     queryFn: getInsightCatalog,
   });
-  const sampleSets = useQuery({
-    queryKey: ["sample-sets", projectId, "cohort"],
-    queryFn: () => listSampleSets(projectId, "cohort"),
-  });
   const [mode, setMode] = useState<InsightMode>(
     target.mode === "list" ? "list" : "detail",
   );
@@ -131,22 +185,26 @@ export function InsightsPage({
   const effectiveSelectedInsightId = selectedInsight?.insight_id ?? selectedInsightId;
   const [title, setTitle] = useState("New insight");
   const [description, setDescription] = useState("");
-  const [contextKind, setContextKind] = useState<ContextKind>("cohort");
-  const [sampleSetId, setSampleSetId] = useState("");
-  const [sampleId, setSampleId] = useState("");
-  const [runSampleId, setRunSampleId] = useState("");
-  const [builderMode, setBuilderMode] =
-    useState<BuilderMode>("contract_metrics");
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
+  const [tableColumnPickerOpen, setTableColumnPickerOpen] = useState(false);
+  const [analysisGrain, setAnalysisGrain] =
+    useState<AnalysisGrain>("run_sample");
+  const [sampleSetIds, setSampleSetIds] = useState<string[]>([]);
+  const [sampleIds, setSampleIds] = useState<string[]>([]);
+  const [runSampleIds, setRunSampleIds] = useState<string[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>("contract");
   const [contractId, setContractId] = useState("");
   const [fieldId, setFieldId] = useState("");
   const [series, setSeries] = useState<BuilderSeries[]>([
     blankSeries(0, "", ""),
   ]);
+  const [tableColumns, setTableColumns] = useState<BuilderSeries[]>([
+    blankSeries(0, "", ""),
+  ]);
   const [store, setStore] = useState<Store>("analytics");
   const [table, setTable] = useState("");
-  const [visualization, setVisualization] = useState("bar");
-  const [linkerKind, setLinkerKind] = useState<LinkerKind>("auto");
+  const [visualization, setVisualization] = useState("table");
+  const [linkerKind, setLinkerKind] = useState<LinkerKind>("run_sample");
   const [resultPolicyMode, setResultPolicyMode] =
     useState<ResultPolicyMode>("preview");
   const [resultLimit, setResultLimit] = useState(5000);
@@ -156,7 +214,6 @@ export function InsightsPage({
   );
   const [xField, setXField] = useState("");
   const [yField, setYField] = useState("");
-  const [aggregation, setAggregation] = useState("count");
   const [advancedSql, setAdvancedSql] = useState("");
   const availableTables = tables.data ?? [];
   const availableContracts = contracts.data ?? [];
@@ -178,19 +235,92 @@ export function InsightsPage({
     }
     return counts;
   }, [reports.data]);
-  const selectBuilderMode = (next: BuilderMode) => {
-    setBuilderMode(next);
-    setContextKind(next === "sample_detail" ? "sample" : "cohort");
+  const selectAnalysisGrain = (next: AnalysisGrain) => {
+    setAnalysisGrain(next);
+    setLinkerKind(defaultLinkerForGrain(next));
+  };
+  const applyTemplate = (templateId: string) => {
+    const template = templateDefinition(templateId, catalog.data);
+    const nextGrain = parseAnalysisGrain(template?.analysis_grain);
+    const nextVisualization = stringConfig(template?.visualization) || "table";
+    const linker = isRecord(template?.linker) ? template.linker : {};
+    const nextContract =
+      selectedContract ??
+      availableContracts.find((candidate) => candidate.fields.length > 0);
+    const firstField = defaultFieldForContract(nextContract, {
+      numericOnly: nextVisualization !== "table",
+    });
+    const secondField = nextContract
+      ? nextContract.fields.find(
+          (field) =>
+            field.field_id !== firstField &&
+            (nextVisualization !== "scatter" || field.value_type === "numeric"),
+        )?.field_id ?? ""
+      : "";
+    const nextContractId = nextContract?.data_contract_id ?? contractId;
+    setAnalysisGrain(nextGrain);
+    setVisualization(nextVisualization);
+    setLinkerKind(parseLinkerKind(linker.kind) || defaultLinkerForGrain(nextGrain));
     setQueryMode("contract");
-    if (next === "sample_detail" || next === "variant_table") {
-      setVisualization("table");
+    setSampleSetIds([]);
+    setSampleIds([]);
+    setRunSampleIds([]);
+    if (stringConfig(template?.label)) {
+      setTitle(stringConfig(template?.label));
+    }
+    if (stringConfig(template?.description)) {
+      setDescription(stringConfig(template?.description));
+    }
+    if (nextContractId) {
+      setContractId(nextContractId);
+    }
+    if (firstField) {
+      setFieldId(firstField);
+    }
+    const firstSeries = blankSeries(0, nextContractId, firstField);
+    const secondSeries = blankSeries(1, nextContractId, secondField);
+    if (nextVisualization === "table") {
+      setTableColumns(
+        firstField ? [firstSeries] : [blankSeries(0, nextContractId, "")],
+      );
+      setSeries([firstSeries]);
       return;
     }
-    if (next === "comparison") {
-      setVisualization("scatter");
+    if (nextVisualization === "scatter") {
+      setSeries([firstSeries, secondSeries]);
+      setTableColumns([firstSeries]);
       return;
     }
-    setVisualization("bar");
+    setSeries([firstSeries]);
+    setTableColumns([firstSeries]);
+  };
+  const addAllContractColumns = (contract: DataContract) => {
+    setQueryMode("contract");
+    setContractId(contract.data_contract_id);
+    setTableColumns(
+      contract.fields.map((field, index) => ({
+        ...blankSeries(index, contract.data_contract_id, field.field_id),
+        color: CHART_COLORS[index % CHART_COLORS.length],
+      })),
+    );
+  };
+  const addTableColumn = (contract: DataContract, field: DataContractField) => {
+    setQueryMode("contract");
+    setContractId(contract.data_contract_id);
+    setTableColumns((current) => [
+      ...current.filter((item) => item.contractId && item.fieldId),
+      {
+        ...blankSeries(current.length, contract.data_contract_id, field.field_id),
+        name: "",
+      },
+    ]);
+  };
+  const resetBuilderValues = () => {
+    if (visualization === "table") {
+      setTableColumns([blankSeries(0, contractId, "")]);
+      return;
+    }
+    setSeries([blankSeries(0, contractId, "")]);
   };
   const selectContractField = ({
     fieldId: nextFieldId,
@@ -204,8 +334,6 @@ export function InsightsPage({
     setFieldId(nextFieldId);
   };
   const selectSqlSource = (selection: SqlSourceSelection) => {
-    setBuilderMode("variant_table");
-    setContextKind("cohort");
     setQueryMode("table");
     setVisualization("table");
     setStore(selection.store);
@@ -224,13 +352,13 @@ export function InsightsPage({
       setSelectedInsightId(null);
       setTitle("New insight");
       setDescription("");
-      setContextKind("cohort");
-      setSampleSetId("");
-      setSampleId("");
-      setRunSampleId("");
-      setBuilderMode("contract_metrics");
-      setVisualization("bar");
-      setLinkerKind("auto");
+      setDescriptionOpen(false);
+      setAnalysisGrain("run_sample");
+      setSampleSetIds([]);
+      setSampleIds([]);
+      setRunSampleIds([]);
+      setVisualization("table");
+      setLinkerKind("run_sample");
       setResultPolicyMode("preview");
       setResultLimit(5000);
       setRandomSeed("goodomics");
@@ -238,15 +366,11 @@ export function InsightsPage({
       setAdvancedSql("");
       setQueryMode("contract");
       setSeries([blankSeries(0, "", "")]);
+      setTableColumns([blankSeries(0, "", "")]);
       return;
     }
     if (selectedInsight) setSelectedInsightId(selectedInsight.insight_id);
   }, [selectedInsight, target.mode]);
-
-  useEffect(() => {
-    if (sampleSetId || (sampleSets.data ?? []).length === 0) return;
-    setSampleSetId(sampleSets.data?.[0]?.sample_set_id ?? "");
-  }, [sampleSetId, sampleSets.data]);
 
   useEffect(() => {
     // Seed a contract-first insight with the first useful data contract. The
@@ -263,6 +387,17 @@ export function InsightsPage({
       "";
     setFieldId(defaultField);
     setSeries((current) =>
+      current.map((item, index) =>
+        index === 0 && !item.contractId
+          ? {
+              ...item,
+              contractId: preferred.data_contract_id,
+              fieldId: defaultField,
+            }
+          : item,
+      ),
+    );
+    setTableColumns((current) =>
       current.map((item, index) =>
         index === 0 && !item.contractId
           ? {
@@ -334,6 +469,13 @@ export function InsightsPage({
           : item,
       ),
     );
+    setTableColumns((current) =>
+      current.map((item) =>
+        item.contractId && !item.fieldId
+          ? contractSeries(item.contractId, availableContracts, item)
+          : item,
+      ),
+    );
   }, [availableContracts, queryMode]);
 
   useEffect(() => {
@@ -350,17 +492,12 @@ export function InsightsPage({
       : {};
     setTitle(selectedInsight.name);
     setDescription(selectedInsight.description ?? "");
-    setVisualization(String(config.visualization ?? "bar"));
-    setSampleSetId(stringConfig(context.sample_set_id));
-    setSampleId(stringConfig(context.sample_id));
-    setRunSampleId(stringConfig(context.run_sample_id));
-    const parsedBuilderMode = parseBuilderMode(config.mode, source.kind);
-    setBuilderMode(parsedBuilderMode);
-    setContextKind(
-      context.kind === "sample" || parsedBuilderMode === "sample_detail"
-        ? "sample"
-        : "cohort",
-    );
+    setDescriptionOpen(Boolean(selectedInsight.description?.trim()));
+    setVisualization(String(config.visualization ?? "table"));
+    setAnalysisGrain(parseAnalysisGrain(config.analysis_grain));
+    setSampleSetIds(stringArrayConfig(context.sample_set_ids, context.sample_set_id));
+    setSampleIds(stringArrayConfig(context.sample_ids, context.sample_id));
+    setRunSampleIds(stringArrayConfig(context.run_sample_ids, context.run_sample_id));
     setLinkerKind(parseLinkerKind(linker.kind));
     setResultPolicyMode(parseResultPolicyMode(resultPolicy.mode));
     setResultLimit(numberConfig(resultPolicy.limit, 5000));
@@ -378,7 +515,21 @@ export function InsightsPage({
           : [
               {
                 ...blankSeries(0, source.dataContractId, selectedField),
-                aggregation,
+                aggregation: "raw",
+              },
+            ],
+      );
+      const savedColumns = parseSavedSeries(
+        config.table_columns,
+        source.dataContractId,
+      );
+      setTableColumns(
+        savedColumns.length
+          ? savedColumns
+          : [
+              {
+                ...blankSeries(0, source.dataContractId, selectedField),
+                aggregation: "raw",
               },
             ],
       );
@@ -400,13 +551,13 @@ export function InsightsPage({
       buildConfig({
         title,
         description,
-        contextKind,
-        sampleSetId,
-        sampleId,
-        runSampleId,
-        builderMode,
+        analysisGrain,
+        sampleSetIds,
+        sampleIds,
+        runSampleIds,
         queryMode,
         seriesItems: series,
+        tableColumnItems: tableColumns,
         contracts: availableContracts,
         selectedContract,
         store,
@@ -419,15 +570,12 @@ export function InsightsPage({
         displayOptions,
         xField,
         yField,
-        aggregation,
         advancedSql,
       }),
     [
       advancedSql,
-      aggregation,
+      analysisGrain,
       availableContracts,
-      builderMode,
-      contextKind,
       description,
       displayOptions,
       fieldId,
@@ -438,14 +586,15 @@ export function InsightsPage({
       resultLimit,
       resultPolicyMode,
       series,
+      tableColumns,
       selectedContract,
-      sampleId,
-      sampleSetId,
+      sampleIds,
+      sampleSetIds,
       store,
       table,
       title,
       visualization,
-      runSampleId,
+      runSampleIds,
       xField,
       yField,
     ],
@@ -475,14 +624,16 @@ export function InsightsPage({
     enabled:
       mode === "detail" &&
       (queryMode === "contract"
-        ? series.some((item) => item.contractId && item.fieldId)
+        ? (visualization === "table" ? tableColumns : series).some(
+            (item) => item.contractId && item.fieldId,
+          )
         : Boolean(table || advancedSql.trim())),
     retry: false,
   });
   const setupWarning = chartSetupWarning({
     contracts: availableContracts,
     queryMode,
-    series,
+    series: visualization === "table" ? tableColumns : series,
     visualization,
   }) ?? validationWarning(validation.data);
   const save = useMutation({
@@ -552,158 +703,129 @@ export function InsightsPage({
   }
 
   return (
-    <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-4">
+    <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-1 overflow-hidden">
       <InsightBuilderHeader
         description={description}
+        descriptionOpen={descriptionOpen}
         isSaving={save.isPending}
         title={title}
         onBack={() => {
           window.location.href = `/project/${projectId}/insights`;
         }}
         onDescriptionChange={setDescription}
+        onDescriptionOpenChange={setDescriptionOpen}
         onSave={() => save.mutate(false)}
         onSaveContinue={() => save.mutate(true)}
         onTitleChange={setTitle}
       />
-      <InsightContextTabs
-        builderMode={builderMode}
+      <InsightBuilderControls
+        analysisGrain={analysisGrain}
         catalog={catalog.data}
-        contextKind={contextKind}
-        projectId={projectId}
-        runSampleId={runSampleId}
-        sampleId={sampleId}
-        onBuilderModeChange={selectBuilderMode}
-        onRunSampleIdChange={setRunSampleId}
-        onSampleIdChange={setSampleId}
+        description={description}
+        settings={
+          <InsightChartControls
+            config={previewConfig}
+            displayOptions={displayOptions}
+            randomSeed={randomSeed}
+            result={preview.data}
+            resultPolicyMode={resultPolicyMode}
+            rowLimit={resultLimit}
+            onRandomSeedChange={setRandomSeed}
+            onDisplayOptionsChange={setDisplayOptions}
+            onResultPolicyModeChange={setResultPolicyMode}
+            onRowLimitChange={setResultLimit}
+          />
+        }
+        resetLabel={visualization === "table" ? "Clear columns" : "Clear values"}
+        visualization={visualization}
+        onAnalysisGrainChange={selectAnalysisGrain}
+        onDescriptionRequest={() => setDescriptionOpen(true)}
+        onResetBuilder={resetBuilderValues}
+        onTemplateSelect={applyTemplate}
+        onVisualizationChange={setVisualization}
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="min-h-0 space-y-4 overflow-y-auto">
-          <Card className="mt-0">
-            <CardContent className="space-y-3">
-              <InsightSeriesEditor
-                advancedSql={advancedSql}
-                contracts={availableContracts}
-                series={series}
-                setSeries={setSeries}
-                sourceKind={queryMode}
-                store={store}
-                table={table}
-                tables={availableTables}
-                xField={xField}
-                yField={yField}
-                onAdvancedSqlChange={setAdvancedSql}
-                onContractFieldSelect={selectContractField}
-                onSqlSourceSelect={selectSqlSource}
-              />
-              {builderMode === "contract_metrics" && selectedContract ? (
-                <Button
-                  className="w-full justify-center"
-                  variant="outline"
-                  onClick={() =>
-                    setSeries(
-                      selectedContract.fields
-                        .filter((field) => field.value_type === "numeric")
-                        .map((field, index) => ({
-                          ...blankSeries(
-                            index,
-                            selectedContract.data_contract_id,
-                            field.field_id,
-                          ),
-                        })),
-                    )
-                  }
-                >
-                  Add all numeric fields
-                </Button>
-              ) : null}
-              {queryMode === "contract" ? (
-                <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-3 text-xs text-[#657082]">
-                  {seriesGuidance(visualization)}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="mt-0">
-            <CardContent className="space-y-4">
-              <Label>Options</Label>
-            {builderMode === "contract_metrics" ? (
-              <Field label="Cohort">
-                <Select value={sampleSetId} onValueChange={setSampleSetId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="All samples" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(sampleSets.data ?? []).map((sampleSet) => (
-                      <SelectItem
-                        key={sampleSet.sample_set_id}
-                        value={sampleSet.sample_set_id}
-                      >
-                        {sampleSet.name} ({sampleSet.member_count})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            ) : null}
-            <Field label="Aggregation">
-              <Select value={aggregation} onValueChange={setAggregation}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["count", "sum", "avg", "min", "max"].map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Matched by">
-              <Select
-                value={linkerKind}
-                onValueChange={(value) => setLinkerKind(value as LinkerKind)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {linkersFromCatalog(catalog.data).map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <DataSizeControls
-              mode={resultPolicyMode}
-              randomSeed={randomSeed}
-              rowLimit={resultLimit}
-              onModeChange={setResultPolicyMode}
-              onRandomSeedChange={setRandomSeed}
-              onRowLimitChange={setResultLimit}
-            />
-            </CardContent>
-          </Card>
-        </div>
+      <div
+        className={[
+          "grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden",
+          visualization === "table" ? "" : "lg:grid-cols-[310px_minmax(0,1fr)]",
+        ].join(" ")}
+      >
+        {visualization === "table" ? null : (
+          <div className="min-h-0 space-y-2 overflow-y-auto">
+            <Card className="mt-0 p-2.5">
+              <CardContent className="space-y-2">
+                <InsightSeriesEditor
+                  addLabel="Value"
+                  advancedSql={advancedSql}
+                  contracts={availableContracts}
+                  itemLabel="Value"
+                  label={visualization === "scatter" ? "X / Y values" : "Values"}
+                  series={series}
+                  setSeries={setSeries}
+                  sourceKind={queryMode}
+                  store={store}
+                  table={table}
+                  tables={availableTables}
+                  xField={xField}
+                  yField={yField}
+                  onAdvancedSqlChange={setAdvancedSql}
+                  onContractFieldSelect={selectContractField}
+                  onSqlSourceSelect={selectSqlSource}
+                />
+                {needsLinkerStrip(visualization, series) ? (
+                  <LinkerStrip
+                    catalog={catalog.data}
+                    linkerKind={linkerKind}
+                    series={series}
+                    onLinkerKindChange={setLinkerKind}
+                  />
+                ) : null}
+              </CardContent>
+            </Card>
+            <Card className="mt-0 p-2.5">
+              <CardContent>
+                <SampleFilterDropdown
+                  projectId={projectId}
+                  runSampleIds={runSampleIds}
+                  sampleGroupIds={sampleSetIds}
+                  sampleIds={sampleIds}
+                  onRunSampleIdsChange={setRunSampleIds}
+                  onSampleGroupIdsChange={setSampleSetIds}
+                  onSampleIdsChange={setSampleIds}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         <InsightPreviewPanel
-          catalog={catalog.data}
           config={previewConfig}
-          displayOptions={displayOptions}
           error={preview.error instanceof Error ? preview.error : null}
-          isCached={Boolean(preview.data?.cached)}
           result={preview.data}
           setupWarning={setupWarning}
-          title={title}
-          visualization={visualization}
-          onDisplayOptionsChange={setDisplayOptions}
-          onVisualizationChange={setVisualization}
+          tableActions={
+            visualization === "table"
+              ? {
+                  addLabel: "Add table column",
+                  emptyLabel: "Select data",
+                  onAddColumn: () => setTableColumnPickerOpen(true),
+                }
+              : undefined
+          }
         />
       </div>
+      <TableColumnPickerDialog
+        contracts={availableContracts}
+        open={tableColumnPickerOpen}
+        selectedColumns={tableColumns}
+        onAddAll={addAllContractColumns}
+        onOpenChange={setTableColumnPickerOpen}
+        onSelect={(contract, field) => {
+          addTableColumn(contract, field);
+          setTableColumnPickerOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -715,24 +837,6 @@ function safeFieldAlias(value: string) {
     .replace(/[^a-zA-Z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
-}
-
-function seriesGuidance(visualization: string) {
-  // Guidance mirrors the config-shaping rules in buildConfig so users see why a
-  // particular chart asks for one series, two series, or numeric fields.
-  if (visualization === "histogram") {
-    return "Each series is plotted as its own colored distribution.";
-  }
-  if (visualization === "scatter") {
-    return "Scatter plots use the first two series as aligned X and Y values.";
-  }
-  if (["bar", "stacked_bar"].includes(visualization)) {
-    return "With one series, bars count unique values. Add a second series to plot a value by group.";
-  }
-  if (["line", "area", "bar", "stacked_bar"].includes(visualization)) {
-    return "Use sample or run creation date fields in advanced table mode for added-over-time charts.";
-  }
-  return "Add one or more colored series from contract fields, then preview the result.";
 }
 
 function chartSetupWarning({
@@ -751,7 +855,7 @@ function chartSetupWarning({
   if (queryMode !== "contract") return null;
   const activeSeries = series.filter((item) => item.contractId && item.fieldId);
   if (activeSeries.length === 0) {
-    return "Choose a data contract field to preview this chart.";
+    return "Select a data series to preview this insight.";
   }
   if (visualization === "scatter" && activeSeries.length < 2) {
     return "Scatter plots need two aligned numeric series.";
@@ -798,38 +902,67 @@ function seriesLabel(
   );
 }
 
-/** Label-and-control wrapper used by the insight builder sidebar. */
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
+function defaultFieldForContract(
+  contract: DataContract | undefined,
+  { numericOnly = false }: { numericOnly?: boolean } = {},
+) {
+  if (!contract) return "";
+  const numericField = contract.fields.find(
+    (field) => field.value_type === "numeric",
+  )?.field_id;
+  if (numericOnly) return numericField ?? "";
+  return numericField ?? contract.fields[0]?.field_id ?? "";
 }
 
-function SampleSearchInput({
+function normalizedSeriesFilters(item: BuilderSeries) {
+  return item.filters
+    .filter((filter) => filter.field.trim() && filter.value.trim())
+    .map((filter) => ({
+      field: filter.field.trim(),
+      operator: filter.operator || "eq",
+      value: coerceFilterValue(filter.value),
+    }));
+}
+
+function coerceFilterValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && trimmed !== "" ? numeric : trimmed;
+}
+
+function SampleFilterDropdown({
   projectId,
-  sampleId,
-  onSampleIdChange,
+  runSampleIds,
+  sampleGroupIds,
+  sampleIds,
+  onRunSampleIdsChange,
+  onSampleGroupIdsChange,
+  onSampleIdsChange,
 }: {
   projectId: string;
-  sampleId: string;
-  onSampleIdChange: (value: string) => void;
+  runSampleIds: string[];
+  sampleGroupIds: string[];
+  sampleIds: string[];
+  onRunSampleIdsChange: (value: string[]) => void;
+  onSampleGroupIdsChange: (value: string[]) => void;
+  onSampleIdsChange: (value: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [sampleInput, setSampleInput] = useState(sampleId);
+  const [activeTab, setActiveTab] = useState<FilterTab>(
+    filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }),
+  );
+  const [pendingSampleGroupIds, setPendingSampleGroupIds] =
+    useState<string[]>(sampleGroupIds);
+  const [pendingSampleIds, setPendingSampleIds] = useState<string[]>(sampleIds);
+  const [pendingRunSampleIds, setPendingRunSampleIds] =
+    useState<string[]>(runSampleIds);
   const [sampleSearch, setSampleSearch] = useState("");
-  const lastSelectedIdRef = useRef("");
-  const pageSize = 50;
+  const [sampleGroupSearch, setSampleGroupSearch] = useState("");
+  const [runSampleSearch, setRunSampleSearch] = useState("");
+  const pageSize = 20;
   const samplePages = useInfiniteQuery({
-    queryKey: ["project-sample-suggestions", projectId, sampleSearch],
+    queryKey: ["insight-filter-samples", projectId, sampleSearch],
     queryFn: ({ pageParam }) =>
       listProjectSamples({
         projectId,
@@ -837,217 +970,948 @@ function SampleSearchInput({
         offset: pageParam,
         search: sampleSearch,
       }),
-    enabled: open,
+    enabled: open && activeTab === "sample",
     initialPageParam: 0,
-    getNextPageParam: (lastPage) => {
-      const nextOffset = lastPage.offset + lastPage.items.length;
-      return nextOffset < lastPage.total ? nextOffset : undefined;
-    },
+    getNextPageParam: pageNextOffset,
   });
-  const sampleOptions = useMemo(
-    () =>
-      (samplePages.data?.pages ?? [])
-        .flatMap((page) => page.items)
-        .map(sampleSuggestionOption),
+  const sampleGroupPages = useInfiniteQuery({
+    queryKey: ["insight-filter-sample-groups", projectId, sampleGroupSearch],
+    queryFn: ({ pageParam }) =>
+      listProjectSampleGroups({
+        projectId,
+        limit: pageSize,
+        offset: pageParam,
+        search: sampleGroupSearch,
+      }),
+    enabled: open && activeTab === "sample_group",
+    initialPageParam: 0,
+    getNextPageParam: pageNextOffset,
+  });
+  const runSamplePages = useInfiniteQuery({
+    queryKey: ["insight-filter-run-samples", projectId, runSampleSearch],
+    queryFn: ({ pageParam }) =>
+      listProjectRunSamples({
+        projectId,
+        limit: pageSize,
+        offset: pageParam,
+        search: runSampleSearch,
+      }),
+    enabled: open && activeTab === "run_sample",
+    initialPageParam: 0,
+    getNextPageParam: pageNextOffset,
+  });
+  const samples = useMemo(
+    () => (samplePages.data?.pages ?? []).flatMap((page) => page.items),
     [samplePages.data?.pages],
   );
+  const sampleGroups = useMemo(
+    () => (sampleGroupPages.data?.pages ?? []).flatMap((page) => page.items),
+    [sampleGroupPages.data?.pages],
+  );
+  const runSamples = useMemo(
+    () => (runSamplePages.data?.pages ?? []).flatMap((page) => page.items),
+    [runSamplePages.data?.pages],
+  );
+  const selectedGroup = sampleGroups.find((sampleGroup) =>
+    sampleGroupIds.includes(sampleGroup.sample_set_id),
+  );
+  const summary = sampleFilterSummary({
+    runSampleIds,
+    sampleGroup: selectedGroup,
+    sampleGroupIds,
+    sampleIds,
+  });
 
   useEffect(() => {
-    if (sampleId === lastSelectedIdRef.current) return;
-    setSampleInput(sampleId);
-  }, [sampleId]);
+    if (!open) {
+      setActiveTab(filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }));
+      return;
+    }
+    setPendingSampleGroupIds(sampleGroupIds);
+    setPendingSampleIds(sampleIds);
+    setPendingRunSampleIds(runSampleIds);
+  }, [open, runSampleIds, sampleGroupIds, sampleIds]);
+
+  const clearFilters = () => {
+    setPendingSampleGroupIds([]);
+    setPendingSampleIds([]);
+    setPendingRunSampleIds([]);
+  };
+  const commitFilters = () => {
+    onSampleGroupIdsChange(pendingSampleGroupIds);
+    onSampleIdsChange(pendingSampleIds);
+    onRunSampleIdsChange(pendingRunSampleIds);
+    setOpen(false);
+  };
+  const selectSample = (value: string) => {
+    setPendingSampleIds((current) => toggleString(current, value));
+    setPendingSampleGroupIds([]);
+    setPendingRunSampleIds([]);
+  };
+  const selectSampleGroup = (value: string) => {
+    setPendingSampleGroupIds((current) => toggleString(current, value));
+    setPendingSampleIds([]);
+    setPendingRunSampleIds([]);
+  };
+  const selectRunSample = (value: string) => {
+    setPendingRunSampleIds((current) => toggleString(current, value));
+    setPendingSampleGroupIds([]);
+    setPendingSampleIds([]);
+  };
 
   return (
-    <SearchSuggestionInput
-      emptyText="No samples found."
-      hasMore={Boolean(samplePages.hasNextPage)}
-      inputValue={sampleInput}
-      isLoading={samplePages.isLoading || samplePages.isFetchingNextPage}
-      loadMoreText={
-        samplePages.isFetchingNextPage ? "Loading more samples..." : "Loading..."
-      }
-      options={sampleOptions}
-      placeholder="Search samples..."
-      searchValue={sampleSearch}
-      onInputValueChange={(value) => {
-        lastSelectedIdRef.current = "";
-        setSampleInput(value);
-        onSampleIdChange(value);
-      }}
-      onLoadMore={() => {
-        if (samplePages.hasNextPage && !samplePages.isFetchingNextPage) {
-          void samplePages.fetchNextPage();
-        }
-      }}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) setSampleSearch("");
-      }}
-      onSearchValueChange={setSampleSearch}
-      onSelect={(option) => {
-        lastSelectedIdRef.current = option.id;
-        setSampleInput(option.label);
-        setSampleSearch(option.label);
-        onSampleIdChange(option.id);
-      }}
-    />
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          aria-label="Filter by sample or group"
+          className="h-10 w-full justify-between bg-white px-3 font-normal text-[#1f2937]"
+          type="button"
+          variant="outline"
+        >
+          <span className="truncate">{summary}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-[#758195]" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        className="flex h-[min(760px,92vh)] max-h-[92vh] max-w-[min(720px,94vw)] flex-col gap-3 overflow-hidden p-5"
+        showCloseButton
+      >
+        <DialogHeader className="shrink-0 pr-10">
+          <DialogTitle className="text-lg">Filter by sample or group</DialogTitle>
+        </DialogHeader>
+        <Tabs
+          className="flex min-h-0 flex-1 flex-col"
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as FilterTab)}
+        >
+          <TabsList className="mb-3 grid shrink-0 grid-cols-3 gap-0">
+            <TabsTrigger className="px-2 py-2 text-xs" value="sample">
+              Sample
+            </TabsTrigger>
+            <TabsTrigger className="px-2 py-2 text-xs" value="sample_group">
+              Sample group
+            </TabsTrigger>
+            <TabsTrigger className="px-2 py-2 text-xs" value="run_sample">
+              Run sample
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex" value="sample">
+            <FilterSearchInput
+              placeholder="Search samples..."
+              value={sampleSearch}
+              onChange={setSampleSearch}
+            />
+            <FilterOptionList
+              emptyText="No samples found."
+              hasMore={Boolean(samplePages.hasNextPage)}
+              isLoading={samplePages.isLoading || samplePages.isFetchingNextPage}
+              onLoadMore={() => void samplePages.fetchNextPage()}
+            >
+              {samples.map((sample) => {
+                const label = sample.sample_name || sample.sample_id;
+                const subtitle = sampleSubtitle(sample);
+                return (
+                  <FilterOptionButton
+                    key={sample.sample_id}
+                    selected={pendingSampleIds.includes(sample.sample_id)}
+                    subtitle={subtitle}
+                    title={label}
+                    search={sampleSearch}
+                    onClick={() => selectSample(sample.sample_id)}
+                  />
+                );
+              })}
+            </FilterOptionList>
+            {sampleSearch.trim() ? (
+              <Button
+                className="w-full justify-start"
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() => selectSample(sampleSearch.trim())}
+              >
+                Use sample ID "{sampleSearch.trim()}"
+              </Button>
+            ) : null}
+            <FilterMenuFooter onClear={clearFilters} onDone={commitFilters} />
+          </TabsContent>
+          <TabsContent
+            className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex"
+            value="sample_group"
+          >
+            <FilterSearchInput
+              placeholder="Search sample groups..."
+              value={sampleGroupSearch}
+              onChange={setSampleGroupSearch}
+            />
+            <button
+              className={[
+                "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                !pendingSampleGroupIds.length &&
+                !pendingSampleIds.length &&
+                !pendingRunSampleIds.length
+                  ? "border-[#16784a] bg-[#e8f5ee] text-[#145c3a]"
+                  : "border-[#d6dee8] bg-white text-[#1f2937] hover:bg-[#f8fafc]",
+              ].join(" ")}
+              type="button"
+              onClick={clearFilters}
+            >
+              <span className="font-semibold">All samples</span>
+            </button>
+            <FilterOptionList
+              emptyText="No sample groups found."
+              hasMore={Boolean(sampleGroupPages.hasNextPage)}
+              isLoading={
+                sampleGroupPages.isLoading || sampleGroupPages.isFetchingNextPage
+              }
+              onLoadMore={() => void sampleGroupPages.fetchNextPage()}
+            >
+              {sampleGroups.map((sampleGroup) => {
+                return (
+                  <FilterOptionButton
+                    key={sampleGroup.sample_set_id}
+                    selected={pendingSampleGroupIds.includes(sampleGroup.sample_set_id)}
+                    subtitle={`${sampleGroup.member_count.toLocaleString()} samples`}
+                    title={sampleGroup.name}
+                    search={sampleGroupSearch}
+                    onClick={() => selectSampleGroup(sampleGroup.sample_set_id)}
+                  />
+                );
+              })}
+            </FilterOptionList>
+            <FilterMenuFooter
+              onClear={() => setOpen(false)}
+              onDone={commitFilters}
+            />
+          </TabsContent>
+          <TabsContent className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex" value="run_sample">
+            <FilterSearchInput
+              placeholder="Search run samples..."
+              value={runSampleSearch}
+              onChange={setRunSampleSearch}
+            />
+            <FilterOptionList
+              emptyText="No run samples found."
+              hasMore={Boolean(runSamplePages.hasNextPage)}
+              isLoading={
+                runSamplePages.isLoading || runSamplePages.isFetchingNextPage
+              }
+              onLoadMore={() => void runSamplePages.fetchNextPage()}
+            >
+              {runSamples.map((runSample) => (
+                <FilterOptionButton
+                  key={runSample.run_sample_id}
+                  selected={pendingRunSampleIds.includes(runSample.run_sample_id)}
+                  subtitle={runSampleSubtitle(runSample)}
+                  title={runSample.run_sample_id}
+                  search={runSampleSearch}
+                  onClick={() => selectRunSample(runSample.run_sample_id)}
+                />
+              ))}
+            </FilterOptionList>
+            {runSampleSearch.trim() ? (
+              <Button
+                className="w-full justify-start"
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() => selectRunSample(runSampleSearch.trim())}
+              >
+                Use run sample ID "{runSampleSearch.trim()}"
+              </Button>
+            ) : null}
+            <FilterMenuFooter onClear={clearFilters} onDone={commitFilters} />
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function sampleSuggestionOption(sample: SampleListItem): SearchSuggestionOption {
-  const label = sample.sample_name || sample.sample_id;
+function TableColumnPickerDialog({
+  contracts,
+  open,
+  selectedColumns,
+  onAddAll,
+  onOpenChange,
+  onSelect,
+}: {
+  contracts: DataContract[];
+  open: boolean;
+  selectedColumns: BuilderSeries[];
+  onAddAll: (contract: DataContract) => void;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (contract: DataContract, field: DataContractField) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const groups = useMemo(
+    () => filterContractGroups(contracts, search),
+    [contracts, search],
+  );
+  const selected = useMemo(
+    () =>
+      new Set(
+        selectedColumns
+          .filter((column) => column.contractId && column.fieldId)
+          .map((column) => `${column.contractId}::${column.fieldId}`),
+      ),
+    [selectedColumns],
+  );
+
+  useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[min(720px,90vh)] max-w-[min(760px,94vw)] flex-col overflow-hidden p-5">
+        <DialogHeader className="shrink-0 pr-10">
+          <DialogTitle>Add table column</DialogTitle>
+        </DialogHeader>
+        <div className="relative shrink-0">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+          <Input
+            autoFocus
+            className="pl-9"
+            placeholder="Search fields..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+          {groups.map(({ contract, fields }) => (
+            <section
+              className="rounded-md border border-[#d9e1ea] bg-white"
+              key={contract.data_contract_id}
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-[#e8edf3] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-bold uppercase tracking-wide text-[#657082]">
+                    {highlightSearchMatch(contract.name.toUpperCase(), search)}
+                  </div>
+                  <div className="truncate text-xs text-[#758195]">
+                    {contract.data_contract_id}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    onAddAll(contract);
+                    onOpenChange(false);
+                  }}
+                >
+                  Add all fields
+                </Button>
+              </div>
+              <div className="grid gap-1 p-2">
+                {fields.map((field) => {
+                  const isSelected = selected.has(
+                    `${contract.data_contract_id}::${field.field_id}`,
+                  );
+                  return (
+                    <button
+                      className={[
+                        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2.5 text-left text-sm transition-colors",
+                        isSelected
+                          ? "bg-[#e8f5ee] text-[#16784a]"
+                          : "hover:bg-[#f8fafc]",
+                      ].join(" ")}
+                      key={field.field_id}
+                      type="button"
+                      onClick={() => onSelect(contract, field)}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-[15px] font-semibold">
+                          {highlightSearchMatch(
+                            field.display_name || field.field_id,
+                            search,
+                          )}
+                        </span>
+                        <span className="block truncate text-xs text-[#657082]">
+                          {highlightSearchMatch(field.field_id, search)}
+                        </span>
+                      </span>
+                      <span className="rounded bg-[#eef3f7] px-2 py-1 text-xs text-[#526071]">
+                        {field.field_role === "payload"
+                          ? "payload"
+                          : field.value_type}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+          {groups.length === 0 ? (
+            <div className="rounded-md border border-dashed border-[#d6dee8] p-4 text-sm text-[#657082]">
+              No matching contract fields.
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter className="shrink-0 border-t border-[#e8edf3] pt-3">
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Done
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FilterSearchInput({
+  placeholder,
+  value,
+  onChange,
+}: {
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+      <Input
+        className="pl-9"
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => event.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+function FilterOptionList({
+  children,
+  emptyText,
+  hasMore,
+  isLoading,
+  onLoadMore,
+}: {
+  children: React.ReactNode;
+  emptyText: string;
+  hasMore: boolean;
+  isLoading: boolean;
+  onLoadMore: () => void;
+}) {
+  const hasItems = Boolean(childrenArray(children).length);
+  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
+    if (!hasMore || isLoading) return;
+    const element = event.currentTarget;
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (remaining < 80) onLoadMore();
+  };
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto pr-1" onScroll={handleScroll}>
+      <div className="space-y-1">
+        {children}
+        {!hasItems && !isLoading ? (
+          <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] px-3 py-4 text-sm text-[#657082]">
+            {emptyText}
+          </div>
+        ) : null}
+        {isLoading ? (
+          <div className="rounded-md px-3 py-2 text-xs text-[#657082]">
+            Loading...
+          </div>
+        ) : null}
+        {hasMore && !isLoading ? (
+          <div className="h-8 rounded-md px-3 py-2 text-center text-xs text-[#657082]">
+            Scroll for more
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FilterOptionButton({
+  search,
+  selected,
+  subtitle,
+  title,
+  onClick,
+}: {
+  search: string;
+  selected: boolean;
+  subtitle?: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={[
+        "grid w-full gap-0.5 rounded-md border px-3 py-2 text-left text-sm transition-colors",
+        selected
+          ? "border-[#16784a] bg-[#e8f5ee] text-[#145c3a]"
+          : "border-[#d6dee8] bg-white text-[#1f2937] hover:bg-[#f8fafc]",
+      ].join(" ")}
+      type="button"
+      onClick={onClick}
+    >
+      <span className="truncate font-semibold">
+        {highlightSearchMatch(title, search)}
+      </span>
+      {subtitle ? (
+        <span className="truncate text-xs text-[#657082]">
+          {highlightSearchMatch(subtitle, search)}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function FilterMenuFooter({
+  onClear,
+  onDone,
+}: {
+  onClear: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-2 border-t border-[#e8edf3] pt-3">
+      <Button size="sm" type="button" variant="ghost" onClick={onClear}>
+        Clear
+      </Button>
+      <Button size="sm" type="button" onClick={onDone}>
+        Done
+      </Button>
+    </div>
+  );
+}
+
+function filterTabForSelection({
+  runSampleIds,
+  sampleGroupIds,
+  sampleIds,
+}: {
+  runSampleIds: string[];
+  sampleGroupIds: string[];
+  sampleIds: string[];
+}): FilterTab {
+  if (runSampleIds.length) return "run_sample";
+  if (sampleIds.length) return "sample";
+  if (sampleGroupIds.length) return "sample_group";
+  return "sample";
+}
+
+function sampleFilterSummary({
+  runSampleIds,
+  sampleGroup,
+  sampleGroupIds,
+  sampleIds,
+}: {
+  runSampleIds: string[];
+  sampleGroup: SampleSet | undefined;
+  sampleGroupIds: string[];
+  sampleIds: string[];
+}) {
+  if (runSampleIds.length === 1) return `Run sample ${runSampleIds[0]}`;
+  if (runSampleIds.length > 1) return `${runSampleIds.length} run samples`;
+  if (sampleIds.length === 1) return `Sample ${sampleIds[0]}`;
+  if (sampleIds.length > 1) return `${sampleIds.length} samples`;
+  if (sampleGroupIds.length === 1) {
+    return sampleGroup ? `Sample group ${sampleGroup.name}` : `Sample group ${sampleGroupIds[0]}`;
+  }
+  if (sampleGroupIds.length > 1) return `${sampleGroupIds.length} sample groups`;
+  return "All samples";
+}
+
+function childrenArray(children: React.ReactNode) {
+  return Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
+}
+
+function toggleString(values: string[], value: string) {
+  const normalized = value.trim();
+  if (!normalized) return values;
+  return values.includes(normalized)
+    ? values.filter((item) => item !== normalized)
+    : [...values, normalized];
+}
+
+function pageNextOffset(lastPage: { items: unknown[]; offset: number; total: number }) {
+  const nextOffset = lastPage.offset + lastPage.items.length;
+  return nextOffset < lastPage.total ? nextOffset : undefined;
+}
+
+function sampleSubtitle(sample: SampleListItem) {
   const subtitleParts = [
     sample.sample_name && sample.sample_name !== sample.sample_id
       ? sample.sample_id
       : "",
     sample.subject_id ? `Subject ${sample.subject_id}` : "",
+    sample.run_count ? `${sample.run_count.toLocaleString()} runs` : "",
+    sample.latest_run_name || sample.latest_run_id
+      ? `Latest ${sample.latest_run_name || sample.latest_run_id}`
+      : "",
   ].filter(Boolean);
-  return {
-    id: sample.sample_id,
-    label,
-    subtitle: subtitleParts.join(" · ") || undefined,
-  };
+  return subtitleParts.join(" · ") || undefined;
 }
 
-function InsightContextTabs({
-  builderMode,
+function runSampleSubtitle(runSample: RunSampleListItem) {
+  return [
+    runSample.sample_name || runSample.sample_id,
+    runSample.sample_name && runSample.sample_name !== runSample.sample_id
+      ? runSample.sample_id
+      : "",
+    runSample.run_name || runSample.run_id,
+    runSample.status,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function highlightSearchMatch(text: string, search: string) {
+  const query = search.trim();
+  if (!query) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex));
+    const end = matchIndex + query.length;
+    parts.push(
+      <mark
+        className="rounded-sm bg-[#dff4e8] px-0.5 text-inherit"
+        key={`${matchIndex}-${end}`}
+      >
+        {text.slice(matchIndex, end)}
+      </mark>,
+    );
+    cursor = end;
+    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+function InsightBuilderControls({
+  analysisGrain,
   catalog,
-  contextKind,
-  projectId,
-  runSampleId,
-  sampleId,
-  onBuilderModeChange,
-  onRunSampleIdChange,
-  onSampleIdChange,
+  description,
+  resetLabel,
+  settings,
+  visualization,
+  onAnalysisGrainChange,
+  onDescriptionRequest,
+  onResetBuilder,
+  onTemplateSelect,
+  onVisualizationChange,
 }: {
-  builderMode: BuilderMode;
+  analysisGrain: AnalysisGrain;
   catalog: InsightCatalog | undefined;
-  contextKind: ContextKind;
-  projectId: string;
-  runSampleId: string;
-  sampleId: string;
-  onBuilderModeChange: (value: BuilderMode) => void;
-  onRunSampleIdChange: (value: string) => void;
-  onSampleIdChange: (value: string) => void;
+  description: string;
+  resetLabel: string;
+  settings?: ReactNode;
+  visualization: string;
+  onAnalysisGrainChange: (value: AnalysisGrain) => void;
+  onDescriptionRequest: () => void;
+  onResetBuilder: () => void;
+  onTemplateSelect: (value: string) => void;
+  onVisualizationChange: (value: string) => void;
 }) {
-  const tabs = builderTabsFromCatalog(catalog);
+  const templates = templatesFromCatalog(catalog);
+  const charts = chartOptionsFromCatalog(catalog);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const hasDescription = Boolean(description.trim());
+  const handleTemplateSelect = (value: string) => {
+    onTemplateSelect(value);
+    setTemplatesOpen(false);
+  };
   return (
-    <section className="shrink-0 border-b border-[#dce3eb]">
-      <div className="flex min-h-[46px] flex-wrap items-end gap-7 px-1">
-        {tabs.map((tab) => {
-          const active = tab.value === builderMode;
-          return (
-            <DelayedHoverPopover
-              content={
-                <>
-                  <div className="mb-1 font-semibold text-[#1f2937]">
-                    {tab.label}
-                  </div>
-                  {tab.description}
-                </>
-              }
-              key={tab.value}
-            >
-              <button
-                className={[
-                  "relative h-11 border-b-2 px-0 text-sm font-semibold tracking-normal transition-colors",
-                  active
-                    ? "border-[#16784a] text-[#16784a]"
-                    : "border-transparent text-[#657082] hover:text-[#1f2937]",
-                ].join(" ")}
-                type="button"
-                onClick={() => onBuilderModeChange(tab.value)}
-              >
-                {tab.label}
-              </button>
-            </DelayedHoverPopover>
-          );
-        })}
-      </div>
-      {contextKind === "sample" ? (
-        <div className="flex flex-wrap items-end gap-3 pb-3 pt-2">
-          <div className="w-full max-w-[260px] space-y-1.5">
-            <Label>Sample</Label>
-            <SampleSearchInput
-              projectId={projectId}
-              sampleId={sampleId}
-              onSampleIdChange={onSampleIdChange}
-            />
-          </div>
-          <div className="w-full max-w-[300px] space-y-1.5">
-            <Label>Run sample</Label>
-            <Input
-              placeholder="run:S1"
-              value={runSampleId}
-              onChange={(event) => onRunSampleIdChange(event.target.value)}
-            />
-          </div>
-          <div className="pb-2 text-xs text-[#657082]">
-            Sample mode uses the same guardrails as sample detail.
-          </div>
+    <section className="shrink-0 border-b border-[#dce3eb] pb-1">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="w-full max-w-[200px] space-y-0.5">
+          <Label>Analyze by</Label>
+          <Select
+            value={analysisGrain}
+            onValueChange={(value) =>
+              onAnalysisGrainChange(value as AnalysisGrain)
+            }
+          >
+            <SelectTrigger>
+              <AnalyzeByValue
+                option={analysisGrainsFromCatalog(catalog).find(
+                  (grain) => grain.value === analysisGrain,
+                )}
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {analysisGrainsFromCatalog(catalog).map((grain) => (
+                <SelectItem key={grain.value} value={grain.value}>
+                  <span className="flex items-center gap-2">
+                    <grain.Icon className="h-4 w-4 shrink-0 text-[#657082]" />
+                    <span>{grain.label}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-      ) : null}
+        <div className="w-full max-w-[200px] space-y-0.5">
+          <Label>View as</Label>
+          <ChartTypePicker
+            charts={charts}
+            value={visualization}
+            onChange={onVisualizationChange}
+          />
+        </div>
+        <div className="ml-auto flex items-end gap-2">
+          {settings}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label="Insight builder actions"
+                className="h-9 w-9 shrink-0 shadow-none focus-visible:ring-0"
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem onClick={onDescriptionRequest}>
+                <Pencil className="h-4 w-4" />
+                {hasDescription ? "Edit description" : "Add description"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setTemplatesOpen(true)}>
+                <Grid2X2 className="h-4 w-4" />
+                Templates
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onResetBuilder}>
+                <Trash2 className="h-4 w-4" />
+                {resetLabel}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      <TemplatePickerDialog
+        open={templatesOpen}
+        templates={templates}
+        onOpenChange={setTemplatesOpen}
+        onTemplateSelect={handleTemplateSelect}
+      />
     </section>
   );
 }
 
-function DataSizeControls({
-  mode,
-  randomSeed,
-  rowLimit,
-  onModeChange,
-  onRandomSeedChange,
-  onRowLimitChange,
+type ChartOption = ReturnType<typeof chartOptionsFromCatalog>[number];
+type AnalysisGrainOption = ReturnType<typeof analysisGrainsFromCatalog>[number];
+type TemplateOption = ReturnType<typeof templatesFromCatalog>[number];
+
+function AnalyzeByValue({ option }: { option: AnalysisGrainOption | undefined }) {
+  if (!option) return <SelectValue />;
+  const GrainIcon = option.Icon;
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <GrainIcon className="h-4 w-4 shrink-0 text-[#657082]" />
+      <span className="min-w-0 truncate leading-normal">{option.label}</span>
+    </div>
+  );
+}
+
+function ChartTypePicker({
+  charts,
+  value,
+  onChange,
 }: {
-  mode: ResultPolicyMode;
-  randomSeed: string;
-  rowLimit: number;
-  onModeChange: (value: ResultPolicyMode) => void;
-  onRandomSeedChange: (value: string) => void;
-  onRowLimitChange: (value: number) => void;
+  charts: ChartOption[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const selectedChart = charts.find((chart) => chart.value === value) ?? charts[0];
+  const SelectedChartIcon = selectedChart?.Icon;
+  const groups = groupedChartOptions(charts, search);
+
+  useEffect(() => {
+    if (!open) {
+      setSearch("");
+      return;
+    }
+    const handle = window.setTimeout(() => searchRef.current?.focus(), 0);
+    return () => window.clearTimeout(handle);
+  }, [open]);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="flex h-9 w-full items-center justify-between rounded-lg border border-[#cfd8e3] bg-white px-3 py-2 text-sm text-[#1d2430] transition-colors hover:border-[#b9c5d2] focus:outline-none focus:ring-0"
+          type="button"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            {SelectedChartIcon ? (
+              <SelectedChartIcon className="h-4 w-4 shrink-0 text-[#657082]" />
+            ) : null}
+            <span className="truncate">{selectedChart?.label ?? value}</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-[#657082]" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="w-[360px] p-2 shadow-none"
+      >
+        <div className="relative mb-2">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
+          <Input
+            ref={searchRef}
+            aria-label="Search chart types"
+            className="h-9 pl-9"
+            placeholder="Search chart types..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => event.stopPropagation()}
+          />
+        </div>
+        <div className="max-h-[320px] overflow-y-auto pr-1">
+          {groups.map((group) => (
+            <div key={group.label} className="pb-1">
+              <DropdownMenuLabel className="px-2 py-1 text-[0.68rem]">
+                {group.label}
+              </DropdownMenuLabel>
+              {group.items.map((chart) => {
+                const ChartIcon = chart.Icon;
+                const selected = chart.value === value;
+                return (
+                  <DropdownMenuItem
+                    key={chart.value}
+                    className="justify-between"
+                    onClick={() => {
+                      onChange(chart.value);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <ChartIcon className="h-4 w-4 shrink-0 text-[#657082]" />
+                      <span className="truncate">
+                        {highlightSearchMatch(chart.label, search)}
+                      </span>
+                    </span>
+                    {selected ? (
+                      <Check className="h-4 w-4 shrink-0 text-[#16784a]" />
+                    ) : null}
+                  </DropdownMenuItem>
+                );
+              })}
+            </div>
+          ))}
+          {groups.length === 0 ? (
+            <div className="px-3 py-8 text-center text-sm text-[#657082]">
+              No chart types found.
+            </div>
+          ) : null}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function groupedChartOptions(charts: ChartOption[], search: string) {
+  const query = search.trim().toLowerCase();
+  const groups = [
+    {
+      label: "Standard",
+      values: new Set([
+        "table",
+        "bar",
+        "stacked_bar",
+        "line",
+        "area",
+        "scatter",
+        "histogram",
+        "boxplot",
+        "box_plot",
+        "pie",
+        "donut",
+        "heatmap",
+        "metric",
+        "stat",
+        "number",
+      ]),
+    },
+    {
+      label: "Biology",
+      values: new Set(["oncoprint", "lollipop", "volcano", "manhattan"]),
+    },
+    {
+      label: "MultiQC",
+      values: new Set(["multiqc_module", "multiqc_section", "qc_summary"]),
+    },
+  ];
+  const assignedValues = new Set(groups.flatMap((group) => [...group.values]));
+  return [
+    ...groups,
+    {
+      label: "Other",
+      values: new Set(
+        charts
+          .map((chart) => chart.value)
+          .filter((value) => !assignedValues.has(value)),
+      ),
+    },
+  ]
+    .map((group) => ({
+      label: group.label,
+      items: charts.filter((chart) => {
+        const matchesGroup = group.values.has(chart.value);
+        const matchesSearch =
+          !query || chart.label.toLowerCase().includes(query);
+        return matchesGroup && matchesSearch;
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function TemplatePickerDialog({
+  open,
+  templates,
+  onOpenChange,
+  onTemplateSelect,
+}: {
+  open: boolean;
+  templates: TemplateOption[];
+  onOpenChange: (open: boolean) => void;
+  onTemplateSelect: (value: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-2">
-      <Field label="Data size">
-        <Select
-          value={mode}
-          onValueChange={(value) => onModeChange(value as ResultPolicyMode)}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="preview">Preview default</SelectItem>
-            <SelectItem value="more_rows">More rows</SelectItem>
-            <SelectItem value="random_sample">Random sample</SelectItem>
-            <SelectItem value="all_rows">All rows</SelectItem>
-            <SelectItem value="export_full_data">Export full data</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-      {mode === "more_rows" || mode === "random_sample" ? (
-        <Field label={mode === "more_rows" ? "Row limit" : "Sample size"}>
-          <Input
-            inputMode="numeric"
-            min={1}
-            max={10000}
-            type="number"
-            value={rowLimit}
-            onChange={(event) =>
-              onRowLimitChange(clampNumber(event.target.value, 1, 10000))
-            }
-          />
-        </Field>
-      ) : null}
-      {mode === "random_sample" ? (
-        <Field label="Seed">
-          <Input
-            value={randomSeed}
-            onChange={(event) => onRandomSeedChange(event.target.value)}
-          />
-        </Field>
-      ) : null}
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[min(560px,88vh)] max-w-[min(560px,94vw)] flex-col overflow-hidden p-5">
+        <DialogHeader className="shrink-0 pr-10">
+          <DialogTitle>Choose a template</DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto pr-1">
+          <div className="grid gap-2">
+            {templates.map((template) => (
+              <button
+                key={template.value}
+                className="flex items-center justify-between rounded-lg border border-[#dce3eb] bg-white px-3 py-3 text-left transition-colors hover:border-[#21a66a] hover:bg-[#f6fbf8] focus:outline-none focus:ring-0"
+                type="button"
+                onClick={() => onTemplateSelect(template.value)}
+              >
+                <span className="font-medium text-[#1d2430]">
+                  {template.label}
+                </span>
+                <ChevronDown className="h-4 w-4 -rotate-90 text-[#758195]" />
+              </button>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1061,60 +1925,194 @@ function executionConfig(config: Record<string, unknown>) {
   return rest;
 }
 
-function builderTabsFromCatalog(catalog: InsightCatalog | undefined) {
+function LinkerStrip({
+  catalog,
+  linkerKind,
+  series,
+  onLinkerKindChange,
+}: {
+  catalog: InsightCatalog | undefined;
+  linkerKind: LinkerKind;
+  series: BuilderSeries[];
+  onLinkerKindChange: (value: LinkerKind) => void;
+}) {
+  const first = series[0]?.fieldId || "X value";
+  const second = series[1]?.fieldId || "Y value";
+  return (
+    <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[#657082]">
+        <span className="font-semibold text-[#1f2937]">{first}</span>
+        <span>matched by</span>
+        <Select
+          value={linkerKind}
+          onValueChange={(value) => onLinkerKindChange(value as LinkerKind)}
+        >
+          <SelectTrigger className="h-8 w-[160px] bg-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {linkersFromCatalog(catalog).map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="font-semibold text-[#1f2937]">{second}</span>
+      </div>
+    </div>
+  );
+}
+
+function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
+  const icons: Record<AnalysisGrain, ComponentType<{ className?: string }>> = {
+    file: File,
+    feature: Braces,
+    run: CirclePlay,
+    run_sample: FlaskConical,
+    sample: User,
+    subject: Users,
+    variant: Dna,
+  };
   const fallback = [
-    ["contract_metrics", "Cohort analysis"],
-    ["sample_detail", "Sample"],
-    ["comparison", "Comparison"],
-    ["variant_table", "Table"],
+    ["run_sample", "Run samples"],
+    ["sample", "Samples"],
+    ["subject", "Subjects"],
+    ["run", "Runs"],
+    ["feature", "Features"],
+    ["variant", "Variants"],
+    ["file", "Files"],
   ] as const;
-  const items = catalog?.modes.length
-    ? fallback.map(([value, fallbackLabel]) => {
-        const mode = catalog.modes.find((item) => stringConfig(item.id) === value);
-        return [
-          value,
-          tabLabel(value, stringConfig(mode?.label) || fallbackLabel),
-          tabDescription(value, stringConfig(mode?.description)),
-        ] as const;
-      })
+  const items = catalog?.analysis_grains.length
+    ? catalog.analysis_grains.map((grain) => [
+        stringConfig(grain.id),
+        stringConfig(grain.label),
+      ] as const)
     : fallback;
   return items
-    .map((item) =>
-      item.length === 2
-        ? ([item[0], item[1], tabDescription(item[0], "")] as const)
-        : item,
+    .filter((item): item is readonly [AnalysisGrain, string] =>
+      isAnalysisGrain(item[0]),
     )
-    .filter((item): item is readonly [BuilderMode, string, string] =>
-      isBuilderMode(item[0]),
-    )
-    .map(([value, label, description]) => ({
+    .map(([value, label]) => ({
       value,
       label: label || value,
-      description,
+      Icon: icons[value] ?? CircleDot,
     }));
 }
 
-function tabLabel(value: string, fallback: string) {
-  if (value === "contract_metrics") return "Cohort analysis";
-  if (value === "sample_detail") return "Sample";
-  if (value === "variant_table") return "Table";
-  return fallback;
+function templatesFromCatalog(catalog: InsightCatalog | undefined) {
+  const items = catalog?.templates.length
+    ? catalog.templates.map((template) => [
+        stringConfig(template.id),
+        stringConfig(template.label),
+      ] as const)
+    : FALLBACK_TEMPLATES.map((template) => [
+        template.id,
+        template.label,
+      ] as const);
+  return items
+    .filter((item) => item[0])
+    .map(([value, label]) => ({ value, label: label || value }));
 }
 
-function tabDescription(value: string, fallback: string) {
-  if (value === "contract_metrics") {
-    return "Build cohort-level metric panels and distributions from contract fields.";
-  }
-  if (value === "sample_detail") {
-    return "Inspect one sample or run/sample link with detail and table views.";
-  }
-  if (value === "comparison") {
-    return "Align two or more values by sample, run/sample link, feature, or run.";
-  }
-  if (value === "variant_table") {
-    return "Create table-oriented outputs from contract fields or SQL-backed data.";
-  }
-  return fallback || "Configure an insight with catalog guardrails.";
+const FALLBACK_TEMPLATES = [
+  {
+    id: "qc_metrics_run_samples",
+    label: "QC metrics across run samples",
+    description: "Start a run-sample table from QC contract fields.",
+    analysis_grain: "run_sample",
+    visualization: "table",
+    linker: { kind: "run_sample" },
+  },
+  {
+    id: "build_table",
+    label: "Build a table",
+    description: "Choose identity and contract columns at the selected grain.",
+    analysis_grain: "run_sample",
+    visualization: "table",
+    linker: { kind: "run_sample" },
+  },
+  {
+    id: "compare_two_fields",
+    label: "Compare two fields",
+    description: "Create a two-value scatter matched by run sample.",
+    analysis_grain: "run_sample",
+    visualization: "scatter",
+    linker: { kind: "run_sample" },
+  },
+  {
+    id: "inspect_one_sample",
+    label: "Inspect one sample",
+    description: "Start a sample-filtered detail table.",
+    analysis_grain: "run_sample",
+    visualization: "table",
+    linker: { kind: "run_sample" },
+  },
+  {
+    id: "explore_feature",
+    label: "Explore a gene/feature",
+    description: "Start a feature-grain numeric distribution.",
+    analysis_grain: "feature",
+    visualization: "histogram",
+    linker: { kind: "feature" },
+  },
+  {
+    id: "variant_call_table",
+    label: "Variant/call table",
+    description: "Start a table for variants, calls, or feature states.",
+    analysis_grain: "variant",
+    visualization: "table",
+    linker: { kind: "feature" },
+  },
+] as const;
+
+function templateDefinition(templateId: string, catalog: InsightCatalog | undefined) {
+  return (
+    catalog?.templates.find((item) => stringConfig(item.id) === templateId) ??
+    FALLBACK_TEMPLATES.find((item) => item.id === templateId)
+  );
+}
+
+function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
+  const icons: Record<string, ComponentType<{ className?: string }>> = {
+    area: AreaChart,
+    bar: BarChart3,
+    boxplot: Box,
+    box_plot: Box,
+    donut: PieChart,
+    heatmap: Grid2X2,
+    histogram: BarChart2,
+    line: LineChart,
+    metric: Hash,
+    number: Hash,
+    pie: PieChart,
+    scatter: ChartScatter,
+    stacked_bar: BarChart3,
+    stat: Hash,
+    table: Table2,
+  };
+  const fallback = [
+    ["table", "Table"],
+    ["bar", "Bar chart"],
+    ["scatter", "Scatter plot"],
+    ["line", "Line chart"],
+    ["histogram", "Histogram"],
+    ["boxplot", "Box plot"],
+    ["metric", "Metric"],
+  ] as const;
+  const items = catalog?.charts.length
+    ? catalog.charts.map((chart) => [
+        stringConfig(chart.id),
+        stringConfig(chart.label),
+      ] as const)
+    : fallback;
+  return items
+    .filter((item) => item[0])
+    .map(([value, label]) => ({
+      value,
+      label: label || value,
+      Icon: icons[value] ?? BarChart3,
+    }));
 }
 
 function linkersFromCatalog(catalog: InsightCatalog | undefined) {
@@ -1139,6 +2137,50 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
     .map(([value, label]) => ({ value, label: label || value }));
 }
 
+function defaultLinkerForGrain(grain: AnalysisGrain): LinkerKind {
+  return (
+    {
+      run_sample: "run_sample",
+      sample: "sample",
+      subject: "entity",
+      run: "run",
+      feature: "feature",
+      variant: "feature",
+      file: "run",
+    } satisfies Record<AnalysisGrain, LinkerKind>
+  )[grain];
+}
+
+function identityColumnsForGrain(grain: AnalysisGrain) {
+  return (
+    {
+      run_sample: ["run_sample_id", "sample_id", "run_id"],
+      sample: ["sample_id"],
+      subject: ["entity_id", "sample_id"],
+      run: ["run_id"],
+      feature: ["feature_id", "run_sample_id", "sample_id"],
+      variant: ["variant_id", "feature_id", "run_sample_id", "sample_id"],
+      file: ["source_file_id", "run_id", "run_sample_id", "sample_id"],
+    } satisfies Record<AnalysisGrain, string[]>
+  )[grain];
+}
+
+function identityColumnLabel(column: string) {
+  return column
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function needsLinkerStrip(visualization: string, series: BuilderSeries[]) {
+  const activeValues = series.filter((item) => item.contractId && item.fieldId);
+  return (
+    visualization === "scatter" ||
+    activeValues.length > 1 ||
+    ["line", "area", "stacked_bar", "boxplot"].includes(visualization)
+  );
+}
+
 function validationWarning(validation: InsightValidation | undefined) {
   const message = validation?.messages.find(
     (item) => stringConfig(item.level) === "error",
@@ -1147,26 +2189,31 @@ function validationWarning(validation: InsightValidation | undefined) {
 }
 
 function buildContext({
-  contextKind,
-  runSampleId,
-  sampleId,
-  sampleSetId,
+  runSampleIds,
+  sampleIds,
+  sampleSetIds,
 }: {
-  contextKind: ContextKind;
-  runSampleId: string;
-  sampleId: string;
-  sampleSetId: string;
+  runSampleIds: string[];
+  sampleIds: string[];
+  sampleSetIds: string[];
 }) {
-  return contextKind === "sample"
-    ? {
-        kind: "sample",
-        sample_id: sampleId.trim() || undefined,
-        run_sample_id: runSampleId.trim() || undefined,
-      }
-    : {
-        kind: "cohort",
-        sample_set_id: sampleSetId || undefined,
-      };
+  const cleanedSampleIds = uniqueNonEmpty(sampleIds);
+  const cleanedRunSampleIds = uniqueNonEmpty(runSampleIds);
+  const cleanedSampleSetIds = uniqueNonEmpty(sampleSetIds);
+  if (cleanedSampleIds.length || cleanedRunSampleIds.length) {
+    return {
+      kind: "sample",
+      sample_id: cleanedSampleIds[0],
+      sample_ids: cleanedSampleIds.length ? cleanedSampleIds : undefined,
+      run_sample_id: cleanedRunSampleIds[0],
+      run_sample_ids: cleanedRunSampleIds.length ? cleanedRunSampleIds : undefined,
+    };
+  }
+  return {
+    kind: "cohort",
+    sample_set_id: cleanedSampleSetIds[0],
+    sample_set_ids: cleanedSampleSetIds.length ? cleanedSampleSetIds : undefined,
+  };
 }
 
 function buildResultPolicy({
@@ -1189,13 +2236,13 @@ function buildResultPolicy({
 function buildConfig({
   title,
   description,
-  contextKind,
-  sampleSetId,
-  sampleId,
-  runSampleId,
-  builderMode,
+  analysisGrain,
+  sampleSetIds,
+  sampleIds,
+  runSampleIds,
   queryMode,
   seriesItems,
+  tableColumnItems,
   contracts,
   selectedContract,
   store,
@@ -1208,18 +2255,17 @@ function buildConfig({
   displayOptions,
   xField,
   yField,
-  aggregation,
   advancedSql,
 }: {
   title: string;
   description: string;
-  contextKind: ContextKind;
-  sampleSetId: string;
-  sampleId: string;
-  runSampleId: string;
-  builderMode: BuilderMode;
+  analysisGrain: AnalysisGrain;
+  sampleSetIds: string[];
+  sampleIds: string[];
+  runSampleIds: string[];
   queryMode: QueryMode;
   seriesItems: BuilderSeries[];
+  tableColumnItems: BuilderSeries[];
   contracts: DataContract[];
   selectedContract: DataContract | undefined;
   store: Store;
@@ -1232,16 +2278,14 @@ function buildConfig({
   displayOptions: DisplayOptions;
   xField: string;
   yField: string;
-  aggregation: string;
   advancedSql: string;
 }) {
   // This is the main compiler from editable form state to the persisted
   // Goodomics insight template. Keep it in lockstep with server/insights.py.
   const context = buildContext({
-    contextKind,
-    runSampleId,
-    sampleId,
-    sampleSetId,
+    runSampleIds,
+    sampleIds,
+    sampleSetIds,
   });
   const resultPolicy = buildResultPolicy({
     mode: resultPolicyMode,
@@ -1249,13 +2293,15 @@ function buildConfig({
     rowLimit: resultLimit,
   });
   if (queryMode === "contract") {
-    const activeSeries = seriesItems.filter(
+    const sourceItems = visualization === "table" ? tableColumnItems : seriesItems;
+    const activeSeries = sourceItems.filter(
       (item) => item.contractId && item.fieldId,
     );
     const firstSeries = activeSeries[0];
     const contractId = firstSeries?.contractId ?? "";
     const firstFieldId = firstSeries?.fieldId ?? "";
-    const entity = selectedContract?.entity_grain ?? undefined;
+    const entity = analysisGrain;
+    const identityColumns = identityColumnsForGrain(analysisGrain);
     const query: Record<string, unknown> = {
       // Contract mode targets a semantic data_contract_id. The server resolves the
       // backing analytics table and field metadata from that contract.
@@ -1264,11 +2310,48 @@ function buildConfig({
       entity,
       measures: activeSeries.map((item, index) => ({
         field: item.fieldId,
-        aggregation: item.aggregation || aggregation,
+        aggregation: item.aggregation || "raw",
         label: seriesLabel(contracts, item, index),
       })),
       limit: resultPolicy.limit,
     };
+    if (visualization === "table") {
+      const fieldAliases = activeSeries.map((item) => safeFieldAlias(item.fieldId));
+      query.dimensions = identityColumns;
+      query.columns = [...identityColumns, ...fieldAliases];
+      query.measures = [];
+      return {
+        version: 1,
+        title,
+        description,
+        analysis_grain: analysisGrain,
+        context,
+        visualization,
+        query,
+        series: [],
+        table_columns: [
+          ...identityColumns.map((column) => ({
+            column_id: column,
+            kind: "identity",
+            column,
+            label: identityColumnLabel(column),
+          })),
+          ...activeSeries.map((item, index) => ({
+            column_id: item.id,
+            kind: "contract_field",
+            contract_id: item.contractId,
+            field_id: item.fieldId,
+            name: seriesLabel(contracts, item, index),
+            label: seriesLabel(contracts, item, index),
+            value_mode: "raw",
+          })),
+        ],
+        linker: { kind: linkerKind },
+        filters: [],
+        result_policy: resultPolicy,
+        display: displayOptionsConfig(displayOptions),
+      };
+    }
     if (visualization === "histogram") {
       // Histograms need raw numeric values, not an aggregate measure. The server
       // bins those values into the final ECharts series.
@@ -1283,14 +2366,17 @@ function buildConfig({
       query.measures = [{ field: "*", aggregation: "count", label: "Count" }];
     }
     if (
-      ["bar", "stacked_bar"].includes(visualization) &&
+      ["bar", "line", "area"].includes(visualization) &&
       activeSeries.length === 1
     ) {
-      // A single-series bar chart behaves like a categorical count chart.
-      const fieldAlias = safeFieldAlias(firstFieldId);
-      query.x = fieldAlias;
-      query.dimensions = [fieldAlias].filter(Boolean);
-      query.measures = [{ field: "*", aggregation: "count", label: "Count" }];
+      // Single-value plots should show the selected value by the current
+      // Analyze by grain rather than count categories inside the selected field.
+      query.x = identityColumns[0];
+      query.y = safeFieldAlias(firstFieldId);
+      query.columns = [identityColumns[0], safeFieldAlias(firstFieldId)].filter(
+        Boolean,
+      );
+      query.measures = [];
     }
     if (
       ["bar", "stacked_bar"].includes(visualization) &&
@@ -1331,8 +2417,8 @@ function buildConfig({
       version: 1,
       title,
       description,
+      analysis_grain: analysisGrain,
       context,
-      mode: builderMode,
       visualization,
       query,
       series: activeSeries.map((item, index) => ({
@@ -1340,9 +2426,9 @@ function buildConfig({
         contract_id: item.contractId,
         field_id: item.fieldId,
         name: seriesLabel(contracts, item, index),
-        aggregation: item.aggregation || aggregation,
+        aggregation: item.aggregation || "raw",
         color: item.color,
-        filters: [],
+        filters: normalizedSeriesFilters(item),
       })),
       linker: { kind: linkerKind },
       filters: [],
@@ -1360,9 +2446,9 @@ function buildConfig({
     dimensions: xField ? [xField] : [],
     measures: [
       {
-        field: aggregation === "count" ? "*" : yField,
-        aggregation,
-        label: aggregation,
+        field: "value",
+        aggregation: "raw",
+        label: "Value",
       },
     ],
     limit: resultPolicy.limit,
@@ -1391,8 +2477,8 @@ function buildConfig({
     version: 1,
     title,
     description,
+    analysis_grain: analysisGrain,
     context,
-    mode: builderMode,
     visualization,
     query,
     series: query.measures,
@@ -1415,22 +2501,34 @@ function parseSavedSeries(value: unknown, fallbackContractId: string) {
       const fieldId = stringConfig(item.field_id) || stringConfig(item.field);
       if (!contractId || !fieldId) return null;
       return {
-        id: stringConfig(item.series_id) || `series-${index}`,
+        id:
+          stringConfig(item.series_id) ||
+          stringConfig(item.column_id) ||
+          `series-${index}`,
         contractId,
         fieldId,
-        aggregation: stringConfig(item.aggregation) || "avg",
+        aggregation: stringConfig(item.aggregation) || "raw",
         name: stringConfig(item.name) || stringConfig(item.label),
         color: stringConfig(item.color) || CHART_COLORS[index % CHART_COLORS.length],
+        filters: parseSavedFilters(item.filters),
       } satisfies BuilderSeries;
     })
     .filter((item): item is BuilderSeries => Boolean(item));
 }
 
-function parseBuilderMode(value: unknown, sourceKind: QueryMode): BuilderMode {
-  const mode = stringConfig(value);
-  if (mode === "advanced_sql") return "variant_table";
-  if (isBuilderMode(mode)) return mode;
-  return sourceKind === "table" ? "variant_table" : "contract_metrics";
+function parseSavedFilters(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((item, index) => ({
+    id: stringConfig(item.id) || `filter-${index}`,
+    field: stringConfig(item.field),
+    operator: stringConfig(item.operator) || stringConfig(item.op) || "eq",
+    value: stringConfig(item.value),
+  }));
+}
+
+function parseAnalysisGrain(value: unknown): AnalysisGrain {
+  const grain = stringConfig(value);
+  return isAnalysisGrain(grain) ? grain : "run_sample";
 }
 
 function parseLinkerKind(value: unknown): LinkerKind {
@@ -1443,12 +2541,15 @@ function parseResultPolicyMode(value: unknown): ResultPolicyMode {
   return isResultPolicyMode(mode) ? mode : "preview";
 }
 
-function isBuilderMode(value: string): value is BuilderMode {
+function isAnalysisGrain(value: string): value is AnalysisGrain {
   return [
-    "contract_metrics",
-    "comparison",
-    "sample_detail",
-    "variant_table",
+    "run_sample",
+    "sample",
+    "subject",
+    "run",
+    "feature",
+    "variant",
+    "file",
   ].includes(value);
 }
 
@@ -1468,14 +2569,21 @@ function isResultPolicyMode(value: string): value is ResultPolicyMode {
   ].includes(value);
 }
 
-function clampNumber(value: string, min: number, max: number) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return min;
-  return Math.min(Math.max(parsed, min), max);
-}
-
 function stringConfig(value: unknown) {
   return typeof value === "string" ? value : "";
+}
+
+function stringArrayConfig(value: unknown, fallback?: unknown) {
+  const values = Array.isArray(value) ? value : [fallback];
+  return uniqueNonEmpty(
+    values.filter((item): item is string => typeof item === "string"),
+  );
+}
+
+function uniqueNonEmpty(values: string[]) {
+  return Array.from(
+    new Set(values.map((value) => value.trim()).filter(Boolean)),
+  );
 }
 
 function numberConfig(value: unknown, fallback: number) {

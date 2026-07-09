@@ -37,6 +37,7 @@ from goodomics.server.db.models import (
 )
 from goodomics.server.insight_catalog import (
     ALL_ROWS_INLINE_THRESHOLD,
+    ANALYSIS_GRAINS,
     EXPORT_FULL_DATA_LIMIT,
     LINKERS,
     MORE_ROWS_MAX_LIMIT,
@@ -69,7 +70,8 @@ StoreName = Literal["catalog", "analytics"]
 # Builder queries intentionally support a tiny aggregation/operator vocabulary.
 # Advanced SQL exists as an escape hatch, but the default UI/API path stays
 # constrained and easy to validate.
-AGGREGATIONS = {"count", "sum", "avg", "min", "max"}
+AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
+RESULT_FORMAT_VERSION = 3
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -136,7 +138,10 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
     normalized = dict(config)
     normalized.setdefault("version", 1)
     normalized.setdefault("context", {"kind": "cohort"})
-    normalized.setdefault("mode", _default_mode(normalized))
+    normalized["analysis_grain"] = _normalize_analysis_grain(
+        normalized.get("analysis_grain")
+    )
+    normalized.pop("mode", None)
     normalized.setdefault("visualization", "table")
     normalized.setdefault("query", {})
     normalized.setdefault("series", [])
@@ -179,16 +184,10 @@ def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
     return normalized
 
 
-def _default_mode(config: Mapping[str, Any]) -> str:
-    visualization = str(config.get("visualization") or "")
-    query = config.get("query")
-    if isinstance(query, Mapping) and query.get("sql"):
-        return "variant_table"
-    if visualization == "table":
-        return "variant_table"
-    if visualization == "scatter":
-        return "comparison"
-    return "contract_metrics"
+def _normalize_analysis_grain(value: Any) -> str:
+    """Return a supported analysis grain, defaulting to run_sample."""
+    grain = str(value or "run_sample")
+    return grain if grain in ANALYSIS_GRAINS else "run_sample"
 
 
 async def execute_insight(
@@ -229,7 +228,12 @@ async def execute_insight(
         source=source,
     )
     spec_hash = canonical_hash(
-        {"config": insight_config, "project_id": project_id, "source": source}
+        {
+            "config": insight_config,
+            "project_id": project_id,
+            "result_format_version": RESULT_FORMAT_VERSION,
+            "source": source,
+        }
     )
     insight_id = insight.insight_id if insight is not None else None
     if not refresh:
@@ -248,6 +252,11 @@ async def execute_insight(
         analytics_store=analytics_store,
         project_id=project_id,
         config=insight_config,
+    )
+    rows = await _decorate_identity_values(
+        session=session,
+        columns=columns,
+        rows=rows,
     )
     policy_rows, policy_summary = _apply_result_policy(
         config=insight_config,
@@ -372,6 +381,7 @@ async def execute_report(
 def _inherit_report_context(
     insight_config: Mapping[str, Any], report_config: Mapping[str, Any]
 ) -> JsonObject:
+    """Apply report-level context, filters, linkers, and policies to an insight."""
     inherited = dict(insight_config)
     for key in ("context", "linker", "result_policy"):
         if key not in inherited and key in report_config:
@@ -406,14 +416,15 @@ async def execute_data_query(
     """
 
     query_config = _query_config(config)
-    series_query = await _execute_contract_series_query(
-        session=session,
-        analytics_store=analytics_store,
-        project_id=project_id,
-        config=config,
-    )
-    if series_query is not None:
-        return series_query
+    if not _is_table_preview_config(config):
+        series_query = await _execute_contract_series_query(
+            session=session,
+            analytics_store=analytics_store,
+            project_id=project_id,
+            config=config,
+        )
+        if series_query is not None:
+            return series_query
     contract_query = await _compile_contract_query(
         session=session,
         project_id=project_id,
@@ -450,6 +461,116 @@ async def execute_data_query(
     return await _execute_catalog_sql(session, sql, parameters=parameters, limit=limit)
 
 
+async def _decorate_identity_values(
+    *,
+    session: AsyncSession,
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[JsonObject]:
+    """Replace internal identity primary keys with display labels in result rows."""
+    if not rows:
+        return [dict(row) for row in rows]
+    decorated = [dict(row) for row in rows]
+    if "sample_id" in columns:
+        sample_labels = await _sample_display_labels(
+            session, _integer_values(decorated, "sample_id")
+        )
+        _replace_column_values(decorated, "sample_id", sample_labels)
+    if "run_id" in columns:
+        run_labels = await _run_display_labels(
+            session, _integer_values(decorated, "run_id")
+        )
+        _replace_column_values(decorated, "run_id", run_labels)
+    if "run_sample_id" in columns:
+        run_sample_labels = await _run_sample_display_labels(
+            session, _integer_values(decorated, "run_sample_id")
+        )
+        _replace_column_values(decorated, "run_sample_id", run_sample_labels)
+    return decorated
+
+
+def _integer_values(rows: Sequence[Mapping[str, Any]], column: str) -> list[int]:
+    """Collect unique integer values from a result column."""
+    values: list[int] = []
+    for row in rows:
+        value = row.get(column)
+        if isinstance(value, int) and not isinstance(value, bool):
+            values.append(value)
+    return list(dict.fromkeys(values))
+
+
+def _replace_column_values(
+    rows: list[JsonObject], column: str, labels: Mapping[int, str]
+) -> None:
+    """Replace integer result values with readable labels when available."""
+    if not labels:
+        return
+    for row in rows:
+        value = row.get(column)
+        if isinstance(value, int) and value in labels:
+            row[column] = labels[value]
+
+
+async def _sample_display_labels(
+    session: AsyncSession, sample_pks: Sequence[int]
+) -> dict[int, str]:
+    """Fetch readable labels for sample primary keys."""
+    if not sample_pks:
+        return {}
+    rows = (
+        await session.exec(select(SampleRecord).where(SampleRecord.id.in_(sample_pks)))
+    ).all()
+    return {
+        int(row.id): row.sample_name or row.sample_id
+        for row in rows
+        if row.id is not None
+    }
+
+
+async def _run_display_labels(
+    session: AsyncSession, run_pks: Sequence[int]
+) -> dict[int, str]:
+    """Fetch readable labels for run primary keys."""
+    if not run_pks:
+        return {}
+    rows = (
+        await session.exec(select(RunRecord).where(RunRecord.id.in_(run_pks)))
+    ).all()
+    return {int(row.id): row.name or row.run_id for row in rows if row.id is not None}
+
+
+async def _run_sample_display_labels(
+    session: AsyncSession, run_sample_pks: Sequence[int]
+) -> dict[int, str]:
+    """Build readable labels for run/sample linker primary keys."""
+    if not run_sample_pks:
+        return {}
+    links = (
+        await session.exec(
+            select(RunSampleRecord).where(RunSampleRecord.id.in_(run_sample_pks))
+        )
+    ).all()
+    sample_labels = await _sample_display_labels(
+        session,
+        [int(link.sample_id) for link in links if link.sample_id is not None],
+    )
+    run_labels = await _run_display_labels(
+        session,
+        [int(link.run_id) for link in links if link.run_id is not None],
+    )
+    labels: dict[int, str] = {}
+    for link in links:
+        if link.id is None:
+            continue
+        sample_label = sample_labels.get(int(link.sample_id or 0))
+        run_label = run_labels.get(int(link.run_id or 0))
+        if sample_label and run_label:
+            labels[int(link.id)] = f"{sample_label} · {run_label}"
+        else:
+            labels[int(link.id)] = link.run_sample_id
+    return labels
+
+
 async def _execute_contract_series_query(
     *,
     session: AsyncSession,
@@ -457,9 +578,12 @@ async def _execute_contract_series_query(
     project_id: str | None,
     config: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]] | None:
-    # New mode-first configs put contract identity on each series so different
-    # contracts can be aligned by sample/run_sample/feature without exposing a
-    # raw SQL join to the dashboard or future AI tooling.
+    """Run configured contract series and align them for chart output.
+
+    Grain-first configs put contract identity on each value so different
+    contracts can be aligned by sample/run_sample/feature without exposing a
+    raw SQL join to the dashboard or future AI tooling.
+    """
     series_items = _contract_series_items(config)
     if not series_items:
         return None
@@ -529,6 +653,7 @@ async def _execute_histogram_series_query(
     aliases: Sequence[str],
     limit: int,
 ) -> tuple[list[str], list[JsonObject]]:
+    """Run raw numeric series queries and bin them into histogram rows."""
     series_rows: list[list[JsonObject]] = []
     for series_item, alias in zip(series_items, aliases, strict=True):
         sql, parameters = await _contract_series_sql(
@@ -576,6 +701,7 @@ async def _execute_single_series_count_query(
     config: Mapping[str, Any],
     series_item: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]]:
+    """Count rows for a single categorical series without linker alignment."""
     alias = "count"
     contract = await _series_contract(session, project_id, series_item)
     field_id = _series_field_id(series_item)
@@ -649,6 +775,7 @@ async def _contract_series_sql(
     alias: str,
     linker_column: str | None,
 ) -> tuple[str, list[Any]]:
+    """Compile one chart series into SQL and bound parameters."""
     contract = await _series_contract(session, project_id, series_item)
     field_id = _series_field_id(series_item)
     field = await _series_field_record(
@@ -670,9 +797,15 @@ async def _contract_series_sql(
     if linker_column is not None:
         _require_column(columns, linker_column)
         select_parts.append(f"{_quote_identifier(linker_column)} AS __linker")
-    select_parts.append(
-        f"{_quote_identifier(value_column)} AS {_quote_identifier(alias)}"
-    )
+    aggregation = _series_aggregation(series_item)
+    value_expression = _quote_identifier(value_column)
+    if aggregation is None:
+        select_parts.append(f"{value_expression} AS {_quote_identifier(alias)}")
+    else:
+        select_parts.append(
+            f"{_aggregation_sql(aggregation, value_expression)} "
+            f"AS {_quote_identifier(alias)}"
+        )
     parameters: list[Any] = [_record_pk(contract)]
     where_parts = ["data_contract_id = ?"]
     if field is not None:
@@ -694,10 +827,11 @@ async def _contract_series_sql(
             parameters=parameters,
         )
     )
-    order = "__linker" if linker_column is not None else _quote_identifier(value_column)
+    group_by = " GROUP BY __linker" if linker_column is not None and aggregation else ""
+    order = "__linker" if linker_column is not None else _quote_identifier(alias)
     sql = (
         f"SELECT {', '.join(select_parts)} FROM {source} "
-        f"WHERE {' AND '.join(where_parts)} ORDER BY {order}"
+        f"WHERE {' AND '.join(where_parts)}{group_by} ORDER BY {order}"
     )
     return sql, parameters
 
@@ -707,6 +841,7 @@ async def _series_contract(
     project_id: str | None,
     series_item: Mapping[str, Any],
 ) -> DataContractRecord:
+    """Resolve the data contract record referenced by a series config."""
     contract_id = _series_contract_id(series_item)
     if not contract_id:
         raise ValueError("Contract series require a data_contract_id.")
@@ -721,6 +856,7 @@ def _series_table(
     field: DataContractFieldRecord | None,
     field_id: str,
 ) -> str:
+    """Choose the physical analytics table for a series."""
     if field is not None:
         table = _field_primary_table(field)
     else:
@@ -747,6 +883,7 @@ def _series_table(
 
 
 def _field_primary_table(field: DataContractFieldRecord) -> str | None:
+    """Read the primary analytics table declared for a contract field."""
     query_table = field.query_ref_json.get("table")
     if isinstance(query_table, str) and query_table:
         return query_table
@@ -754,6 +891,7 @@ def _field_primary_table(field: DataContractFieldRecord) -> str | None:
 
 
 def _default_contract_table(contract: DataContractRecord) -> str | None:
+    """Read the default analytics table declared by a data contract."""
     return {
         "entity_attributes": "entity_attributes",
         "feature_matrix": "feature_value_numeric",
@@ -773,6 +911,7 @@ async def _series_value_column(
     field_id: str,
     field: DataContractFieldRecord | None,
 ) -> str:
+    """Resolve the value column a series should read from."""
     synthetic = _synthetic_contract_fields(table).get(table, {})
     if field_id in synthetic:
         return synthetic[field_id]
@@ -806,6 +945,7 @@ async def _series_field_record(
     contract: DataContractRecord,
     field_id: str,
 ) -> DataContractFieldRecord | None:
+    """Resolve the optional contract field record for a series."""
     if not field_id:
         return None
     rows = await _get_contract_field_records(
@@ -822,6 +962,7 @@ async def _resolve_contract_series_linker(
     config: Mapping[str, Any],
     series_items: Sequence[Mapping[str, Any]],
 ) -> JsonObject:
+    """Choose the linker column used to align multiple contract series."""
     column_sets = []
     for series_item in series_items:
         contract = await _series_contract(session, project_id, series_item)
@@ -882,6 +1023,7 @@ def _chart_requires_linker(
     config: Mapping[str, Any],
     series_items: Sequence[Mapping[str, Any]],
 ) -> bool:
+    """Return whether a visualization requires aligned series rows."""
     rule = chart_rule(chart)
     requirement = rule.get("requires_linker")
     if requirement is True:
@@ -891,7 +1033,7 @@ def _chart_requires_linker(
     if requirement == "multi_numeric":
         return len(series_items) > 1
     if requirement == "comparison":
-        return str(config.get("mode") or "") == "comparison"
+        return len(series_items) > 1
     return False
 
 
@@ -903,36 +1045,43 @@ async def _context_where_sql(
     columns: Sequence[str],
     parameters: list[Any],
 ) -> list[str]:
+    """Compile insight context into source-table-specific WHERE clauses."""
     context = config.get("context")
     if not isinstance(context, Mapping):
         return []
     kind = str(context.get("kind") or "cohort")
     where_parts: list[str] = []
     if kind == "sample":
-        sample_id = context.get("sample_id")
-        if isinstance(sample_id, str) and sample_id and "sample_id" in columns:
-            sample_pk = await _sample_pk(session, project_id, sample_id)
-            parameters.append(sample_pk)
-            where_parts.append("sample_id = ?")
-        run_sample_id = context.get("run_sample_id")
-        if (
-            isinstance(run_sample_id, str)
-            and run_sample_id
-            and "run_sample_id" in columns
-        ):
-            run_sample_pk = await _run_sample_pk(session, project_id, run_sample_id)
-            parameters.append(run_sample_pk)
-            where_parts.append("run_sample_id = ?")
-    elif kind == "cohort":
-        sample_set_id = context.get("sample_set_id")
-        if (
-            isinstance(sample_set_id, str)
-            and sample_set_id
-            and "run_sample_id" in columns
-        ):
-            run_sample_ids = await _sample_set_run_sample_pks(
-                session, project_id, sample_set_id
+        sample_ids = _context_string_values(context, "sample_ids", "sample_id")
+        if sample_ids and "sample_id" in columns:
+            sample_pks = [
+                await _sample_pk(session, project_id, sample_id)
+                for sample_id in sample_ids
+            ]
+            parameters.extend(sample_pks)
+            where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
+        run_sample_ids = _context_string_values(
+            context, "run_sample_ids", "run_sample_id"
+        )
+        if run_sample_ids and "run_sample_id" in columns:
+            run_sample_pks = [
+                await _run_sample_pk(session, project_id, run_sample_id)
+                for run_sample_id in run_sample_ids
+            ]
+            parameters.extend(run_sample_pks)
+            where_parts.append(
+                f"run_sample_id IN ({', '.join('?' for _ in run_sample_pks)})"
             )
+    elif kind == "cohort":
+        sample_set_ids = _context_string_values(
+            context, "sample_set_ids", "sample_set_id"
+        )
+        if sample_set_ids and "run_sample_id" in columns:
+            run_sample_ids: list[int] = []
+            for sample_set_id in sample_set_ids:
+                run_sample_ids.extend(
+                    await _sample_set_run_sample_pks(session, project_id, sample_set_id)
+                )
             if not run_sample_ids:
                 where_parts.append("1 = 0")
             else:
@@ -943,6 +1092,17 @@ async def _context_where_sql(
     return where_parts
 
 
+def _context_string_values(
+    context: Mapping[str, Any], list_key: str, single_key: str
+) -> list[str]:
+    """Normalize singular and plural context IDs into a unique string list."""
+    values = _string_list(context.get(list_key))
+    fallback = context.get(single_key)
+    if isinstance(fallback, str):
+        values.append(fallback)
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
 def _series_filters_sql(
     *,
     table: str,
@@ -951,6 +1111,7 @@ def _series_filters_sql(
     filters: Sequence[Any],
     parameters: list[Any],
 ) -> list[str]:
+    """Compile filters attached to an individual series."""
     where_parts: list[str] = []
     for filter_config in filters:
         normalized = _normalize_series_filter(filter_config)
@@ -968,6 +1129,7 @@ def _series_filters_sql(
 def _variant_feature_filter_sql(
     filter_config: Mapping[str, Any], contract_pk: int, parameters: list[Any]
 ) -> str:
+    """Compile feature filters against variant-oriented analytical tables."""
     value = filter_config.get("value")
     operator = str(filter_config.get("operator") or filter_config.get("op") or "eq")
     annotation_source = _readable_source_sql("variant_annotations")
@@ -997,6 +1159,7 @@ def _variant_feature_filter_sql(
 
 
 def _normalize_series_filter(filter_config: Any) -> JsonObject | None:
+    """Normalize a raw filter config into a validated filter shape."""
     if not isinstance(filter_config, Mapping):
         raise ValueError("Filters must be objects.")
     field = str(filter_config.get("field") or "")
@@ -1019,6 +1182,7 @@ def _normalize_series_filter(filter_config: Any) -> JsonObject | None:
 def _combined_filters(
     config: Mapping[str, Any], series_item: Mapping[str, Any]
 ) -> list[Any]:
+    """Merge global insight filters with per-series filters."""
     query = _query_config(config)
     filters: list[Any] = []
     for value in (
@@ -1038,6 +1202,7 @@ def _align_series_rows(
     linker_kind: str,
     series_rows: Sequence[Sequence[Mapping[str, Any]]],
 ) -> tuple[list[str], list[JsonObject], JsonObject]:
+    """Align multiple series result sets by linker and report diagnostics."""
     if linker_column is None:
         columns = list(aliases)
         rows = [dict(row) for row in series_rows[0]] if series_rows else []
@@ -1109,6 +1274,7 @@ def _linker_diagnostics(
     duplicate_conflicts: int,
     rows_excluded: int,
 ) -> JsonObject:
+    """Summarize matched, unmatched, and duplicate linker behavior."""
     return {
         "linker": linker_kind,
         "matched_count": matched,
@@ -1119,6 +1285,7 @@ def _linker_diagnostics(
 
 
 def _contract_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return contract-backed series configs from an insight config."""
     raw = config.get("series")
     if isinstance(raw, Mapping):
         raw_items = [raw]
@@ -1135,6 +1302,7 @@ def _contract_series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]
 
 
 def _series_contract_id(series_item: Mapping[str, Any]) -> str:
+    """Read the contract ID from a series config."""
     source = series_item.get("source")
     if isinstance(source, Mapping):
         value = source.get("data_contract_id") or source.get("id")
@@ -1149,6 +1317,7 @@ def _series_contract_id(series_item: Mapping[str, Any]) -> str:
 
 
 def _series_field_id(series_item: Mapping[str, Any]) -> str:
+    """Read the field ID from a series config."""
     value = (
         series_item.get("field_id")
         or series_item.get("field")
@@ -1158,7 +1327,36 @@ def _series_field_id(series_item: Mapping[str, Any]) -> str:
     return str(value) if isinstance(value, str) else ""
 
 
+def _series_aggregation(series_item: Mapping[str, Any]) -> str | None:
+    """Normalize the aggregation requested by a series config."""
+    value = str(
+        series_item.get("aggregation")
+        or series_item.get("aggregate")
+        or series_item.get("show")
+        or "raw"
+    )
+    if value in {"", "raw", "none", "value", "values"}:
+        return None
+    if value == "average":
+        value = "avg"
+    if value == "count_rows":
+        value = "count"
+    if value not in AGGREGATIONS:
+        raise ValueError(f"Unsupported aggregation: {value}")
+    return value
+
+
+def _aggregation_sql(aggregation: str, expression: str) -> str:
+    """Render an aggregation function for a SQL expression."""
+    if aggregation == "count_distinct":
+        return f"COUNT(DISTINCT {expression})"
+    if aggregation == "count":
+        return "COUNT(*)"
+    return f"{aggregation.upper()}({expression})"
+
+
 def _series_aliases(series_items: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Create stable, unique output aliases for series values."""
     aliases: list[str] = []
     used: set[str] = set()
     for index, series_item in enumerate(series_items):
@@ -1177,6 +1375,7 @@ def _series_aliases(series_items: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _readable_source_sql(table: str) -> str:
+    """Render a table reference for readable source SQL."""
     integer_table = INTEGER_KEYED_TABLES.get(table)
     if integer_table is None:
         return _quote_identifier(table)
@@ -1184,6 +1383,7 @@ def _readable_source_sql(table: str) -> str:
 
 
 def _series_source_sql(table: str) -> str:
+    """Render a table reference for series SQL."""
     if table in {"sample_metrics", "entity_attributes"}:
         return _quote_identifier(table)
     return _readable_source_sql(table)
@@ -1192,6 +1392,7 @@ def _series_source_sql(table: str) -> str:
 def _set_runtime_metadata(
     config: Mapping[str, Any], metadata: Mapping[str, Any]
 ) -> None:
+    """Attach transient execution metadata to a normalized config copy."""
     if isinstance(config, dict):
         runtime = config.setdefault("_runtime", {})
         if isinstance(runtime, dict):
@@ -1199,6 +1400,7 @@ def _set_runtime_metadata(
 
 
 def _runtime_metadata(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return transient execution metadata from a config."""
     runtime = config.get("_runtime")
     return runtime if isinstance(runtime, Mapping) else {}
 
@@ -1206,6 +1408,7 @@ def _runtime_metadata(config: Mapping[str, Any]) -> Mapping[str, Any]:
 async def _sample_pk(
     session: AsyncSession, project_id: str | None, sample_id: str
 ) -> int | None:
+    """Resolve a sample public ID to its internal primary key."""
     statement = select(SampleRecord).where(SampleRecord.sample_id == sample_id)
     if project_id is not None:
         statement = statement.where(
@@ -1218,6 +1421,7 @@ async def _sample_pk(
 async def _run_sample_pk(
     session: AsyncSession, project_id: str | None, run_sample_id: str
 ) -> int | None:
+    """Resolve a run/sample public ID to its internal primary key."""
     statement = select(RunSampleRecord).where(
         RunSampleRecord.run_sample_id == run_sample_id
     )
@@ -1232,6 +1436,7 @@ async def _run_sample_pk(
 async def _sample_set_run_sample_pks(
     session: AsyncSession, project_id: str | None, sample_set_id: str
 ) -> list[int]:
+    """Resolve a sample set to member run/sample primary keys."""
     statement = select(SampleSetRecord).where(
         SampleSetRecord.sample_set_id == sample_set_id
     )
@@ -1259,9 +1464,11 @@ async def _compile_contract_query(
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]] | None:
-    # Contract queries start from a stable semantic data_contract_id, then use
-    # the selected field to choose the physical analytical table.
+    """Compile a contract-backed table or metric query.
 
+    Contract queries start from a stable semantic data_contract_id, then use
+    the selected field to choose the physical analytical table.
+    """
     source = query_config.get("source")
     if not isinstance(source, Mapping) or source.get("kind") != "data_contract":
         return None
@@ -1319,6 +1526,20 @@ async def _compile_contract_query(
                 _field_primary_table(field_rows[field_id])
                 for field_id in requested_fields
             }
+            if (
+                _is_table_preview_config(config)
+                and len(requested_fields) > 1
+                and not _measures(query_config, config)
+            ):
+                return await _compile_mixed_contract_table_query(
+                    session=session,
+                    project_id=project_id,
+                    contract=contract,
+                    query_config=query_config,
+                    config=config,
+                    requested_fields=requested_fields,
+                    field_rows=field_rows,
+                )
             if len(field_tables) != 1:
                 raise ValueError(
                     "Contract queries cannot mix fields from different analytical "
@@ -1376,17 +1597,23 @@ async def _compile_contract_query(
     dimensions = _string_list(
         query_config.get("dimensions") or query_config.get("group_by")
     )
-    if not dimensions and isinstance(query_config.get("entity"), str):
+    entity_grain = str(
+        query_config.get("entity") or config.get("analysis_grain") or "run_sample"
+    )
+    if not dimensions:
         # Entity grain provides sensible default dimensions. A run_sample insight
         # should naturally group by sample/run link unless the config says
         # otherwise.
-        entity = str(query_config["entity"])
-        if entity in {"run_sample", "sample"} and table == "sample_metrics":
-            dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
+        if entity_grain in {"run_sample", "sample"} and table == "sample_metrics":
+            dimensions = [
+                "run_sample_id" if entity_grain == "run_sample" else "sample_id"
+            ]
         elif table == "entity_attributes":
             dimensions = ["entity_id"]
         elif table != "result_payloads":
-            dimensions = ["run_sample_id" if entity == "run_sample" else "sample_id"]
+            dimensions = [
+                "run_sample_id" if entity_grain == "run_sample" else "sample_id"
+            ]
 
     columns = _columns_for_source("analytics", table)
     measures = _measures(query_config, config)
@@ -1398,17 +1625,23 @@ async def _compile_contract_query(
         # Multi-field metric/attribute requests should return one row per entity
         # with a column per field. This is the shape most chart/table previews
         # expect for MultiQC-like "several metrics per sample" payloads.
-        entity = str(query_config.get("entity") or "")
-        dimension = (
-            "run_sample_id"
-            if table == "sample_metrics" and entity != "sample"
-            else "sample_id"
-            if table == "sample_metrics"
-            else "entity_id"
-        )
+        identity_dimensions = [
+            dimension for dimension in dimensions if dimension in columns
+        ]
+        if not identity_dimensions:
+            identity_dimensions = [
+                (
+                    "run_sample_id"
+                    if table == "sample_metrics" and entity_grain != "sample"
+                    else "sample_id"
+                    if table == "sample_metrics"
+                    else "entity_id"
+                )
+            ]
         parameters: list[Any] = []
         select_parts = [
             f"{_quote_identifier(dimension)} AS {_quote_identifier(dimension)}"
+            for dimension in identity_dimensions
         ]
         for requested_field in requested_fields:
             row = field_rows[requested_field]
@@ -1427,13 +1660,16 @@ async def _compile_contract_query(
             _field_id_match_sql(parameters, field_rows[field_id])
             for field_id in requested_fields
         ]
+        group_columns = ", ".join(
+            _quote_identifier(item) for item in identity_dimensions
+        )
         sql = (
             f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)} "
             f"WHERE data_contract_id = ? AND ({' OR '.join(field_predicates)}) "
-            f"GROUP BY {_quote_identifier(dimension)}"
+            f"GROUP BY {group_columns}"
         )
         output_columns = [
-            dimension,
+            *identity_dimensions,
             *[
                 _safe_alias(field_rows[field_id].field_id, fallback="value")
                 for field_id in requested_fields
@@ -1472,9 +1708,16 @@ async def _compile_contract_query(
             expression = _quote_identifier(measure_field)
         alias = measure["alias"]
         select_parts.append(
-            f"{aggregation.upper()}({expression}) AS {_quote_identifier(alias)}"
+            f"{_aggregation_sql(aggregation, expression)} AS {_quote_identifier(alias)}"
         )
         exposed_columns.add(alias)
+
+    if requested_fields and not measures and len(requested_fields) == 1:
+        select_parts.append(
+            f"{_quote_identifier(value_column)} AS {_quote_identifier(field_alias)}"
+        )
+        exposed_columns.add(field_alias)
+        group_parts = []
 
     if not select_parts:
         # Without explicit dimensions or measures, return raw values with the
@@ -1524,6 +1767,200 @@ async def _compile_contract_query(
     return sql, parameters, output_columns
 
 
+async def _compile_mixed_contract_table_query(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    contract: DataContractRecord,
+    query_config: Mapping[str, Any],
+    config: Mapping[str, Any],
+    requested_fields: Sequence[str],
+    field_rows: Mapping[str, DataContractFieldRecord],
+) -> tuple[str, list[Any], list[str]]:
+    """Compile a wide table preview across compatible contract tables.
+
+    Table previews are allowed to show several contract fields side by side,
+    even when those fields are stored in different analytics tables. The rest
+    of the contract query compiler usually assumes one source table; this
+    helper takes the slower but more flexible path of normalizing each field
+    into the same temporary shape and then pivoting that shape into columns.
+    Longer-term, complex query planning may move toward materialized views or a
+    Python planning layer.
+    """
+    dimensions = _string_list(
+        query_config.get("dimensions") or query_config.get("group_by")
+    )
+    if not dimensions:
+        # If the caller did not explicitly pick dimensions, choose the natural
+        # identity columns for the requested analysis grain. These become the
+        # row keys used to align fields from different tables.
+        dimensions = identity_dimensions_for_contract_table(config)
+    if not dimensions:
+        # Keep a final defensive fallback so table previews still have stable
+        # row keys if an older or malformed config reaches this path.
+        dimensions = ["run_sample_id", "sample_id", "run_id"]
+
+    parameters: list[Any] = []
+    # Each union part selects one requested field from its physical source table.
+    # All parts must expose the exact same columns so DuckDB can UNION them.
+    union_parts: list[str] = []
+    # aliases are the final user-visible value column names. value_columns keeps
+    # the physical value column for each alias so the final pivot knows which
+    # normalized value bucket to read from.
+    aliases: list[str] = []
+    value_columns: list[str] = []
+    used_aliases: set[str] = set()
+    # Preserve dimension order while removing duplicates. The order matters
+    # because it controls both the SQL SELECT list and the returned column list.
+    dimension_set = list(dict.fromkeys(dimensions))
+
+    for field_id in requested_fields:
+        field = field_rows[field_id]
+        table = _field_primary_table(field)
+        # Mixed previews are intentionally limited to contract tables with
+        # compatible identity columns and simple scalar/payload values. Feature
+        # and variant tables need additional domain keys, so combining them here
+        # would produce misleading rows.
+        if table not in {"sample_metrics", "entity_attributes", "result_payloads"}:
+            raise ValueError(
+                f"Table previews cannot combine fields from table: {table or 'unknown'}"
+            )
+        columns = _columns_for_source("analytics", table)
+        # Field IDs can contain punctuation or collide after alias sanitization.
+        # The final result needs safe, unique column names for dashboard tables
+        # and chart configs, so reserve the alias as soon as it is created.
+        alias = _unique_alias(
+            _safe_alias(field.field_id, fallback="value"), used_aliases
+        )
+        aliases.append(alias)
+        value_column = _contract_value_column(field)
+        value_columns.append(value_column)
+        # Normalize dimensions across heterogeneous tables. If a source table
+        # does not have a requested identity column, emit NULL for that column so
+        # every SELECT in the UNION has the same schema.
+        select_parts = [
+            (
+                f"{_quote_identifier(dimension)} AS {_quote_identifier(dimension)}"
+                if dimension in columns
+                else f"NULL AS {_quote_identifier(dimension)}"
+            )
+            for dimension in dimension_set
+        ]
+        # Store the logical field alias in each normalized row. The outer query
+        # uses this marker in CASE expressions to pivot rows back into columns.
+        parameters.append(alias)
+        select_parts.append("? AS __field_alias")
+        # Values can be physically stored in numeric, string, or JSON columns.
+        # A UNION requires consistent column types, so expose three internal
+        # buckets and populate only the bucket that matches this field.
+        select_parts.append(
+            f"{_quote_identifier(value_column)} AS __value_numeric"
+            if value_column == "value_numeric"
+            else "NULL::DOUBLE AS __value_numeric"
+        )
+        select_parts.append(
+            f"{_quote_identifier(value_column)} AS __value_string"
+            if value_column == "value_string"
+            else "NULL::VARCHAR AS __value_string"
+        )
+        select_parts.append(
+            f"CAST({_quote_identifier(value_column)} AS VARCHAR) AS __value_json"
+            if value_column in {"value_json", "data_json"}
+            else "NULL::VARCHAR AS __value_json"
+        )
+        # Keep the per-field SELECT scoped to this contract and this field. The
+        # _field_id_match_sql call can append more bound parameters, so it must
+        # receive the same parameters list used to execute the final query.
+        parameters.append(_record_pk(contract))
+        where_parts = ["data_contract_id = ?", _field_id_match_sql(parameters, field)]
+        # Apply cohort/sample context only when the source table has the needed
+        # identity columns. That lets the same preview combine, for example,
+        # sample metrics and result payloads without forcing unsupported filters.
+        where_parts.extend(
+            await _context_where_sql(
+                session=session,
+                project_id=project_id,
+                config=config,
+                columns=columns,
+                parameters=parameters,
+            )
+        )
+        # Add one normalized SELECT for this field. The final CTE is a vertical
+        # list of "dimension keys + field alias + one value bucket" rows.
+        union_parts.append(
+            f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)} "
+            f"WHERE {' AND '.join(where_parts)}"
+        )
+
+    # The outer query starts with the identity columns; these are both returned
+    # to the caller and used as the GROUP BY key for the pivot.
+    select_parts = [
+        f"{_quote_identifier(dimension)} AS {_quote_identifier(dimension)}"
+        for dimension in dimension_set
+    ]
+    for alias, value_column in zip(aliases, value_columns, strict=True):
+        # Add one output column per requested field. The CASE expression selects
+        # only rows for that field alias, and MAX collapses the normalized rows
+        # down to a single value per identity key. This assumes one value per
+        # field/key pair; if duplicates exist, MAX gives a deterministic preview.
+        parameters.append(alias)
+        source_column = (
+            "__value_numeric"
+            if value_column == "value_numeric"
+            else "__value_string"
+            if value_column == "value_string"
+            else "__value_json"
+        )
+        select_parts.append(
+            f"MAX(CASE WHEN __field_alias = ? THEN {source_column} END) "
+            f"AS {_quote_identifier(alias)}"
+        )
+    group_columns = ", ".join(_quote_identifier(column) for column in dimension_set)
+    # normalized_fields is deliberately a CTE instead of nested subqueries so the
+    # generated SQL reads in two phases: gather compatible rows, then pivot them.
+    sql = (
+        "WITH normalized_fields AS ("
+        f"{' UNION ALL '.join(union_parts)}"
+        f") SELECT {', '.join(select_parts)} FROM normalized_fields"
+    )
+    if group_columns:
+        # Ordering by the same identity key makes preview rows stable between
+        # executions, which is helpful for saved insight diffs and UI tests.
+        sql += f" GROUP BY {group_columns} ORDER BY {group_columns}"
+    return sql, parameters, [*dimension_set, *aliases]
+
+
+def _is_table_preview_config(config: Mapping[str, Any]) -> bool:
+    """Return whether a config should use table-preview semantics."""
+    visualization = str(config.get("visualization") or "table")
+    if visualization == "table":
+        return True
+    return bool(_table_column_items(config)) and not _contract_series_items(config)
+
+
+def identity_dimensions_for_contract_table(config: Mapping[str, Any]) -> list[str]:
+    """Choose default identity columns for a table preview grain."""
+    grain = _normalize_analysis_grain(config.get("analysis_grain"))
+    if grain == "sample":
+        return ["sample_id"]
+    if grain == "subject":
+        return ["entity_id", "sample_id"]
+    if grain == "run":
+        return ["run_id"]
+    return ["run_sample_id", "sample_id", "run_id"]
+
+
+def _unique_alias(alias: str, used_aliases: set[str]) -> str:
+    """Return an unused alias by appending a numeric suffix when needed."""
+    candidate = alias
+    index = 2
+    while candidate in used_aliases:
+        candidate = f"{alias}_{index}"
+        index += 1
+    used_aliases.add(candidate)
+    return candidate
+
+
 def compile_insight_result(
     *,
     config: Mapping[str, Any],
@@ -1538,8 +1975,10 @@ def compile_insight_result(
 
     visualization = str(config.get("visualization") or "table")
     row_dicts = [dict(row) for row in rows]
+    column_labels = _result_column_labels(config, columns)
     plot_table = {
         "columns": list(columns),
+        "column_labels": column_labels,
         "rows": row_dicts,
         "row_count": len(row_dicts),
     }
@@ -1557,7 +1996,7 @@ def compile_insight_result(
         "context": (
             config.get("context") if isinstance(config.get("context"), dict) else {}
         ),
-        "mode": config.get("mode") or _default_mode(config),
+        "analysis_grain": _normalize_analysis_grain(config.get("analysis_grain")),
         "linker": runtime.get("linker") or normalize_linker(config.get("linker")),
         "filters": (
             config.get("filters") if isinstance(config.get("filters"), list) else []
@@ -1576,6 +2015,7 @@ def compile_insight_result(
             config.get("display") if isinstance(config.get("display"), dict) else {}
         ),
         "columns": list(columns),
+        "column_labels": column_labels,
         "rows": row_dicts,
         "plot_table": plot_table,
         "computed_at": computed_at.isoformat(),
@@ -1593,6 +2033,47 @@ def compile_insight_result(
     return result
 
 
+def _result_column_labels(
+    config: Mapping[str, Any], columns: Sequence[str]
+) -> dict[str, str]:
+    """Build display labels for result columns."""
+    labels: dict[str, str] = {
+        column: _identity_column_label(column) for column in columns
+    }
+    for item in _table_column_items(config):
+        raw_label = item.get("label") or item.get("name")
+        if not isinstance(raw_label, str) or not raw_label.strip():
+            continue
+        label = raw_label.strip()
+        aliases: list[str] = []
+        for key in ("column", "field_id", "field"):
+            raw_value = item.get(key)
+            if isinstance(raw_value, str) and raw_value:
+                aliases.extend([raw_value, _safe_alias(raw_value, fallback=raw_value)])
+        for alias in aliases:
+            if alias in columns:
+                labels[alias] = label
+    for column in columns:
+        if column in IDENTITY_COLUMN_LABELS:
+            labels[column] = _identity_column_label(column)
+    return {column: labels[column] for column in columns}
+
+
+IDENTITY_COLUMN_LABELS = {
+    "run_sample_id": "Run sample",
+    "sample_id": "Sample",
+    "run_id": "Run",
+    "entity_id": "Subject",
+    "feature_id": "Feature",
+    "source_file_id": "Source file",
+}
+
+
+def _identity_column_label(column: str) -> str:
+    """Return a readable label for an identity column name."""
+    return IDENTITY_COLUMN_LABELS.get(column, column.replace("_", " ").title())
+
+
 def _apply_result_policy(
     *,
     config: Mapping[str, Any],
@@ -1600,6 +2081,7 @@ def _apply_result_policy(
     rows: Sequence[Mapping[str, Any]],
     analytics_store: DuckDBAnalyticsStore,
 ) -> tuple[list[JsonObject], JsonObject]:
+    """Apply inline, sampling, and export policies to result rows."""
     policy = normalize_result_policy(config.get("result_policy"))
     mode = str(policy["mode"])
     limit = int(policy["limit"])
@@ -1648,6 +2130,7 @@ def _write_plot_artifact(
     columns: Sequence[str],
     rows: Sequence[Mapping[str, Any]],
 ) -> JsonObject:
+    """Write a full result payload to a file-backed plot artifact."""
     artifact_dir = analytics_store.path.parent / "insight_artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_id = f"plot_table_{uuid4().hex}.json"
@@ -1665,6 +2148,7 @@ def _write_plot_artifact(
 def _inline_result_policy_summary(
     config: Mapping[str, Any], row_count: int
 ) -> JsonObject:
+    """Describe the result policy used for inline payloads."""
     policy = normalize_result_policy(config.get("result_policy"))
     return {
         **policy,
@@ -1676,6 +2160,7 @@ def _inline_result_policy_summary(
 def _validate_plot_result(
     config: Mapping[str, Any], columns: list[str], rows: list[JsonObject]
 ) -> None:
+    """Validate that a result can satisfy the requested visualization."""
     visualization = str(config.get("visualization") or "table")
     if visualization in {"table", "metric", "stat", "number"}:
         return
@@ -1722,6 +2207,7 @@ def _plot_series_fields(
     x_field: str,
     y_field: str,
 ) -> list[str]:
+    """Choose numeric result columns that should become chart series."""
     runtime = _runtime_metadata(config)
     runtime_aliases = runtime.get("series_aliases")
     if isinstance(runtime_aliases, Sequence) and not isinstance(runtime_aliases, str):
@@ -1745,6 +2231,7 @@ def _plot_series_fields(
 
 
 def _default_x_field(config: Mapping[str, Any], columns: Sequence[str]) -> str:
+    """Choose the default x-axis field for a result table."""
     query = _query_config(config)
     dimensions = _string_list(query.get("dimensions") or query.get("group_by"))
     if query.get("x") is not None:
@@ -1755,6 +2242,7 @@ def _default_x_field(config: Mapping[str, Any], columns: Sequence[str]) -> str:
 
 
 def _column_is_numeric(rows: Sequence[Mapping[str, Any]], field: str) -> bool:
+    """Return whether any value in a column is numeric."""
     values = [row.get(field) for row in rows if row.get(field) is not None]
     return bool(values) and all(_is_numeric_value(value) for value in values)
 
@@ -1864,9 +2352,12 @@ async def _compile_builder_query(
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]]:
-    # Generic builder queries target a physical catalog/analytics table. They
-    # are less semantic than contract-first queries but useful for database
-    # previews and advanced dashboard workflows.
+    """Compile a catalog-backed builder query into SQL.
+
+    Generic builder queries target a physical catalog/analytics table. They
+    are less semantic than contract-first queries but useful for database
+    previews and advanced dashboard workflows.
+    """
     columns = _columns_for_source(store, table)
     dimensions = _string_list(
         query_config.get("dimensions") or query_config.get("group_by")
@@ -1898,7 +2389,7 @@ async def _compile_builder_query(
             raise ValueError(f"Unsupported aggregation: {aggregation}")
         expression = "*" if field == "*" else _quote_identifier(field)
         select_parts.append(
-            f"{aggregation.upper()}({expression}) AS {_quote_identifier(alias)}"
+            f"{_aggregation_sql(aggregation, expression)} AS {_quote_identifier(alias)}"
         )
 
     if not select_parts:
@@ -1949,8 +2440,11 @@ async def _project_scope_where(
     columns: Sequence[str],
     parameters: list[Any],
 ) -> str | None:
-    # Project scoping only applies to tables that expose a project_id column.
-    # Analytics tables already store public project labels when they have one.
+    """Compile project scoping for catalog SQL tables.
+
+    Project scoping only applies to tables that expose a project_id column.
+    Analytics tables already store public project labels when they have one.
+    """
     if project_id is None or "project_id" not in columns:
         return None
     if store == "catalog":
@@ -1969,8 +2463,11 @@ async def _project_scope_where(
 def _filter_sql(
     columns: Sequence[str], filter_config: Any, parameters: list[Any]
 ) -> str:
-    # Convert a small JSON filter grammar into parameterized SQL. Column and
-    # operator validation happen before any SQL fragment is returned.
+    """Compile a builder filter into SQL and bound parameters.
+
+    Convert a small JSON filter grammar into parameterized SQL. Column and
+    operator validation happen before any SQL fragment is returned.
+    """
     if not isinstance(filter_config, Mapping):
         raise ValueError("Filters must be objects.")
     field = str(filter_config.get("field") or "")
@@ -1998,8 +2495,11 @@ def _filter_sql(
 
 
 def _order_sql(columns: set[str], value: Any) -> str | None:
-    # ORDER BY accepts either "column" or {"field": "column", "direction":
-    # "desc"}. The chosen column must already be exposed by the query.
+    """Compile an ORDER BY clause for exposed output columns.
+
+    ORDER BY accepts either "column" or {"field": "column", "direction":
+    "desc"}. The chosen column must already be exposed by the query.
+    """
     if value is None:
         return None
     if isinstance(value, str):
@@ -2021,9 +2521,12 @@ async def _execute_catalog_sql(
     parameters: Sequence[Any] = (),
     limit: int,
 ) -> tuple[list[str], list[JsonObject]]:
-    # SQLAlchemy text queries use named parameters, while the shared query
-    # compiler emits positional question marks for both stores. Rewrite them
-    # just before execution.
+    """Execute catalog SQL and return JSON-compatible rows.
+
+    SQLAlchemy text queries use named parameters, while the shared query
+    compiler emits positional question marks for both stores. Rewrite them
+    just before execution.
+    """
     bounded_sql, named_parameters = _named_sql_parameters(sql, parameters)
     result = await cast(Any, session).exec(
         text(
@@ -2040,8 +2543,11 @@ async def _execute_catalog_sql(
 def _named_sql_parameters(
     sql: str, parameters: Sequence[Any]
 ) -> tuple[str, dict[str, Any]]:
-    # Replace ? placeholders with SQLAlchemy named parameters. This keeps the
-    # compiler simple while still using safe bound values for catalog SQL.
+    """Extract named parameters from a SQL string.
+
+    Replace ? placeholders with SQLAlchemy named parameters. This keeps the
+    compiler simple while still using safe bound values for catalog SQL.
+    """
     named: dict[str, Any] = {}
     parts = sql.split("?")
     if len(parts) == 1:
@@ -2065,8 +2571,11 @@ async def _get_cached_insight(
     spec_hash: str,
     source_fingerprint: str,
 ) -> JsonObject | None:
-    # Cache rows are append-only. Pick the newest matching row so a refresh can
-    # write a new result without mutating older history.
+    """Fetch a cached insight result when its spec hash still matches.
+
+    Cache rows are append-only. Pick the newest matching row so a refresh can
+    write a new result without mutating older history.
+    """
     statement = (
         select(InsightResultCacheRecord)
         .where(InsightResultCacheRecord.project_id == project_id)
@@ -2091,7 +2600,10 @@ async def _get_cached_report(
     spec_hash: str,
     source_fingerprint: str,
 ) -> JsonObject | None:
-    # Report cache lookup mirrors insight cache lookup but keys by report_id.
+    """Fetch a cached report result when its spec hash still matches.
+
+    Report cache lookup mirrors insight cache lookup but keys by report_id.
+    """
     statement = (
         select(ReportResultCacheRecord)
         .where(ReportResultCacheRecord.project_id == project_id)
@@ -2109,15 +2621,21 @@ async def _get_cached_report(
 
 
 def _query_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    # Missing or malformed query blocks are treated as empty query config so
-    # callers get a clear "source required" error downstream.
+    """Return the normalized query section from a config.
+
+    Missing or malformed query blocks are treated as empty query config so
+    callers get a clear "source required" error downstream.
+    """
     query = config.get("query")
     return query if isinstance(query, Mapping) else {}
 
 
 def _query_source(config: Mapping[str, Any]) -> JsonObject:
-    # Extract only the source identity used for fingerprinting. Query shape,
-    # filters, and visualization are already part of the config hash.
+    """Return the normalized source section from a config.
+
+    Extract only the source identity used for fingerprinting. Query shape,
+    filters, and visualization are already part of the config hash.
+    """
     contract_series = _contract_series_items(config)
     if contract_series:
         return {
@@ -2138,8 +2656,11 @@ def _query_source(config: Mapping[str, Any]) -> JsonObject:
 
 
 def _parse_source(value: Any) -> tuple[StoreName, str | None]:
-    # Sources can be explicit objects, "store.table" strings, or bare analytics
-    # table names. Normalize all variants into (store, table).
+    """Parse a source config into a store and optional table name.
+
+    Sources can be explicit objects, "store.table" strings, or bare analytics
+    table names. Normalize all variants into (store, table).
+    """
     if isinstance(value, Mapping):
         store = str(value.get("store") or "analytics")
         table = value.get("table")
@@ -2162,6 +2683,7 @@ async def _get_contract_record(
     project_id: str | None,
     data_contract_id: str,
 ) -> DataContractRecord | None:
+    """Fetch a data contract by public ID within project scope."""
     statement = select(DataContractRecord).where(
         DataContractRecord.data_contract_id == data_contract_id
     )
@@ -2193,6 +2715,7 @@ async def _get_contract_field_records(
     contract_id: int,
     field_ids: Sequence[str],
 ) -> dict[str, DataContractFieldRecord]:
+    """Fetch selected field records for a data contract."""
     rows = (
         await session.exec(
             select(DataContractFieldRecord)
@@ -2208,6 +2731,7 @@ async def _get_all_contract_field_records(
     *,
     contract_id: int,
 ) -> dict[str, DataContractFieldRecord]:
+    """Fetch every field record for a data contract."""
     rows = (
         await session.exec(
             select(DataContractFieldRecord).where(
@@ -2221,9 +2745,16 @@ async def _get_all_contract_field_records(
 def _contract_requested_fields(
     query_config: Mapping[str, Any], config: Mapping[str, Any]
 ) -> list[str]:
-    # Fields can be declared explicitly, implied by measures, or used as
-    # dimensions. Collect all field-like references before validating them.
+    """Collect field IDs referenced by query and table config.
+
+    Fields can be declared explicitly, implied by measures, or used as
+    dimensions. Collect all field-like references before validating them.
+    """
     fields = _string_list(query_config.get("fields"))
+    for column in _table_column_items(config):
+        field_id = column.get("field_id") or column.get("field")
+        if isinstance(field_id, str):
+            fields.append(field_id)
     for measure in _measures(query_config, config):
         field = measure["field"]
         if field not in {"*", "value"}:
@@ -2236,9 +2767,22 @@ def _contract_requested_fields(
     return list(dict.fromkeys(fields))
 
 
+def _table_column_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return normalized table column config items."""
+    raw = config.get("table_columns")
+    if isinstance(raw, Mapping):
+        return [raw]
+    if isinstance(raw, Sequence) and not isinstance(raw, str):
+        return [item for item in raw if isinstance(item, Mapping)]
+    return []
+
+
 def _contract_value_column(field: DataContractFieldRecord) -> str:
-    # Field definitions can override the physical value column. Otherwise choose
-    # the column from the declared value_type.
+    """Choose the physical value column for a contract field.
+
+    Field definitions can override the physical value column. Otherwise choose
+    the column from the declared value_type.
+    """
     query_ref = field.query_ref_json if isinstance(field.query_ref_json, dict) else {}
     value_column = query_ref.get("value_column")
     if isinstance(value_column, str) and value_column in {
@@ -2260,8 +2804,11 @@ def _contract_value_column(field: DataContractFieldRecord) -> str:
 
 
 def _field_id_match_sql(parameters: list[Any], field: DataContractFieldRecord) -> str:
-    # DuckDB may store field_id as the SQL integer ID, while readable views can
-    # expose field labels through dim_fields. Match both forms.
+    """Compile a field match predicate for canonical or legacy IDs.
+
+    DuckDB may store field_id as the SQL integer ID, while readable views can
+    expose field labels through dim_fields. Match both forms.
+    """
     parameters.extend([_record_pk(field), field.field_id])
     return (
         "(field_id = ? OR field_id IN ("
@@ -2271,9 +2818,12 @@ def _field_id_match_sql(parameters: list[Any], field: DataContractFieldRecord) -
 
 
 def _synthetic_contract_fields(table: str | None) -> dict[str, dict[str, str]]:
-    # Tables without data_contract_fields rows still expose important queryable
-    # columns. These synthetic fields let the contract grammar address them by
-    # stable names.
+    """Return built-in field definitions for tables without field rows.
+
+    Tables without data_contract_fields rows still expose important queryable
+    columns. These synthetic fields let the contract grammar address them by
+    stable names.
+    """
     fields = {
         "feature_call": {
             "call_code": "call_code",
@@ -2310,7 +2860,10 @@ def _normalize_synthetic_requested_fields(
     requested_fields: Sequence[str],
     field_map: Mapping[str, str],
 ) -> list[str]:
-    # Accept both canonical synthetic names and their safe aliases.
+    """Map synthetic field requests to valid table columns.
+
+    Accept both canonical synthetic names and their safe aliases.
+    """
     aliases = {
         _safe_alias(field_id, fallback="value"): field_id for field_id in field_map
     }
@@ -2326,8 +2879,11 @@ def _normalize_synthetic_requested_fields(
 
 
 def _default_contract_dimensions(table: str | None) -> list[str]:
-    # Raw contract previews should include the natural entity columns users need
-    # to understand what each value belongs to.
+    """Choose natural dimensions for a contract source table.
+
+    Raw contract previews should include the natural entity columns users need
+    to understand what each value belongs to.
+    """
     if table in {"sample_metrics", "feature_value_numeric", "feature_call"}:
         return ["run_sample_id", "sample_id"]
     if table == "entity_attributes":
@@ -2358,8 +2914,11 @@ def _contract_filter_sql(
     filter_config: Any,
     parameters: list[Any],
 ) -> str:
-    # Filters may use the contract field alias ("value", field_id, safe alias) or
-    # a physical table column. Rewrite field-value filters to the value column.
+    """Compile a contract table filter into SQL and parameters.
+
+    Filters may use the contract field alias ("value", field_id, safe alias) or
+    a physical table column. Rewrite field-value filters to the value column.
+    """
     if not isinstance(filter_config, Mapping):
         raise ValueError("Filters must be objects.")
     field = str(filter_config.get("field") or "")
@@ -2371,8 +2930,11 @@ def _contract_filter_sql(
 
 
 def _record_pk(row: Any) -> int:
-    # Query compilation depends on catalog primary keys; fail loudly if a caller
-    # passes an unflushed SQLModel row.
+    """Return a model primary key or raise if it is not persisted.
+
+    Query compilation depends on catalog primary keys; fail loudly if a caller
+    passes an unflushed SQLModel row.
+    """
     row_id = getattr(row, "id", None)
     if row_id is None:
         raise ValueError("Catalog record has not been flushed.")
@@ -2380,8 +2942,11 @@ def _record_pk(row: Any) -> int:
 
 
 def _columns_for_source(store: StoreName, table: str) -> list[str]:
-    # Column validation is based on registered serializers/models rather than
-    # trusting table names from client-provided config.
+    """Return known readable columns for a source table.
+
+    Column validation is based on registered serializers/models rather than
+    trusting table names from client-provided config.
+    """
     if store == "analytics":
         serializer = SERIALIZERS_BY_TABLE.get(table)
         if serializer is None:
@@ -2396,8 +2961,11 @@ def _columns_for_source(store: StoreName, table: str) -> list[str]:
 def _measures(
     query_config: Mapping[str, Any], config: Mapping[str, Any]
 ) -> list[JsonObject]:
-    # Measures can come from query.measures or top-level series. Normalize both
-    # shapes into field/aggregation/alias records used by query compilers.
+    """Normalize metric/aggregation configs into measure specs.
+
+    Measures can come from query.measures or top-level series. Normalize both
+    shapes into field/aggregation/alias records used by query compilers.
+    """
     raw = query_config.get("measures") or config.get("series") or []
     if isinstance(raw, Mapping):
         raw = [raw]
@@ -2406,6 +2974,12 @@ def _measures(
         if not isinstance(value, Mapping):
             continue
         aggregation = str(value.get("aggregation") or value.get("aggregate") or "count")
+        if aggregation in {"", "raw", "none", "value", "values"}:
+            continue
+        if aggregation == "average":
+            aggregation = "avg"
+        if aggregation == "count_rows":
+            aggregation = "count"
         field = str(value.get("field") or ("*" if aggregation == "count" else "value"))
         label = str(
             value.get("label") or value.get("alias") or f"{aggregation}_{field}"
@@ -2418,8 +2992,11 @@ def _measures(
 def _query_limit(
     query_config: Mapping[str, Any], config: Mapping[str, Any] | None = None
 ) -> int:
-    # Bound every query according to the visible result-size policy. The final
-    # response may be smaller, sampled, or file-backed after rows are returned.
+    """Resolve the row limit for an insight query.
+
+    Bound every query according to the visible result-size policy. The final
+    response may be smaller, sampled, or file-backed after rows are returned.
+    """
     policy = normalize_result_policy(
         config.get("result_policy") if isinstance(config, Mapping) else None
     )
@@ -2445,8 +3022,11 @@ def _query_limit(
 
 
 def _validate_read_only_sql(sql: str) -> str:
-    # Advanced SQL is intentionally SELECT/WITH-only and single-statement. This
-    # avoids mutating local databases through dashboard-authored SQL.
+    """Reject SQL that is not a single read-only SELECT/WITH query.
+
+    Advanced SQL is intentionally SELECT/WITH-only and single-statement. This
+    avoids mutating local databases through dashboard-authored SQL.
+    """
     stripped = sql.strip().rstrip(";")
     if (
         ";" in stripped
@@ -2460,11 +3040,15 @@ def _validate_read_only_sql(sql: str) -> str:
 def _echarts_options(
     config: Mapping[str, Any], columns: list[str], rows: list[JsonObject]
 ) -> JsonObject:
-    # ECharts is an implementation detail: configs describe chart intent, and
-    # this helper compiles rows into the option shape the dashboard can render.
+    """Build ECharts options from result rows and visualization config.
+
+    ECharts is an implementation detail: configs describe chart intent, and
+    this helper compiles rows into the option shape the dashboard can render.
+    """
     visualization = str(config.get("visualization") or "bar")
     query = _query_config(config)
     colors = _display_colors(config)
+    column_labels = _result_column_labels(config, columns)
     runtime = _runtime_metadata(config)
     runtime_aliases = runtime.get("series_aliases")
     series_aliases = (
@@ -2479,6 +3063,7 @@ def _echarts_options(
         query.get("y") or _first_numeric_column(columns, rows, exclude={x_field})
     )
     title = str(config.get("title") or config.get("name") or "Insight")
+    label_for = column_labels.get
     if visualization in {"pie", "donut"}:
         return {
             "title": {"text": title, "left": "center"},
@@ -2486,7 +3071,7 @@ def _echarts_options(
             "tooltip": {"trigger": "item"},
             "series": [
                 {
-                    "name": x_field,
+                    "name": label_for(x_field, x_field),
                     "type": "pie",
                     "radius": ["42%", "70%"] if visualization == "donut" else "65%",
                     "data": [
@@ -2511,23 +3096,23 @@ def _echarts_options(
         return {
             "tooltip": {"trigger": "item"},
             "grid": {
-                "left": 64,
-                "right": 32,
-                "top": 40,
-                "bottom": 72,
+                "left": 52,
+                "right": 18,
+                "top": 28,
+                "bottom": 56,
                 "containLabel": True,
             },
             "xAxis": {
                 "type": "value",
-                "name": x_field,
+                "name": label_for(x_field, x_field),
                 "nameLocation": "middle",
-                "nameGap": 48,
+                "nameGap": 40,
             },
             "yAxis": {
                 "type": "value",
-                "name": y_field,
+                "name": label_for(y_field, y_field),
                 "nameLocation": "middle",
-                "nameGap": 44,
+                "nameGap": 36,
             },
             "series": [
                 {
@@ -2557,10 +3142,12 @@ def _echarts_options(
             "tooltip": {"position": "top"},
             "xAxis": {
                 "type": "category",
+                "name": label_for(x_field, x_field),
                 "data": sorted(str(row.get(x_field)) for row in rows),
             },
             "yAxis": {
                 "type": "category",
+                "name": label_for(y_dimension, y_dimension),
                 "data": sorted(str(row.get(y_dimension)) for row in rows),
             },
             "visualMap": {
@@ -2597,17 +3184,21 @@ def _echarts_options(
         return {
             "tooltip": {"trigger": "axis"},
             "grid": {
-                "left": 64,
-                "right": 32,
-                "top": 40,
-                "bottom": 72,
+                "left": 52,
+                "right": 18,
+                "top": 28,
+                "bottom": 56,
                 "containLabel": True,
             },
             "xAxis": {
                 "type": "value",
-                "name": value_fields[0] if len(value_fields) == 1 else "Value",
+                "name": (
+                    label_for(value_fields[0], value_fields[0])
+                    if len(value_fields) == 1
+                    else "Value"
+                ),
                 "nameLocation": "middle",
-                "nameGap": 48,
+                "nameGap": 40,
                 "scale": True,
                 "axisLabel": {"formatter": "{value}"},
             },
@@ -2615,11 +3206,11 @@ def _echarts_options(
                 "type": "value",
                 "name": "Count",
                 "nameLocation": "middle",
-                "nameGap": 44,
+                "nameGap": 36,
             },
             "series": [
                 {
-                    "name": value_field,
+                    "name": label_for(value_field, value_field),
                     "type": "bar",
                     "barGap": "-100%" if len(value_fields) > 1 else "0%",
                     "data": [
@@ -2675,28 +3266,28 @@ def _echarts_options(
         "tooltip": {"trigger": "axis"},
         "legend": {"type": "scroll"},
         "grid": {
-            "left": 64,
-            "right": 32,
-            "top": 40,
-            "bottom": 72,
+            "left": 52,
+            "right": 18,
+            "top": 28,
+            "bottom": 56,
             "containLabel": True,
         },
         "xAxis": {
             "type": "category",
-            "name": x_field,
+            "name": label_for(x_field, x_field),
             "nameLocation": "middle",
-            "nameGap": 48,
+            "nameGap": 40,
             "data": [row.get(x_field) for row in rows],
         },
         "yAxis": {
             "type": "value",
-            "name": y_field,
+            "name": label_for(y_field, y_field),
             "nameLocation": "middle",
-            "nameGap": 44,
+            "nameGap": 36,
         },
         "series": [
             {
-                "name": field,
+                "name": label_for(field, field),
                 "type": chart_type,
                 "stack": "total" if visualization == "stacked_bar" else None,
                 "areaStyle": {} if visualization == "area" else None,
@@ -2710,6 +3301,7 @@ def _echarts_options(
 
 
 def _display_colors(config: Mapping[str, Any]) -> dict[str, str]:
+    """Return configured chart colors keyed by series or category."""
     display = config.get("display")
     if not isinstance(display, Mapping):
         return {}
@@ -2731,7 +3323,10 @@ def _boxplot_options(
     x_field: str,
     y_fields: Sequence[str],
 ) -> JsonObject:
+    """Build ECharts boxplot options from grouped numeric values."""
     colors = _display_colors(config)
+    column_labels = _result_column_labels(config, columns)
+    label_for = column_labels.get
     title = str(config.get("title") or config.get("name") or "Insight")
     group_field = x_field if x_field in columns else columns[0] if columns else "group"
     groups = list(dict.fromkeys(str(row.get(group_field)) for row in rows))
@@ -2740,28 +3335,28 @@ def _boxplot_options(
         "tooltip": {"trigger": "item"},
         "legend": {"type": "scroll"},
         "grid": {
-            "left": 64,
-            "right": 32,
-            "top": 40,
-            "bottom": 72,
+            "left": 52,
+            "right": 18,
+            "top": 28,
+            "bottom": 56,
             "containLabel": True,
         },
         "xAxis": {
             "type": "category",
-            "name": group_field,
+            "name": label_for(group_field, group_field),
             "data": groups,
             "nameLocation": "middle",
-            "nameGap": 48,
+            "nameGap": 40,
         },
         "yAxis": {
             "type": "value",
-            "name": ", ".join(y_fields),
+            "name": ", ".join(label_for(field, field) for field in y_fields),
             "nameLocation": "middle",
-            "nameGap": 44,
+            "nameGap": 36,
         },
         "series": [
             {
-                "name": field,
+                "name": label_for(field, field),
                 "type": "boxplot",
                 "data": [
                     _five_number_summary(
@@ -2783,6 +3378,7 @@ def _boxplot_options(
 
 
 def _five_number_summary(values: Sequence[float]) -> list[float | None]:
+    """Compute the min, quartiles, and max for a numeric sample."""
     if not values:
         return [None, None, None, None, None]
     sorted_values = sorted(values)
@@ -2796,6 +3392,7 @@ def _five_number_summary(values: Sequence[float]) -> list[float | None]:
 
 
 def _quantile(values: Sequence[float], q: float) -> float:
+    """Compute a linear-interpolated quantile for sorted numeric values."""
     if len(values) == 1:
         return values[0]
     position = (len(values) - 1) * q
@@ -2811,6 +3408,7 @@ def _series_color(
     index: int,
     fallback: str | None = None,
 ) -> str:
+    """Choose a color for a chart series."""
     configured = list(dict.fromkeys(colors.values()))
     return (
         colors.get(field)
@@ -2822,6 +3420,7 @@ def _series_color(
 
 
 def _category_color(colors: Mapping[str, str], category: str, index: int) -> str:
+    """Choose a color for a categorical chart slice or bar."""
     return (
         colors.get(category)
         or colors.get(_safe_alias(category, fallback="category"))
@@ -2832,6 +3431,7 @@ def _category_color(colors: Mapping[str, str], category: str, index: int) -> str
 def _metric_payload(
     rows: Sequence[Mapping[str, Any]], columns: Sequence[str]
 ) -> JsonObject:
+    """Build the compact payload for a single metric visualization."""
     if not rows or not columns:
         return {"value": None, "label": "No data"}
     row = rows[0]
@@ -2845,6 +3445,7 @@ def _first_numeric_column(
     *,
     exclude: set[str] | None = None,
 ) -> str | None:
+    """Find the first numeric result column not explicitly excluded."""
     excluded = exclude or set()
     for column in columns:
         if column in excluded:
@@ -2855,6 +3456,7 @@ def _first_numeric_column(
 
 
 def _histogram_bin_count(config: Mapping[str, Any]) -> int:
+    """Resolve the number of histogram bins to render."""
     query = _query_config(config)
     display = config.get("display")
     raw = query.get("bins")
@@ -2871,6 +3473,7 @@ def _histogram_bin_count(config: Mapping[str, Any]) -> int:
 def _histogram_value_fields(
     query: Mapping[str, Any], columns: Sequence[str], fallback: str
 ) -> list[str]:
+    """Choose numeric fields that should be binned for histograms."""
     fields: list[str] = []
     for field in _string_list(query.get("fields")):
         if field in columns:
@@ -2890,6 +3493,7 @@ def _histogram_value_fields(
 def _histogram_bins(
     rows: Sequence[Mapping[str, Any]], *, value_field: str, bin_count: int
 ) -> list[JsonObject]:
+    """Bin numeric fields into histogram rows for chart rendering."""
     values: list[float] = []
     for row in rows:
         value = row.get(value_field)
@@ -2930,14 +3534,17 @@ def _histogram_bins(
 
 
 def _is_numeric_value(value: Any) -> TypeGuard[int | float]:
+    """Return whether a value is numeric but not boolean."""
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def _format_bin_edge(value: float) -> str:
+    """Format a histogram bin edge for stable display."""
     return f"{value:.4g}"
 
 
 def _string_list(value: Any) -> list[str]:
+    """Normalize a scalar or sequence into a list of strings."""
     if isinstance(value, str):
         return [value]
     if isinstance(value, Sequence):
@@ -2946,22 +3553,26 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _safe_alias(value: str, *, fallback: str) -> str:
+    """Convert a user-facing identifier into a SQL-safe alias."""
     alias = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip()).strip("_").lower()
     return alias or fallback
 
 
 def _quote_identifier(value: str) -> str:
+    """Quote a SQL identifier for generated queries."""
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value):
         raise ValueError(f"Invalid identifier: {value}")
     return f'"{value}"'
 
 
 def _require_column(columns: Sequence[str] | set[str], column: str) -> None:
+    """Raise when a requested column is unavailable."""
     if column not in columns:
         raise ValueError(f"Unknown column: {column}")
 
 
 async def _project_pk(session: AsyncSession, project_id: str) -> int | None:
+    """Resolve a project public ID to its internal primary key."""
     row = (
         await session.exec(
             select(ProjectRecord).where(ProjectRecord.project_id == project_id)
@@ -2971,5 +3582,6 @@ async def _project_pk(session: AsyncSession, project_id: str) -> int | None:
 
 
 def _project_field_is_integer(model: type[SQLModel]) -> bool:
+    """Return whether a SQLModel project_id field stores integers."""
     field = model.model_fields.get("project_id")
     return field is not None and "int" in str(field.annotation)
