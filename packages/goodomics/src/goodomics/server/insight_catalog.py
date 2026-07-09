@@ -62,48 +62,134 @@ LINKERS: dict[str, JsonObject] = {
     },
 }
 
-MODES: dict[str, JsonObject] = {
-    "contract_metrics": {
-        "id": "contract_metrics",
-        "label": "Cohort analysis",
-        "icon": "BarChart3",
-        "description": "Cohort-level metric panels from one or more contract fields.",
-        "default_visualization": "bar",
-        "supports_add_all_numeric": True,
-    },
-    "comparison": {
-        "id": "comparison",
-        "label": "Comparison",
-        "icon": "ScatterChart",
-        "description": "Align two or more values across a shared linker.",
-        "default_visualization": "scatter",
-        "supports_add_all_numeric": False,
-    },
-    "sample_detail": {
-        "id": "sample_detail",
-        "label": "Sample detail",
-        "icon": "FileSearch",
-        "description": "Inspect a single sample or run/sample link.",
+ANALYSIS_GRAINS: dict[str, JsonObject] = {
+    "run_sample": {
+        "id": "run_sample",
+        "label": "Run samples",
+        "singular_label": "Run sample",
+        "description": "Analyze one row per processed sample/run link.",
         "default_visualization": "table",
-        "supports_add_all_numeric": False,
+        "default_linker": "run_sample",
+        "identity_columns": ["run_sample_id", "sample_id", "run_id"],
+        "valid_linkers": ["run_sample", "sample", "run"],
     },
-    "variant_table": {
-        "id": "variant_table",
-        "label": "Table",
-        "icon": "Table2",
-        "description": "Variant, feature-call, and generic table outputs.",
+    "sample": {
+        "id": "sample",
+        "label": "Samples",
+        "singular_label": "Sample",
+        "description": "Analyze biological samples across one or more runs.",
         "default_visualization": "table",
-        "supports_add_all_numeric": False,
+        "default_linker": "sample",
+        "identity_columns": ["sample_id"],
+        "valid_linkers": ["sample", "run_sample"],
     },
-    "advanced_sql": {
-        "id": "advanced_sql",
-        "label": "Advanced SQL",
-        "icon": "Code2",
-        "description": (
-            "Read-only SQL escape hatch with the same result policy guardrails."
-        ),
+    "subject": {
+        "id": "subject",
+        "label": "Subjects",
+        "singular_label": "Subject",
+        "description": "Analyze subject-level attributes and rollups.",
         "default_visualization": "table",
-        "supports_add_all_numeric": False,
+        "default_linker": "entity",
+        "identity_columns": ["entity_id", "sample_id"],
+        "valid_linkers": ["entity", "sample"],
+    },
+    "run": {
+        "id": "run",
+        "label": "Runs",
+        "singular_label": "Run",
+        "description": "Analyze pipeline runs and run-level files or metrics.",
+        "default_visualization": "table",
+        "default_linker": "run",
+        "identity_columns": ["run_id"],
+        "valid_linkers": ["run"],
+    },
+    "feature": {
+        "id": "feature",
+        "label": "Features",
+        "singular_label": "Feature",
+        "description": "Analyze genes, regions, features, or measured entities.",
+        "default_visualization": "histogram",
+        "default_linker": "feature",
+        "identity_columns": ["feature_id", "run_sample_id", "sample_id"],
+        "valid_linkers": ["feature", "sample", "run_sample"],
+    },
+    "variant": {
+        "id": "variant",
+        "label": "Variants",
+        "singular_label": "Variant",
+        "description": "Analyze variant and feature-call rows.",
+        "default_visualization": "table",
+        "default_linker": "feature",
+        "identity_columns": ["variant_id", "feature_id", "run_sample_id", "sample_id"],
+        "valid_linkers": ["feature", "sample", "run_sample"],
+    },
+    "file": {
+        "id": "file",
+        "label": "Files",
+        "singular_label": "File",
+        "description": "Analyze stored files and payload artifacts.",
+        "default_visualization": "table",
+        "default_linker": "run",
+        "identity_columns": ["source_file_id", "run_id", "run_sample_id", "sample_id"],
+        "valid_linkers": ["run", "run_sample", "sample"],
+    },
+}
+
+TEMPLATES: dict[str, JsonObject] = {
+    "qc_metrics_run_samples": {
+        "id": "qc_metrics_run_samples",
+        "label": "QC metrics across run samples",
+        "description": "Start a run-sample table from QC contract fields.",
+        "analysis_grain": "run_sample",
+        "visualization": "table",
+        "linker": {"kind": "run_sample"},
+        "result_policy": {"mode": "preview"},
+    },
+    "build_table": {
+        "id": "build_table",
+        "label": "Build a table",
+        "description": "Choose identity and contract columns at the selected grain.",
+        "analysis_grain": "run_sample",
+        "visualization": "table",
+        "linker": {"kind": "run_sample"},
+        "result_policy": {"mode": "preview"},
+    },
+    "compare_two_fields": {
+        "id": "compare_two_fields",
+        "label": "Compare two fields",
+        "description": "Create a two-value scatter matched by run sample.",
+        "analysis_grain": "run_sample",
+        "visualization": "scatter",
+        "linker": {"kind": "run_sample"},
+        "result_policy": {"mode": "preview"},
+    },
+    "inspect_one_sample": {
+        "id": "inspect_one_sample",
+        "label": "Inspect one sample",
+        "description": "Start a sample-filtered detail table.",
+        "analysis_grain": "run_sample",
+        "visualization": "table",
+        "linker": {"kind": "run_sample"},
+        "context": {"kind": "sample"},
+        "result_policy": {"mode": "preview"},
+    },
+    "explore_feature": {
+        "id": "explore_feature",
+        "label": "Explore a gene/feature",
+        "description": "Start a feature-grain numeric distribution.",
+        "analysis_grain": "feature",
+        "visualization": "histogram",
+        "linker": {"kind": "feature"},
+        "result_policy": {"mode": "preview"},
+    },
+    "variant_call_table": {
+        "id": "variant_call_table",
+        "label": "Variant/call table",
+        "description": "Start a table for variants, calls, or feature states.",
+        "analysis_grain": "variant",
+        "visualization": "table",
+        "linker": {"kind": "feature"},
+        "result_policy": {"mode": "preview"},
     },
 }
 
@@ -248,7 +334,8 @@ def insight_catalog() -> JsonObject:
 
     return {
         "version": 1,
-        "modes": list(MODES.values()),
+        "analysis_grains": list(ANALYSIS_GRAINS.values()),
+        "templates": list(TEMPLATES.values()),
         "charts": list(CHARTS.values()),
         "linkers": list(LINKERS.values()),
         "result_policies": list(RESULT_POLICIES.values()),
@@ -264,6 +351,7 @@ def insight_catalog() -> JsonObject:
             "all_rows_threshold": (
                 "All rows can only be embedded below the configured response threshold."
             ),
+            "invalid_analysis_grain": "Choose a supported Analyze by grain.",
         },
     }
 
@@ -329,15 +417,20 @@ def chart_rule(chart_id: str) -> JsonObject:
 def explain_insight_config(config: Mapping[str, Any]) -> str:
     """Build a compact explanation of a normalized insight config."""
 
-    mode = str(config.get("mode") or "contract_metrics")
+    analysis_grain = str(config.get("analysis_grain") or "run_sample")
+    grain = ANALYSIS_GRAINS.get(analysis_grain, ANALYSIS_GRAINS["run_sample"])
     chart = str(config.get("visualization") or "table")
     raw_context = config.get("context")
     context: Mapping[str, Any] = raw_context if isinstance(raw_context, Mapping) else {}
     linker = normalize_linker(config.get("linker"))
     policy = normalize_result_policy(config.get("result_policy"))
-    series_labels = [
+    value_labels = [
         str(item.get("name") or item.get("label") or item.get("field_id") or "series")
         for item in _series_items(config)
+    ]
+    table_labels = [
+        str(item.get("label") or item.get("field_id") or item.get("column") or "column")
+        for item in _table_column_items(config)
     ]
     context_label = str(context.get("kind") or "cohort")
     if context.get("sample_set_id"):
@@ -345,9 +438,10 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
     if context.get("sample_id"):
         context_label += f" {context['sample_id']}"
     return (
-        f"{MODES.get(mode, MODES['contract_metrics'])['label']} insight using "
+        f"{grain['label']} insight using "
         f"{CHARTS.get(chart, CHARTS['table'])['label']} over {context_label}; "
-        f"series: {', '.join(series_labels) or 'table rows'}; "
+        f"values: {', '.join(value_labels) or 'none'}; "
+        f"columns: {', '.join(table_labels) or 'default identity'}; "
         f"matched by {linker['kind']}; data size policy {policy['mode']}."
     )
 
@@ -357,6 +451,15 @@ def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
 
     messages: list[JsonObject] = []
     chart = str(config.get("visualization") or "table")
+    grain = str(config.get("analysis_grain") or "run_sample")
+    if grain not in ANALYSIS_GRAINS:
+        messages.append(
+            {
+                "level": "error",
+                "code": "invalid_analysis_grain",
+                "message": f"Unsupported analysis grain: {grain}.",
+            }
+        )
     rule = chart_rule(chart)
     series_count = len(_series_items(config))
     series_rule = rule["series"]
@@ -402,6 +505,15 @@ def _series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         y_value = query.get("y")
         if isinstance(x_value, str) and isinstance(y_value, str):
             raw = [{"field": x_value}, {"field": y_value}]
+    if isinstance(raw, Mapping):
+        return [raw]
+    if isinstance(raw, Sequence) and not isinstance(raw, str):
+        return [item for item in raw if isinstance(item, Mapping)]
+    return []
+
+
+def _table_column_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    raw = config.get("table_columns")
     if isinstance(raw, Mapping):
         return [raw]
     if isinstance(raw, Sequence) and not isinstance(raw, str):

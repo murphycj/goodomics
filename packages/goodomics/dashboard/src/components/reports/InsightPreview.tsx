@@ -1,12 +1,32 @@
+import { ArrowDown, ArrowUp, ChevronDown, Plus, Trash2 } from "lucide-react";
 import ReactECharts from "echarts-for-react";
-import { useMemo } from "react";
-import { DataGrid, type Column } from "react-data-grid";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DataGrid,
+  type Column,
+  type RenderHeaderCellProps,
+  type SortColumn,
+  type SortDirection,
+} from "react-data-grid";
 import "react-data-grid/lib/styles.css";
+import {
+  CellPreviewPanel,
+  CellValue,
+  type CellPreview,
+} from "../ui/CellValueInspector";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import { sortGridRows } from "../ui/DataGridShell";
 import { CHART_COLORS } from "../../lib/chartColors";
 import {
   readDisplayOptions,
   type DisplayOptions,
 } from "../../lib/insightDisplayOptions";
+import { cn } from "../../lib/utils";
 
 type InsightResult = Record<string, unknown>;
 type GridRow = Record<string, unknown> & { __rowId: string };
@@ -16,10 +36,16 @@ export function InsightPreview({
   config,
   result,
   setupWarning,
+  tableActions,
 }: {
   config?: Record<string, unknown>;
   result: InsightResult | null | undefined;
   setupWarning?: string | null;
+  tableActions?: {
+    addLabel: string;
+    emptyLabel?: string;
+    onAddColumn: () => void;
+  };
 }) {
   // The server echoes visualization in the result. Fall back to table so unknown
   // or partial payloads still render as inspectable data.
@@ -27,7 +53,13 @@ export function InsightPreview({
   if (!result) {
     return (
       <div className="relative grid h-full min-h-[220px] place-items-center text-sm text-[#657082]">
-        {setupWarning ? <SetupOverlay message={setupWarning} /> : null}
+        {setupWarning ? (
+          <SetupOverlay
+            actionLabel={tableActions?.emptyLabel}
+            message={setupWarning}
+            onAction={tableActions?.onAddColumn}
+          />
+        ) : null}
         <span>Preview an insight to see results.</span>
       </div>
     );
@@ -48,7 +80,7 @@ export function InsightPreview({
   if (visualization === "table" || !isRecord(result.echarts_options)) {
     // Any non-chart result should remain usable. The grid path doubles as a
     // fallback when the server returns rows but no ECharts option.
-    return <InsightTable result={result} />;
+    return <InsightTable result={result} tableActions={tableActions} />;
   }
   const option = normalizeEChartsOption({
     config,
@@ -64,18 +96,41 @@ export function InsightPreview({
         option={option}
         style={{ height: "100%", minHeight: 260, width: "100%" }}
       />
-      {setupWarning ? <SetupOverlay message={setupWarning} /> : null}
+      {setupWarning ? (
+        <SetupOverlay
+          actionLabel={tableActions?.emptyLabel}
+          message={setupWarning}
+          onAction={tableActions?.onAddColumn}
+        />
+      ) : null}
     </div>
   );
 }
 
-function SetupOverlay({ message }: { message: string }) {
+function SetupOverlay({
+  actionLabel,
+  message,
+  onAction,
+}: {
+  actionLabel?: string;
+  message: string;
+  onAction?: () => void;
+}) {
   // Builder warnings are shown over the preview rather than replacing it so a
   // previously successful result can remain visible while settings are adjusted.
   return (
     <div className="absolute inset-0 z-10 grid place-items-center bg-white/78 backdrop-blur-[1px]">
-      <div className="max-w-[360px] rounded-md border border-[#f6c76d] bg-[#fff8e5] px-4 py-3 text-center text-sm font-medium text-[#8a5a00] shadow-sm">
-        {message}
+      <div className="grid max-w-[360px] gap-3 rounded-md border border-[#f6c76d] bg-[#fff8e5] px-4 py-3 text-center text-sm font-medium text-[#8a5a00]">
+        <span>{message}</span>
+        {actionLabel && onAction ? (
+          <button
+            className="mx-auto inline-flex h-9 items-center justify-center rounded-md border border-[#16784a] bg-white px-3 text-sm font-semibold text-[#16784a] transition-colors hover:bg-[#edf8f2] focus:outline-none focus:ring-0"
+            type="button"
+            onClick={onAction}
+          >
+            {actionLabel}
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -403,7 +458,22 @@ function safeAlias(value: string) {
 }
 
 /** React Data Grid fallback for table insight results and non-chart payloads. */
-function InsightTable({ result }: { result: InsightResult }) {
+function InsightTable({
+  result,
+  tableActions,
+}: {
+  result: InsightResult;
+  tableActions?: {
+    addLabel: string;
+    emptyLabel?: string;
+    onAddColumn: () => void;
+  };
+}) {
+  const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => new Set());
+  const [cellPreview, setCellPreview] = useState<CellPreview | null>(null);
+  const [lastCellPreview, setLastCellPreview] = useState<CellPreview | null>(null);
+  const cellPreviewPanelRef = useRef<HTMLElement | null>(null);
   // Rows from the server are plain objects. Add a synthetic row key for
   // react-data-grid without mutating the original result.
   const plotTable = isRecord(result.plot_table) ? result.plot_table : null;
@@ -412,21 +482,79 @@ function InsightTable({ result }: { result: InsightResult }) {
     : Array.isArray(result.columns)
       ? result.columns.map(String)
       : [];
+  const columnLabels = useMemo(
+    () => ({
+      ...readColumnLabels(result.column_labels),
+      ...readColumnLabels(plotTable?.column_labels),
+    }),
+    [plotTable?.column_labels, result.column_labels],
+  );
   const rawRows = Array.isArray(plotTable?.rows)
     ? plotTable.rows
     : Array.isArray(result.rows)
       ? result.rows
       : [];
+  const visibleColumns = useMemo(
+    () => columns.filter((column) => !hiddenColumns.has(column)),
+    [columns, hiddenColumns],
+  );
   const gridColumns = useMemo<Column<GridRow>[]>(
     () =>
-      columns.map((column) => ({
-        key: column,
-        name: column,
-        minWidth: 120,
-        resizable: true,
-        renderCell: ({ row }) => <span className="truncate">{formatCell(row[column])}</span>,
-      })),
-    [columns],
+      [
+        ...visibleColumns.map((column) => ({
+          key: column,
+          name: columnLabels[column] ?? fallbackColumnLabel(column),
+          minWidth: 120,
+          resizable: true,
+          sortable: true,
+          renderHeaderCell: (props: RenderHeaderCellProps<GridRow>) => (
+            <InsightColumnHeader
+              label={columnLabels[column] ?? fallbackColumnLabel(column)}
+              sortDirection={props.sortDirection}
+              onRemove={() => {
+                setHiddenColumns((current) => {
+                  const next = new Set(current);
+                  next.add(column);
+                  return next;
+                });
+                setSortColumns((current) =>
+                  current.filter((sortColumn) => sortColumn.columnKey !== column),
+                );
+                setCellPreview(null);
+              }}
+              onSortAscending={() =>
+                setSortColumns([{ columnKey: column, direction: "ASC" }])
+              }
+              onSortDescending={() =>
+                setSortColumns([{ columnKey: column, direction: "DESC" }])
+              }
+            />
+          ),
+          renderCell: ({ row }: { row: GridRow }) => <CellValue value={row[column]} />,
+        })),
+        ...(tableActions
+          ? [
+              {
+                key: "__add_column",
+                name: "",
+                width: 56,
+                resizable: false,
+                renderHeaderCell: () => (
+                  <button
+                    aria-label={tableActions.addLabel}
+                    className="grid h-8 w-8 place-items-center rounded-md border border-[#16784a] bg-[#e8f5ee] text-[#16784a] transition-colors hover:bg-[#d8efdf] hover:text-[#145c3a]"
+                    type="button"
+                    onClick={tableActions.onAddColumn}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                ),
+                renderCell: () => null,
+              } satisfies Column<GridRow>,
+            ]
+          : []),
+      ],
+    [columnLabels, tableActions, visibleColumns],
   );
   const rows = useMemo<GridRow[]>(
     () =>
@@ -436,6 +564,38 @@ function InsightTable({ result }: { result: InsightResult }) {
       })),
     [rawRows],
   );
+  const sortedRows = useMemo(
+    () => sortGridRows(rows, sortColumns),
+    [rows, sortColumns],
+  );
+  useEffect(() => {
+    setSortColumns([]);
+    setHiddenColumns(new Set());
+    setCellPreview(null);
+    setLastCellPreview(null);
+  }, [result]);
+  useEffect(() => {
+    if (cellPreview !== null) {
+      setLastCellPreview(cellPreview);
+    }
+  }, [cellPreview]);
+  useEffect(() => {
+    if (cellPreview === null) return;
+    function closePreviewOnOutsideClick(event: PointerEvent) {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        cellPreviewPanelRef.current !== null &&
+        !cellPreviewPanelRef.current.contains(target)
+      ) {
+        setCellPreview(null);
+      }
+    }
+    document.addEventListener("pointerdown", closePreviewOnOutsideClick);
+    return () => {
+      document.removeEventListener("pointerdown", closePreviewOnOutsideClick);
+    };
+  }, [cellPreview]);
   if (gridColumns.length === 0) {
     return (
       <div className="grid h-full min-h-[220px] place-items-center text-sm text-[#657082]">
@@ -444,16 +604,150 @@ function InsightTable({ result }: { result: InsightResult }) {
     );
   }
   return (
-    <DataGrid
-      className="goodomics-data-grid h-full min-h-[260px]"
-      columns={gridColumns}
-      defaultColumnOptions={{ resizable: true }}
-      headerRowHeight={40}
-      rowHeight={38}
-      rowKeyGetter={(row: GridRow) => row.__rowId}
-      rows={rows}
+    <div className="flex h-full min-h-[260px] min-w-0 bg-white">
+      <DataGrid
+        className="goodomics-data-grid h-full min-w-0 flex-1"
+        columns={gridColumns}
+        defaultColumnOptions={{ resizable: true }}
+        headerRowHeight={40}
+        rowHeight={38}
+        rowKeyGetter={(row: GridRow) => row.__rowId}
+        rows={sortedRows}
+        sortColumns={sortColumns}
+        onCellDoubleClick={(args) => {
+          if (args.column.key === "__add_column") return;
+          const column = String(args.column.key);
+          setCellPreview({
+            column: columnLabels[column] ?? fallbackColumnLabel(column),
+            rowNumber: Number(args.row.__rowId) + 1,
+            tableName: "Insight table",
+            value: args.row[column],
+          });
+        }}
+        onSortColumnsChange={(nextSort) => {
+          setSortColumns(nextSort.slice(-1));
+          setCellPreview(null);
+        }}
+      />
+      {cellPreview ? (
+        <CellPreviewPanel
+          isOpen
+          panelRef={cellPreviewPanelRef}
+          preview={cellPreview}
+          onClose={() => setCellPreview(null)}
+          onClosed={() => undefined}
+        />
+      ) : lastCellPreview ? (
+        <CellPreviewPanel
+          isOpen={false}
+          panelRef={cellPreviewPanelRef}
+          preview={lastCellPreview}
+          onClose={() => setCellPreview(null)}
+          onClosed={() => setLastCellPreview(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function InsightColumnHeader({
+  label,
+  onRemove,
+  onSortAscending,
+  onSortDescending,
+  sortDirection,
+}: {
+  label: string;
+  onRemove: () => void;
+  onSortAscending: () => void;
+  onSortDescending: () => void;
+  sortDirection: SortDirection | undefined;
+}) {
+  return (
+    <div className="flex h-full w-full min-w-0 items-center gap-2">
+      <span className="min-w-0 truncate">{label}</span>
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {sortDirection ? <SortTriangle direction={sortDirection} /> : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              aria-label={`Column actions for ${label}`}
+              className={cn(
+                "grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#657082] transition-colors hover:bg-[#eef3f7] hover:text-[#1d2430] focus:outline-none focus:ring-0",
+                sortDirection && "bg-[#eef8f2] text-[#16784a]",
+              )}
+              type="button"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <ChevronDown className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="min-w-[210px]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <DropdownMenuItem onClick={onSortAscending}>
+              <ArrowUp className="h-4 w-4 text-[#657082]" />
+              Sort ascending
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onSortDescending}>
+              <ArrowDown className="h-4 w-4 text-[#657082]" />
+              Sort descending
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-[#b42318] focus:bg-[#fff1f1] focus:text-[#9a1b16]"
+              onClick={onRemove}
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove column
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+function SortTriangle({ direction }: { direction: SortDirection }) {
+  return (
+    <span
+      aria-label={direction === "ASC" ? "Sorted ascending" : "Sorted descending"}
+      className={cn(
+        "block h-0 w-0 shrink-0 border-x-[5px] border-x-transparent",
+        direction === "ASC"
+          ? "border-b-[7px] border-b-[#16784a]"
+          : "border-t-[7px] border-t-[#16784a]",
+      )}
+      role="img"
     />
   );
+}
+
+function readColumnLabels(value: unknown) {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => {
+      const [, label] = entry;
+      return typeof label === "string" && label.trim().length > 0;
+    }),
+  );
+}
+
+function fallbackColumnLabel(column: string) {
+  const labels: Record<string, string> = {
+    run_sample_id: "Run sample",
+    sample_id: "Sample",
+    run_id: "Run",
+    entity_id: "Subject",
+    feature_id: "Feature",
+    source_file_id: "Source file",
+  };
+  return labels[column] ?? titleCase(column.replaceAll("_", " "));
+}
+
+function titleCase(value: string) {
+  return value.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function formatCell(value: unknown) {

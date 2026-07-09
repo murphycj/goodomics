@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
 import {
   ChevronDown,
   Copy,
   Database,
+  Filter as FilterIcon,
   MoreHorizontal,
   Plus,
   Search,
@@ -32,16 +33,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui";
-import { isRecord } from "../reports/reportUtils";
 
 type QueryMode = "contract" | "table";
 type SourceTab = "contracts" | "sql";
 type Store = DatabaseTable["store"];
-type ContractFieldGroup = { contract: DataContract; fields: DataContractField[] };
+type ContractFieldGroup = {
+  contract: DataContract;
+  fields: DataContractField[];
+};
 type ContractFieldOption = {
   id: string;
   contract: DataContract;
   field: DataContractField;
+};
+
+export type BuilderSeriesFilter = {
+  id: string;
+  field: string;
+  operator: string;
+  value: string;
 };
 
 export type BuilderSeries = {
@@ -51,6 +61,7 @@ export type BuilderSeries = {
   aggregation: string;
   name: string;
   color: string;
+  filters: BuilderSeriesFilter[];
 };
 
 export type SqlSourceSelection = {
@@ -61,7 +72,12 @@ export type SqlSourceSelection = {
 };
 
 export function InsightSeriesEditor({
+  addLabel = "Value",
+  allowSqlSource = true,
   contracts,
+  itemLabel = "Value",
+  label = "Values",
+  showAggregation = true,
   tables = [],
   sourceKind = "contract",
   store = "analytics",
@@ -72,10 +88,16 @@ export function InsightSeriesEditor({
   series,
   setSeries,
   onAdvancedSqlChange,
+  onAddContractFields,
   onContractFieldSelect,
   onSqlSourceSelect,
 }: {
+  addLabel?: string;
+  allowSqlSource?: boolean;
   contracts: DataContract[];
+  itemLabel?: string;
+  label?: string;
+  showAggregation?: boolean;
   tables?: DatabaseTable[];
   sourceKind?: QueryMode;
   store?: Store;
@@ -86,6 +108,7 @@ export function InsightSeriesEditor({
   series: BuilderSeries[];
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   onAdvancedSqlChange?: (value: string) => void;
+  onAddContractFields?: (contract: DataContract) => void;
   onContractFieldSelect?: (selection: {
     contractId: string;
     fieldId: string;
@@ -94,7 +117,7 @@ export function InsightSeriesEditor({
 }) {
   return (
     <div className="space-y-3">
-      <Label>Series</Label>
+      <Label>{label}</Label>
       {series.map((item, index) => {
         const contract = contracts.find(
           (candidate) => candidate.data_contract_id === item.contractId,
@@ -104,12 +127,15 @@ export function InsightSeriesEditor({
         );
         return (
           <SeriesCard
+            allowSqlSource={allowSqlSource}
             advancedSql={advancedSql}
             field={field}
             index={index}
+            itemLabel={itemLabel}
             item={item}
             key={item.id}
             contracts={contracts}
+            showAggregation={showAggregation}
             setSeries={setSeries}
             sourceKind={sourceKind}
             store={store}
@@ -118,13 +144,14 @@ export function InsightSeriesEditor({
             xField={xField}
             yField={yField}
             onAdvancedSqlChange={onAdvancedSqlChange}
+            onAddContractFields={onAddContractFields}
             onContractFieldSelect={onContractFieldSelect}
             onSqlSourceSelect={onSqlSourceSelect}
           />
         );
       })}
       <Button
-        className="w-full justify-center"
+        className="w-auto justify-start"
         size="sm"
         variant="outline"
         onClick={() =>
@@ -137,7 +164,7 @@ export function InsightSeriesEditor({
           })
         }
       >
-        <Plus className="h-4 w-4" /> Series
+        <Plus className="h-4 w-4" /> {addLabel}
       </Button>
     </div>
   );
@@ -152,9 +179,10 @@ export function blankSeries(
     id: `series-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
     contractId,
     fieldId,
-    aggregation: "avg",
+    aggregation: "raw",
     name: "",
     color: CHART_COLORS[index % CHART_COLORS.length],
+    filters: [],
   };
 }
 
@@ -169,7 +197,9 @@ export function contractSeries(
   const field =
     contract?.fields.length === 1
       ? contract.fields[0]
-      : contract?.fields.find((candidate) => candidate.value_type === "numeric");
+      : contract?.fields.find(
+          (candidate) => candidate.value_type === "numeric",
+        );
   return {
     ...current,
     contractId,
@@ -207,11 +237,14 @@ function customSeriesName(
 }
 
 function SeriesCard({
+  allowSqlSource,
   advancedSql,
   field,
   index,
+  itemLabel,
   item,
   contracts,
+  showAggregation,
   setSeries,
   sourceKind,
   store,
@@ -220,14 +253,18 @@ function SeriesCard({
   xField,
   yField,
   onAdvancedSqlChange,
+  onAddContractFields,
   onContractFieldSelect,
   onSqlSourceSelect,
 }: {
+  allowSqlSource: boolean;
   advancedSql: string;
   field: DataContractField | undefined;
   index: number;
+  itemLabel: string;
   item: BuilderSeries;
   contracts: DataContract[];
+  showAggregation: boolean;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   sourceKind: QueryMode;
   store: Store;
@@ -236,6 +273,7 @@ function SeriesCard({
   xField: string;
   yField: string;
   onAdvancedSqlChange?: (value: string) => void;
+  onAddContractFields?: (contract: DataContract) => void;
   onContractFieldSelect?: (selection: {
     contractId: string;
     fieldId: string;
@@ -243,9 +281,10 @@ function SeriesCard({
   onSqlSourceSelect?: (selection: SqlSourceSelection) => void;
 }) {
   const [renameOpen, setRenameOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   return (
     <div className="rounded-md border border-[#d6dee8] bg-white p-3 shadow-sm">
-      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
         <ColorPickerTrigger
           color={item.color}
           index={index}
@@ -253,6 +292,7 @@ function SeriesCard({
           onChange={(color) => updateSeries(setSeries, item.id, { color })}
         />
         <DataSourcePicker
+          allowSqlSource={allowSqlSource}
           advancedSql={advancedSql}
           field={field}
           item={item}
@@ -265,29 +305,140 @@ function SeriesCard({
           xField={xField}
           yField={yField}
           onAdvancedSqlChange={onAdvancedSqlChange}
+          onAddContractFields={onAddContractFields}
           onContractFieldSelect={onContractFieldSelect}
           onSqlSourceSelect={onSqlSourceSelect}
         />
-        <SeriesActions
-          field={field}
-          index={index}
-          item={item}
-          setSeries={setSeries}
-          onRename={() => setRenameOpen(true)}
-          onResetName={() => updateSeries(setSeries, item.id, { name: "" })}
-        />
       </div>
+      {showAggregation ? null : (
+        <div className="mt-2 flex items-center justify-end gap-1">
+          <SeriesActions
+            field={field}
+            index={index}
+            item={item}
+            itemLabel={itemLabel}
+            setSeries={setSeries}
+            onRename={() => setRenameOpen(true)}
+            onResetName={() => updateSeries(setSeries, item.id, { name: "" })}
+          />
+        </div>
+      )}
       <div className="mt-3 space-y-2">
-        <AggregationSelect item={item} setSeries={setSeries} />
-        <FieldSummary field={sourceKind === "contract" ? field : undefined} />
+        {showAggregation ? (
+          <AggregationSelect
+            actions={
+              <div className="flex items-center justify-end gap-1">
+                <Button
+                  aria-label={`${itemLabel} filters`}
+                  size="icon"
+                  type="button"
+                  variant={item.filters.length ? "secondary" : "ghost"}
+                  onClick={() => setFiltersOpen((open) => !open)}
+                >
+                  <FilterIcon className="h-4 w-4" />
+                </Button>
+                <SeriesActions
+                  field={field}
+                  index={index}
+                  item={item}
+                  itemLabel={itemLabel}
+                  setSeries={setSeries}
+                  onRename={() => setRenameOpen(true)}
+                  onResetName={() =>
+                    updateSeries(setSeries, item.id, { name: "" })
+                  }
+                />
+              </div>
+            }
+            item={item}
+            setSeries={setSeries}
+          />
+        ) : null}
+        {showAggregation && filtersOpen ? (
+          <ValueFiltersPanel field={field} item={item} setSeries={setSeries} />
+        ) : null}
       </div>
       <RenameSeriesDialog
-        defaultName={field?.display_name || `Series ${index + 1}`}
+        defaultName={field?.display_name || `${itemLabel} ${index + 1}`}
+        itemLabel={itemLabel}
         open={renameOpen}
         value={customSeriesName(item, field)}
         onOpenChange={setRenameOpen}
         onRename={(name) => updateSeries(setSeries, item.id, { name })}
       />
+    </div>
+  );
+}
+
+function ValueFiltersPanel({
+  field,
+  item,
+  setSeries,
+}: {
+  field: DataContractField | undefined;
+  item: BuilderSeries;
+  setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
+}) {
+  const filters = item.filters.length
+    ? item.filters
+    : [
+        {
+          id: `filter-${item.id}`,
+          field: field?.field_id || item.fieldId,
+          operator: "eq",
+          value: "",
+        },
+      ];
+  const filter = filters[0];
+  const updateFilter = (patch: Partial<BuilderSeriesFilter>) => {
+    updateSeries(setSeries, item.id, {
+      filters: [{ ...filter, ...patch }],
+    });
+  };
+  return (
+    <div className="rounded-md border border-[#dce3eb] bg-[#f8fafc] p-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_100px_minmax(0,1fr)] gap-2">
+        <Input
+          aria-label="Filter field"
+          className="h-8"
+          value={filter.field}
+          onChange={(event) => updateFilter({ field: event.target.value })}
+        />
+        <Select
+          value={filter.operator}
+          onValueChange={(operator) => updateFilter({ operator })}
+        >
+          <SelectTrigger className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="eq">is</SelectItem>
+            <SelectItem value="ne">is not</SelectItem>
+            <SelectItem value="gt">&gt;</SelectItem>
+            <SelectItem value="gte">&gt;=</SelectItem>
+            <SelectItem value="lt">&lt;</SelectItem>
+            <SelectItem value="lte">&lt;=</SelectItem>
+            <SelectItem value="contains">contains</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          aria-label="Filter value"
+          className="h-8"
+          placeholder="Value"
+          value={filter.value}
+          onChange={(event) => updateFilter({ value: event.target.value })}
+        />
+      </div>
+      <div className="mt-2 flex justify-end">
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => updateSeries(setSeries, item.id, { filters: [] })}
+        >
+          Clear filter
+        </Button>
+      </div>
     </div>
   );
 }
@@ -337,6 +488,7 @@ function SeriesActions({
   field,
   index,
   item,
+  itemLabel,
   setSeries,
   onRename,
   onResetName,
@@ -344,6 +496,7 @@ function SeriesActions({
   field: DataContractField | undefined;
   index: number;
   item: BuilderSeries;
+  itemLabel: string;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   onRename: () => void;
   onResetName: () => void;
@@ -351,7 +504,7 @@ function SeriesActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label="Series actions" size="icon" variant="ghost">
+        <Button aria-label={`${itemLabel} actions`} size="icon" variant="ghost">
           <MoreHorizontal className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -366,7 +519,7 @@ function SeriesActions({
             setSeries((current) => duplicateSeries(current, item, field, index))
           }
         >
-          <Copy className="h-4 w-4" /> Duplicate series
+          <Copy className="h-4 w-4" /> Duplicate {itemLabel.toLowerCase()}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -377,7 +530,7 @@ function SeriesActions({
             )
           }
         >
-          Delete series
+          Delete {itemLabel.toLowerCase()}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -386,12 +539,14 @@ function SeriesActions({
 
 function RenameSeriesDialog({
   defaultName,
+  itemLabel,
   open,
   value,
   onOpenChange,
   onRename,
 }: {
   defaultName: string;
+  itemLabel: string;
   open: boolean;
   value: string;
   onOpenChange: (value: boolean) => void;
@@ -413,7 +568,7 @@ function RenameSeriesDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename series</DialogTitle>
+          <DialogTitle>Rename {itemLabel.toLowerCase()}</DialogTitle>
         </DialogHeader>
         <Input
           autoFocus
@@ -446,7 +601,9 @@ function duplicateSeries(
 ) {
   const source = current.find((candidate) => candidate.id === item.id);
   if (!source) return current;
-  const sourceIndex = current.findIndex((candidate) => candidate.id === item.id);
+  const sourceIndex = current.findIndex(
+    (candidate) => candidate.id === item.id,
+  );
   const copyName = source.name || field?.display_name || `Series ${index + 1}`;
   const duplicate = {
     ...source,
@@ -464,6 +621,7 @@ function duplicateSeries(
 }
 
 function DataSourcePicker({
+  allowSqlSource,
   advancedSql,
   field,
   item,
@@ -476,9 +634,11 @@ function DataSourcePicker({
   xField,
   yField,
   onAdvancedSqlChange,
+  onAddContractFields,
   onContractFieldSelect,
   onSqlSourceSelect,
 }: {
+  allowSqlSource: boolean;
   advancedSql: string;
   field: DataContractField | undefined;
   item: BuilderSeries;
@@ -491,6 +651,7 @@ function DataSourcePicker({
   xField: string;
   yField: string;
   onAdvancedSqlChange?: (value: string) => void;
+  onAddContractFields?: (contract: DataContract) => void;
   onContractFieldSelect?: (selection: {
     contractId: string;
     fieldId: string;
@@ -530,7 +691,11 @@ function DataSourcePicker({
     tablesForStore.find((candidate) => candidate.name === draftTable) ??
     tablesForStore[0];
   const columns = selectedTable?.columns ?? [];
-  const filteredColumns = filterSqlColumns(columns, selectedTable?.name, search);
+  const filteredColumns = filterSqlColumns(
+    columns,
+    selectedTable?.name,
+    search,
+  );
   const sqlSummary =
     table || advancedSql.trim()
       ? `${store}.${table || "SQL query"}`
@@ -561,6 +726,10 @@ function DataSourcePicker({
   }, [search, tab]);
 
   useEffect(() => {
+    if (!allowSqlSource && tab === "sql") setTab("contracts");
+  }, [allowSqlSource, tab]);
+
+  useEffect(() => {
     if (contractOptions.length === 0) {
       setActiveContractOptionIndex(0);
       return;
@@ -570,7 +739,10 @@ function DataSourcePicker({
     );
   }, [contractOptions.length]);
 
-  const selectField = (contract: DataContract, nextField: DataContractField) => {
+  const selectField = (
+    contract: DataContract,
+    nextField: DataContractField,
+  ) => {
     setSeries((current) =>
       current.map((candidate) =>
         candidate.id === item.id
@@ -597,7 +769,9 @@ function DataSourcePicker({
     selectField(option.contract, option.field);
   };
 
-  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleSearchKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (tab !== "contracts" || contractOptions.length === 0) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -630,8 +804,7 @@ function DataSourcePicker({
 
   const changeDraftTable = (value: string) => {
     const nextTable = tables.find(
-      (candidate) =>
-        candidate.store === draftStore && candidate.name === value,
+      (candidate) => candidate.store === draftStore && candidate.name === value,
     );
     setDraftTable(value);
     setDraftXField(nextTable?.columns[0] ?? "");
@@ -665,9 +838,7 @@ function DataSourcePicker({
             <Database className="h-4 w-4 shrink-0 text-[#657082]" />
             <span className="min-w-0">
               <span className="block truncate text-sm font-semibold text-[#1f2937]">
-                {sourceKind === "table"
-                  ? sqlSummary
-                  : contractSourceLabel}
+                {sourceKind === "table" ? sqlSummary : contractSourceLabel}
               </span>
             </span>
           </span>
@@ -679,7 +850,7 @@ function DataSourcePicker({
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
             <Input
-              className="pl-9 pr-[128px]"
+              className={allowSqlSource ? "pl-9 pr-[128px]" : "pl-9"}
               placeholder={
                 tab === "contracts"
                   ? "Search fields..."
@@ -690,20 +861,22 @@ function DataSourcePicker({
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={handleSearchKeyDown}
             />
-            <div className="absolute right-1 top-1/2 w-[118px] -translate-y-1/2">
-              <Select
-                value={tab}
-                onValueChange={(value) => setTab(value as SourceTab)}
-              >
-                <SelectTrigger className="h-8 border-transparent bg-[#eef2f6] px-2 text-sm shadow-none">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="contracts">Fields</SelectItem>
-                  <SelectItem value="sql">SQL</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {allowSqlSource ? (
+              <div className="absolute right-1 top-1/2 w-[118px] -translate-y-1/2">
+                <Select
+                  value={tab}
+                  onValueChange={(value) => setTab(value as SourceTab)}
+                >
+                  <SelectTrigger className="h-8 border-transparent bg-[#eef2f6] px-2 text-sm shadow-none">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="contracts">Fields</SelectItem>
+                    <SelectItem value="sql">SQL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
           {tab === "contracts" ? (
             <ContractSourceList
@@ -712,6 +885,7 @@ function DataSourcePicker({
               search={search}
               selectedFieldId={item.fieldId}
               selectedContractId={item.contractId}
+              onAddContractFields={onAddContractFields}
               onActiveOptionChange={(optionId) => {
                 const index = contractOptions.findIndex(
                   (option) => option.id === optionId,
@@ -750,6 +924,7 @@ function ContractSourceList({
   search,
   selectedFieldId,
   selectedContractId,
+  onAddContractFields,
   onActiveOptionChange,
   onSelect,
 }: {
@@ -758,6 +933,7 @@ function ContractSourceList({
   search: string;
   selectedFieldId: string;
   selectedContractId: string;
+  onAddContractFields?: (contract: DataContract) => void;
   onActiveOptionChange: (optionId: string) => void;
   onSelect: (contract: DataContract, field: DataContractField) => void;
 }) {
@@ -791,6 +967,16 @@ function ContractSourceList({
             <div className="shrink-0 text-xs text-[#657082]">
               {fields.length} fields
             </div>
+            {onAddContractFields ? (
+              <Button
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() => onAddContractFields(contract)}
+              >
+                Add all fields
+              </Button>
+            ) : null}
           </div>
           <div className="grid gap-1 p-2">
             {fields.map((candidate) => {
@@ -976,7 +1162,10 @@ function SqlSourceForm({
   );
 }
 
-function filterContractGroups(contracts: DataContract[], search: string) {
+export function filterContractGroups(
+  contracts: DataContract[],
+  search: string,
+) {
   const normalized = search.trim().toLowerCase();
   return contracts
     .map((contract) => {
@@ -1009,12 +1198,16 @@ function filterContractGroups(contracts: DataContract[], search: string) {
       return fields.length ? { contract, fields } : null;
     })
     .filter(
-      (group): group is { contract: DataContract; fields: DataContractField[] } =>
+      (
+        group,
+      ): group is { contract: DataContract; fields: DataContractField[] } =>
         Boolean(group),
     );
 }
 
-function flattenContractOptions(groups: ContractFieldGroup[]): ContractFieldOption[] {
+function flattenContractOptions(
+  groups: ContractFieldGroup[],
+): ContractFieldOption[] {
   return groups.flatMap(({ contract, fields }) =>
     fields.map((field) => ({
       id: contractOptionId(contract, field),
@@ -1032,7 +1225,7 @@ function contractOptionDomId(optionId: string) {
   return `contract-source-${optionId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
-function highlightSearchMatch(text: string, search: string) {
+export function highlightSearchMatch(text: string, search: string) {
   const query = search.trim();
   if (!query) return text;
   const lowerText = text.toLowerCase();
@@ -1064,10 +1257,7 @@ function filterSqlTables(tables: DatabaseTable[], search: string) {
   const normalized = search.trim().toLowerCase();
   if (!normalized) return tables;
   return tables.filter((table) =>
-    [table.name, ...table.columns]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalized),
+    [table.name, ...table.columns].join(" ").toLowerCase().includes(normalized),
   );
 }
 
@@ -1094,30 +1284,45 @@ function defaultYColumn(columns: string[]) {
 }
 
 function AggregationSelect({
+  actions,
   item,
   setSeries,
 }: {
+  actions?: ReactNode;
   item: BuilderSeries;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
 }) {
+  const options = [
+    ["raw", "Raw values"],
+    ["count", "Count rows"],
+    ["count_distinct", "Count distinct"],
+    ["avg", "Average"],
+    ["sum", "Sum"],
+    ["min", "Min"],
+    ["max", "Max"],
+  ] as const;
   return (
-    <Select
-      value={item.aggregation}
-      onValueChange={(aggregation) =>
-        updateSeries(setSeries, item.id, { aggregation })
-      }
-    >
-      <SelectTrigger>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {["count", "sum", "avg", "min", "max"].map((aggregation) => (
-          <SelectItem key={aggregation} value={aggregation}>
-            {aggregation}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+      <span className="text-xs font-semibold text-[#657082]">Show</span>
+      <Select
+        value={item.aggregation || "raw"}
+        onValueChange={(aggregation) =>
+          updateSeries(setSeries, item.id, { aggregation })
+        }
+      >
+        <SelectTrigger className="h-8">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([value, label]) => (
+            <SelectItem key={value} value={value}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {actions}
+    </div>
   );
 }
 
@@ -1131,41 +1336,4 @@ function updateSeries(
       candidate.id === id ? { ...candidate, ...patch } : candidate,
     ),
   );
-}
-
-function FieldSummary({ field }: { field: DataContractField | undefined }) {
-  if (!field) return null;
-  const parts = [
-    fieldTypeLabel(field),
-    fieldShapeSummary(field),
-    field.unit,
-    summaryRange(field.summary),
-    topValues(field.summary),
-  ].filter(Boolean);
-  return (
-    <div className="mt-2 space-y-1 text-xs text-[#657082]">
-      <div>{parts.join(" · ")}</div>
-      {field.description ? <div>{field.description}</div> : null}
-    </div>
-  );
-}
-
-function summaryRange(summary: Record<string, unknown>) {
-  const min = summary.min;
-  const max = summary.max;
-  if (typeof min === "number" && typeof max === "number") {
-    return `${min.toLocaleString()} to ${max.toLocaleString()}`;
-  }
-  return null;
-}
-
-function topValues(summary: Record<string, unknown>) {
-  const values = summary.top_values;
-  if (!Array.isArray(values) || values.length === 0) return null;
-  return values
-    .slice(0, 3)
-    .map((item) =>
-      isRecord(item) && "value" in item ? String(item.value) : String(item),
-    )
-    .join(", ");
 }

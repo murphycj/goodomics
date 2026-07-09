@@ -1,53 +1,27 @@
-import type { InsightCatalog } from "../../api";
-import type { DisplayOptions } from "../../lib/insightDisplayOptions";
 import { Card, CardContent } from "../ui";
 import { InsightPreview } from "../reports/InsightPreview";
-import { InsightChartControls } from "./InsightChartControls";
 
 export function InsightPreviewPanel({
-  catalog,
-  title,
-  isCached,
   error,
   config,
   result,
   setupWarning,
-  displayOptions,
-  onDisplayOptionsChange,
-  visualization,
-  onVisualizationChange,
+  tableActions,
 }: {
-  catalog?: InsightCatalog;
-  title: string;
-  isCached: boolean;
   error: Error | null;
   config: Record<string, unknown>;
   result: Record<string, unknown> | null | undefined;
   setupWarning: string | null;
-  displayOptions: DisplayOptions;
-  onDisplayOptionsChange: React.Dispatch<React.SetStateAction<DisplayOptions>>;
-  visualization: string;
-  onVisualizationChange: (value: string) => void;
+  tableActions?: {
+    addLabel: string;
+    emptyLabel?: string;
+    onAddColumn: () => void;
+  };
 }) {
   return (
-    <Card className="mt-0 min-h-0 overflow-hidden p-0">
+    <Card className="mt-0 h-full min-h-0 overflow-hidden p-0">
       <CardContent className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-between border-b border-[#dce3eb] px-4 py-3">
-          <div>
-            <h2 className="m-0 text-base font-semibold">{title}</h2>
-            <p className="m-0 text-xs text-[#657082]">
-              {isCached ? "Using cached result" : "Preview result"}
-            </p>
-          </div>
-          <InsightChartControls
-            catalog={catalog}
-            displayOptions={displayOptions}
-            onDisplayOptionsChange={onDisplayOptionsChange}
-            visualization={visualization}
-            onVisualizationChange={onVisualizationChange}
-          />
-        </div>
-        <div className="min-h-0 flex-1 p-4">
+        <div className="min-h-0 flex-1 overflow-hidden p-1.5">
           {error ? (
             <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
               {error.message}
@@ -57,6 +31,7 @@ export function InsightPreviewPanel({
               config={config}
               result={result}
               setupWarning={setupWarning}
+              tableActions={tableActions}
             />
           )}
         </div>
@@ -91,7 +66,7 @@ function PreviewAuditBar({
   ].filter(Boolean);
   if (chips.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-[#dce3eb] bg-[#f8fafc] px-4 py-2">
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-[#dce3eb] bg-[#f8fafc] px-2 py-1.5">
       {chips.map((chip) => (
         <span
           className="rounded-md border border-[#d6dee8] bg-white px-2 py-1 text-xs text-[#4f5b6b]"
@@ -109,10 +84,22 @@ function contextLabel(context: Record<string, unknown> | null) {
   const sampleSet = stringValue(context?.sample_set_id);
   const sample = stringValue(context?.sample_id);
   const runSample = stringValue(context?.run_sample_id);
+  const sampleSets = stringArrayValue(context?.sample_set_ids);
+  const samples = stringArrayValue(context?.sample_ids);
+  const runSamples = stringArrayValue(context?.run_sample_ids);
+  if (samples.length > 1) return `${samples.length} samples`;
+  if (runSamples.length > 1) return `${runSamples.length} run samples`;
+  if (sampleSets.length > 1) return `${sampleSets.length} sample groups`;
   if (sample) return `Sample ${sample}`;
   if (runSample) return `Run sample ${runSample}`;
-  if (sampleSet) return `Cohort ${sampleSet}`;
-  return kind === "sample" ? "Sample context" : "Cohort context";
+  if (sampleSet) return `Sample group ${sampleSet}`;
+  return kind === "sample" ? "Sample context" : "All samples";
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item))
+    : [];
 }
 
 function linkerLabel(linker: Record<string, unknown> | null) {
