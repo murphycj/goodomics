@@ -1,8 +1,11 @@
-# goodomics
+<h1 style="display: flex; align-items: center; justify-content: center; font-size: 32px">
+  <img src="packages/goodomics/dashboard/public/goodomics.svg" alt="Goodomics logo" width="40" align="absmiddle" style="margin-right: 8px">
+  Goodomics
+</h1>
 
 > ⚠️ Warning: Goodomics is under heavy development and is not ready for production use.
 
-Goodomics is an early-stage Python package for cohort-aware QC and durable context around omics computational outputs. It starts from a folder of pipeline results, generates a clear report, and then lets you keep building up structured run history, files, metrics, and reviewable context over time. The same grounded context is meant to be agent-ready and MCP-ready, so humans and tools can work from the same run history, files, metrics, and policies.
+Goodomics is an early-stage Python package and web app for cohort-aware QC and durable context around omics computational outputs. It starts from a folder of pipeline results, generates a clear report, and then lets you keep building up structured run history, files, metrics, and reviewable context over time. The same grounded context is meant to be agent-ready and MCP-ready, so humans and tools can work from the same run history, files, metrics, and policies.
 
 The repo is organized as a Python monorepo with two package surfaces:
 
