@@ -2043,9 +2043,7 @@ def _result_column_labels(
     config: Mapping[str, Any], columns: Sequence[str]
 ) -> dict[str, str]:
     """Build display labels for result columns."""
-    labels: dict[str, str] = {
-        column: _identity_column_label(column) for column in columns
-    }
+    labels: dict[str, str] = {column: column for column in columns}
     for item in _table_column_items(config):
         raw_label = item.get("label") or item.get("name")
         if not isinstance(raw_label, str) or not raw_label.strip():
