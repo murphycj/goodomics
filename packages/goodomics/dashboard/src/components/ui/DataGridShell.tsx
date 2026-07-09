@@ -209,7 +209,7 @@ function SortableHeaderCell({
   );
 }
 
-function sortGridRows<Row>(
+export function sortGridRows<Row>(
   rows: Row[],
   sortColumns: readonly SortColumn[],
   sortValueGetter?: (row: Row, columnKey: string) => unknown,
