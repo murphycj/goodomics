@@ -3174,9 +3174,7 @@ async def _list_project_run_sample_links(
         )
         total = int(
             (
-                await session.exec(
-                    select(func.count()).select_from(base.subquery())
-                )
+                await session.exec(select(func.count()).select_from(base.subquery()))
             ).one()
         )
         rows = (

@@ -518,7 +518,9 @@ async def _sample_display_labels(
     if not sample_pks:
         return {}
     rows = (
-        await session.exec(select(SampleRecord).where(SampleRecord.id.in_(sample_pks)))
+        await session.exec(
+            select(SampleRecord).where(cast(Any, SampleRecord.id).in_(sample_pks))
+        )
     ).all()
     return {
         int(row.id): row.sample_name or row.sample_id
@@ -534,7 +536,9 @@ async def _run_display_labels(
     if not run_pks:
         return {}
     rows = (
-        await session.exec(select(RunRecord).where(RunRecord.id.in_(run_pks)))
+        await session.exec(
+            select(RunRecord).where(cast(Any, RunRecord.id).in_(run_pks))
+        )
     ).all()
     return {int(row.id): row.name or row.run_id for row in rows if row.id is not None}
 
@@ -547,7 +551,9 @@ async def _run_sample_display_labels(
         return {}
     links = (
         await session.exec(
-            select(RunSampleRecord).where(RunSampleRecord.id.in_(run_sample_pks))
+            select(RunSampleRecord).where(
+                cast(Any, RunSampleRecord.id).in_(run_sample_pks)
+            )
         )
     ).all()
     sample_labels = await _sample_display_labels(
@@ -1060,13 +1066,13 @@ async def _context_where_sql(
             ]
             parameters.extend(sample_pks)
             where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
-        run_sample_ids = _context_string_values(
+        requested_run_sample_ids = _context_string_values(
             context, "run_sample_ids", "run_sample_id"
         )
-        if run_sample_ids and "run_sample_id" in columns:
+        if requested_run_sample_ids and "run_sample_id" in columns:
             run_sample_pks = [
                 await _run_sample_pk(session, project_id, run_sample_id)
-                for run_sample_id in run_sample_ids
+                for run_sample_id in requested_run_sample_ids
             ]
             parameters.extend(run_sample_pks)
             where_parts.append(
@@ -2037,9 +2043,7 @@ def _result_column_labels(
     config: Mapping[str, Any], columns: Sequence[str]
 ) -> dict[str, str]:
     """Build display labels for result columns."""
-    labels: dict[str, str] = {
-        column: _identity_column_label(column) for column in columns
-    }
+    labels: dict[str, str] = {column: column for column in columns}
     for item in _table_column_items(config):
         raw_label = item.get("label") or item.get("name")
         if not isinstance(raw_label, str) or not raw_label.strip():
