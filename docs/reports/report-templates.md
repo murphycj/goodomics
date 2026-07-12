@@ -45,7 +45,7 @@ insights:
     mode: contract_metrics
     visualization: bar
     linker:
-      kind: run_sample
+      kind: sample
     result_policy:
       mode: preview
       limit: 1000
@@ -54,12 +54,14 @@ insights:
         kind: data_contract
         data_contract_id: salmon:results
       fields: [general_stats.salmon_percent_mapped]
-      entity: run_sample
+      entity: sample
     series:
       - contract_id: salmon:results
         field_id: general_stats.salmon_percent_mapped
         name: Percent mapped
         aggregation: avg
+        result_scope:
+          selection: latest_successful_per_sample
 
 report:
   report_id: rnaseq-qc
@@ -96,8 +98,9 @@ instead of exposing raw ECharts as the primary authoring model.
 Plots that align multiple values should include a visible `linker`, shown in the
 UI as **Matched by**. If `auto` has exactly one valid linker, Goodomics may
 select it. If multiple valid linkers exist, the user must choose one such as
-`sample`, `run_sample`, or `feature`. Executed insight payloads include linker
-diagnostics and a `plot_table` with the exact rows used for plotting.
+`sample` or `feature`. Executed insight payloads include linker and result
+selection diagnostics, exact resolved occurrence IDs, and a `plot_table` with
+the rows used for plotting.
 
 Histogram insights use a numeric raw-value column and can set `query.bins` or
 `display.bins` to control bin count:

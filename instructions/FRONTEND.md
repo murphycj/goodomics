@@ -50,3 +50,15 @@ work in `packages/goodomics/dashboard`, also use
   approachable.
 - Avoid generic DNA stock imagery, abstract SaaS gradients, and mascot-heavy
   first impressions.
+
+## Insight Builder
+
+- Keep the contract-grouped field picker as the main data selection control.
+- Split series editing, data picking, result scope, and diagnostics into focused
+  components instead of growing one page component indefinitely.
+- Fetch contract-compatible result options with bounded TanStack queries and
+  explicit loading, error, and empty states.
+- Show inferred **Results from** scope compactly; keep detailed overrides
+  collapsed until requested.
+- Never expose internal `run_sample` as an Analyze by grain, Matched by choice,
+  filter tab, template, or user-facing label.

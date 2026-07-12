@@ -53,7 +53,13 @@ context directly:
 ```python
 from goodomics import run
 
-with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
+with run(
+    "rnaseq-batch-042",
+    project="rnaseq-core",
+    analysis_type_id="rna_sequencing",
+    method_id="nf-core/rnaseq",
+    method_version="3.18",
+) as ctx:
     ctx.log_metric("S1", "pct_mapped", 97.2, unit="percent")
 ```
 

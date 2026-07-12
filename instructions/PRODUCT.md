@@ -242,8 +242,10 @@ The user-facing model should stay approachable:
 ```text
 Sample = what was processed.
 Run = what happened.
-Run sample = that sample in that run.
+Analysis type = controlled biological category.
+Analysis method = workflow, tool, algorithm, notebook, benchmark, script, or importer.
 Data contract = what kind of data was produced.
+Produced result = one run's occurrence of a data contract.
 Observation = a value, call, or measurement inside that contract.
 Cohort or reference set = selected sample/run links.
 ```
@@ -299,10 +301,13 @@ The SDK should make lightweight instrumentation easy:
 ```python
 import goodomics as go
 
-with go.run(name="rnaseq_batch_042", assay="bulk_rnaseq") as run:
+with go.run(
+    name="rnaseq_batch_042",
+    analysis_type_id="rna_sequencing",
+    method_id="nf-core/rnaseq",
+    method_version="3.18",
+) as run:
     run.log_context(
-        pipeline="nf-core/rnaseq",
-        pipeline_version="3.18",
         genome="GRCh38",
         aligner="STAR",
     )
@@ -317,7 +322,12 @@ The same tracking model should also work for exploratory and method-development
 work:
 
 ```python
-with go.run(name="variant_caller_benchmark_v12", assay="germline_wgs") as run:
+with go.run(
+    name="variant_caller_benchmark_v12",
+    analysis_type_id="whole_genome_sequencing",
+    method_id="new-caller-benchmark",
+    method_version="0.8.1",
+) as run:
     run.log_context(tool="new-caller", version="0.8.1", truth_set="GIAB-HG002")
     run.log_metric("HG002", "precision", 0.992)
     run.log_metric("HG002", "recall", 0.987)
@@ -328,7 +338,12 @@ The API should also support progressively more structured data when users have
 well-shaped omics outputs:
 
 ```python
-with go.run(name="rnaseq_batch_042", assay="bulk_rnaseq") as run:
+with go.run(
+    name="rnaseq_batch_042",
+    analysis_type_id="rna_sequencing",
+    method_id="nf-core/rnaseq",
+    method_version="3.18",
+) as run:
     run.log_table("counts", "counts.tsv", data_type="expression_matrix")
     run.log_table("variants", "calls.vcf.gz", data_type="small_variants")
 ```
@@ -343,7 +358,9 @@ Goodomics configs and exported report templates should be workflow-friendly:
 
 ```yaml
 project: rnaseq_qc
-assay: bulk_rnaseq
+analysis_type_id: rna_sequencing
+method_id: nf-core/rnaseq
+method_version: "3.18"
 
 inputs:
   - type: multiqc
@@ -373,7 +390,7 @@ reference_sets:
   production_baseline:
     include:
       status: pass
-      pipeline_version: ">=2.0"
+      method_version: ">=2.0"
 
 reports:
   run_summary:

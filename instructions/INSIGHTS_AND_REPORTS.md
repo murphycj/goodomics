@@ -1,100 +1,96 @@
 # Goodomics Insights And Reports Guide
 
-Use this file as the source of truth for saved insight and report behavior,
-including analysis grains, chart grammar, context, linker rules, result-size
-policies, report inheritance, and AI-created insight guardrails.
+This file is the source of truth for saved insight and report behavior.
 
-## Builder Model
+## Builder model
 
-- Insight builders are grain-first. The primary workflow is
-  **Analyze by** → **Choose data** → **Filter** → **Matched by** → **View as**.
-- `analysis_grain` is the entity grain and replaces saved insight `mode`.
-  Supported grains are `run_sample`, `sample`, `subject`, `run`, `feature`,
-  `variant`, and `file`.
-- New insights default to `analysis_grain: run_sample` and
-  `visualization: table`.
-- `visualization` is the output choice: `table`, `bar`, `scatter`, `line`,
-  `histogram`, `boxplot`, `metric`, and related chart types.
-- Cohort context uses canonical `sample_sets` and `sample_set_members`.
-  Do not expand the legacy lightweight `cohorts` placeholder for new builder
-  behavior.
-- The builder supports quick-start templates such as QC metrics across run
-  samples, build a table, compare two fields, inspect one sample, explore a
-  gene/feature, and variant/call table. Templates prefill editable config only;
-  they do not create a separate workflow.
-- SQL access is selected from the per-series data source picker instead of a
-  top-level Advanced SQL mode tab.
-- Saved insight configs should include `analysis_grain`, `visualization`,
-  `context`, `series`, `table_columns`, `linker`, `filters`,
-  `result_policy`, and `display`.
-- Chart values are configured as `series`. Table-specific columns are
-  configured as `table_columns` and should use raw values by default.
-- Each chart value owns its `aggregation` / **Show** control. Supported choices
-  are raw values, count rows, count distinct, average, sum, min, and max.
-- Global quick filters live in `context` for broad cohort/sample/run-sample
-  restrictions. Field-level conditions live in `filters` or
-  `series[].filters`.
-- Report configs may define `context`, `filters`, `linker`, or `result_policy`.
-  Referenced insights inherit those values unless they explicitly override them.
+- The workflow is **Analyze by** → sample/cohort context → **Choose data** →
+  per-series filters and **Results from** → **Matched by** → **View as**.
+- Public grains are `sample`, `subject`, `run`, `feature`, `variant`, and `file`.
+  `run_sample` is internal and must not appear in builder grains, templates,
+  linkers, labels, or default configs.
+- New insights default to `analysis_grain: sample` and `visualization: table`.
+- The primary picker combines contracts and fields, grouping searchable fields
+  beneath their stable data contract.
+- Selecting a field determines compatible analysis types, methods, result
+  defaults, aggregations, and chart choices.
+- Global context may restrict biological samples or canonical sample sets.
+- Table columns use raw values by default. Chart series own aggregation and
+  field-level filters.
 
-## Server Catalog
+## Result scope
 
-- The server owns the insight catalog endpoint. It defines `analysis_grains`,
-  templates, chart IDs, icons, value constraints, linker rules, result
-  policies, and validation messages.
-- Dashboard UI, API execution, report rendering, and future AI insight drafting
-  should consume the catalog and shared validator instead of duplicating chart
-  rules.
-- ECharts is an implementation detail. Goodomics configs describe chart intent
-  and compile to ECharts internally.
+Every series and table column owns `result_scope`:
 
-## Linkers
+- `selection`: `latest_successful_per_sample`, `specific_methods`,
+  `specific_versions`, `specific_runs`, or `pinned_results`;
+- optional `analysis_type_ids`, `method_ids`, `method_versions`, `run_ids`,
+  `statuses`, `started_after`, `ended_before`, and `run_contract_ids`.
 
-- Any plot aligning multiple values must show **Matched by**.
-- `auto` may select the linker only when exactly one valid linker exists.
-- If multiple valid linkers exist, require an explicit user choice.
-- Linker diagnostics must be visible with matched, unmatched,
-  duplicate/conflict, and excluded-row counts.
-- Functional query examples:
-  - RNA expression of two genes across samples: two feature-value series,
-    gene filters, linker `sample` or `run_sample`.
-  - Protein expression vs RNA expression: two contracts, two feature filters,
-    shared linker `sample`.
-  - All KRAS mutations: `analysis_grain: variant`, mutations contract, gene
-    filter `KRAS`, table output.
+Empty optional filters derive compatible choices from the selected contract.
+Sample-based grains default to latest successful compatible result per sample.
+Run grain defaults to all eligible runs without per-sample ranking.
 
-## Plot Rules
+The collapsed summary should read like “Latest successful · RNA sequencing ·
+nf-core/rnaseq · 2 method versions.” Expanding it exposes overrides with
+bounded loading, error, and empty states. “Apply result scope to all series” is
+available only when all selected contracts have a compatible scope.
 
+Each series resolves independently. Intentional cross-analysis comparisons are
+aligned by a biological linker such as sample; they do not share a hidden
+execution occurrence.
+
+## Resolver and diagnostics
+
+All insight, report, API, MCP, and AI-created configs use the shared result
+resolver defined in `instructions/DATA_MODEL.md`. Results include exact
+run-contract/run-sample IDs and visible diagnostics for:
+
+- excluded failed, incomplete, and incompatible results;
+- samples missing the selected result or fixed version;
+- represented methods and versions;
+- mixed-version warnings;
+- profiled-empty availability;
+- superseded results;
+- linker matched, unmatched, and conflict counts.
+
+Rendered report snapshots pin exact resolved occurrence IDs. Dynamic saved
+insights continue to update as new compatible runs arrive.
+
+## Server catalog and config
+
+The server owns grains, templates, charts, linkers, result-size policies,
+validation, and explanations. Dashboard, API, report rendering, MCP, and AI
+consume this catalog rather than duplicating rules.
+
+Saved configs include `analysis_grain`, `visualization`, `context`, `series`,
+`table_columns`, `linker`, `filters`, `result_policy`, and `display`. Each series
+or column includes the selected contract/field and its result scope.
+
+ECharts is an implementation detail. Goodomics configs describe chart intent.
+
+## Linkers and plot rules
+
+- Aligning multiple values must show **Matched by**.
+- `auto` is valid only when exactly one linker is possible.
+- Biological cross-analysis values normally match by `sample`.
 - `scatter`: exactly two numeric measures and a visible linker.
-- `line` / `area`: numeric series only, aligned by entity, feature, time, or
-  selected linker.
-- `bar`: one numeric series plots values by entity/linker; categorical series
-  count categories; multiple numeric series align by linker.
-- `stacked_bar`: two or more numeric series with a shared linker. Duplicate
-  identical fields remain separate colored stacked series.
-- `histogram`: one or more numeric series rendered as overlaid bins with
-  opacity.
-- `boxplot`: numeric only, grouped by sample set, sample, run, or category.
-- `pie` / `donut`: exactly one series.
+- `line`/`area`: numeric series aligned by entity, feature, time, or linker.
+- `bar`: one value by entity, categorical counts, or aligned numeric series.
+- `stacked_bar`: at least two numeric series with a shared linker.
+- `histogram`: one or more overlaid numeric distributions.
+- `boxplot`: numeric values grouped by sample set, sample, run, or category.
+- `pie`/`donut`: exactly one series.
 - `table`: any supported fields.
-- `contract_metrics`: supports adding all numeric fields from a contract.
 
-## Data Size
+## Data size and AI guardrails
 
-- `preview`: embed up to 1,000 rows.
-- `more_rows`: embed a bounded user-selected limit.
-- `random_sample`: embed a deterministic sampled subset using a seed.
-- `all_rows`: embed all rows only when the result is below the configured
-  response threshold.
-- `export_full_data`: write complete plot/table data to a file-backed artifact
-  instead of embedding it in the API response.
-- Prefer server-side aggregation, binning, downsampling, or export for large
-  datasets. Do not force huge raw datasets through ECharts.
+- Preview embeds at most 1,000 rows.
+- More rows and deterministic sampling remain bounded.
+- All rows may be embedded only below the response threshold.
+- Full data export uses a file-backed artifact.
+- Prefer server aggregation, binning, downsampling, or export for large data.
 
-## AI Readiness
-
-- AI-created insights must produce a draft validated config plus a plain
-  language explanation of contracts, filters, linker, result policy, and chart.
-- AI-created insights should open in the same builder UI for review and
-  adjustment. They must not bypass catalog validation or linker/result-size
-  guardrails.
+AI-created insights produce a validated draft plus a plain-language explanation
+of contracts, fields, scopes, filters, linker, result policy, and chart. They
+open in the normal builder and cannot bypass resolver or size guardrails.
