@@ -54,6 +54,29 @@ class Sample(GoodomicsModel):
         return self.metadata_json
 
 
+class AnalysisType(GoodomicsModel):
+    """Controlled biological analysis category used to classify runs."""
+
+    analysis_type_id: str
+    name: str
+    description: str | None = None
+    project_id: str | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
+class AnalysisMethod(GoodomicsModel):
+    """Workflow, tool, algorithm, notebook, benchmark, script, or importer."""
+
+    method_id: str
+    name: str
+    method_kind: Literal[
+        "workflow", "tool", "algorithm", "notebook", "benchmark", "script", "importer"
+    ]
+    description: str | None = None
+    project_id: str | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
 class Run(MutableGoodomicsModel):
     """Computational, import, benchmark, or analysis event."""
 
@@ -63,9 +86,9 @@ class Run(MutableGoodomicsModel):
     project: str | None = None
     name: str | None = None
     run_kind: str = "pipeline_run"
-    assay: str | None = None
-    pipeline_name: str | None = None
-    pipeline_version: str | None = None
+    analysis_type_id: str
+    method_id: str
+    method_version: str | None = None
     parameters_json: JsonObject = Field(default_factory=dict)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -105,11 +128,6 @@ class DataContract(GoodomicsModel):
     project_id: str | None = None
     name: str
     data_type: str
-    assay: str | None = None
-    producer_tool: str | None = None
-    producer_tool_version: str | None = None
-    producer_pipeline: str | None = None
-    genome_build: str | None = None
     feature_type: str | None = None
     value_type: str | None = None
     unit: str | None = None
@@ -119,7 +137,40 @@ class DataContract(GoodomicsModel):
     last_profiled_at: datetime | None = None
     source_fingerprint: str | None = None
     query_modes_json: JsonObject = Field(default_factory=dict)
+    intrinsic_producer_families_json: JsonObject = Field(default_factory=dict)
     description: str | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
+class DataContractAnalysisType(GoodomicsModel):
+    """Declares that a stable contract is compatible with an analysis type."""
+
+    data_contract_id: str
+    analysis_type_id: str
+
+
+class RunContract(GoodomicsModel):
+    """Occurrence of a stable data contract produced by one run."""
+
+    run_contract_id: str
+    run_id: str
+    data_contract_id: str
+    producer_method_id: str | None = None
+    producer_version: str | None = None
+    reference_context_json: JsonObject = Field(default_factory=dict)
+    status: str = "available"
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class RunContractSample(GoodomicsModel):
+    """Per-sample availability of a contract occurrence."""
+
+    run_contract_id: str
+    run_sample_id: str
+    availability: Literal["observed", "profiled_empty", "failed", "unavailable"]
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -281,6 +332,7 @@ class SampleMetric(AnalyticalRecord):
     """Unified metric value measured for a sample/run link."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int | None = None
     sample_id: int | None = None
@@ -344,6 +396,7 @@ class FeatureValueNumeric(AnalyticalRecord):
     """Numeric value for a feature in a sample/run link and data contract."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -356,6 +409,7 @@ class FeatureCall(AnalyticalRecord):
     """Categorical feature-level call for a sample/run link."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -387,6 +441,7 @@ class SampleIntervalValue(AnalyticalRecord):
     """Numeric value assigned to a genomic interval for a sample/run link."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -399,6 +454,7 @@ class CopyNumberSegment(AnalyticalRecord):
     """Copy-number segment call for a sample/run link."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -463,6 +519,7 @@ class SampleVariantCall(AnalyticalRecord):
     """Per-sample call and sequencing evidence for a variant."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -500,6 +557,7 @@ class SampleStructuralVariantCall(AnalyticalRecord):
     """Per-sample call and evidence for a structural variant event."""
 
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int
     sample_id: int | None = None
@@ -535,6 +593,7 @@ class ResultPayload(AnalyticalRecord):
 
     payload_id: int
     data_contract_id: int
+    run_contract_id: int | None = None
     run_id: int
     run_sample_id: int | None = None
     sample_id: int | None = None
@@ -616,6 +675,7 @@ class GeneAlterationState(AnalyticalRecord):
     subject_id: int | None = None
     feature_id: int
     data_contract_id: int
+    run_contract_id: int | None = None
     alteration_type: str
     alteration_subtype: str | None = None
     is_altered: bool

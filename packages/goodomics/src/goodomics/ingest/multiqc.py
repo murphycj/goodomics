@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.analysis import QUALITY_CONTROL, analysis_method, resolve_analysis_type
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
     discover_multiqc_outputs,
@@ -21,10 +22,13 @@ from goodomics.parsers.multiqc import (
 )
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
+    DataContractAnalysisType,
     DataImport,
     FileAsset,
     FileLink,
     Run,
+    RunContract,
+    RunContractSample,
     RunRelationship,
     RunSample,
     Sample,
@@ -91,7 +95,7 @@ def ingest_multiqc_runs(
     *,
     run_id: str | None = None,
     project: str | None = None,
-    assay: str | None = None,
+    analysis_type_id: str = QUALITY_CONTROL,
     database_url: str = DEFAULT_DATABASE_URL,
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
@@ -107,7 +111,7 @@ def ingest_multiqc_runs(
                 results,
                 run_id=run_id,
                 project=project,
-                assay=assay,
+                analysis_type_id=analysis_type_id,
                 database_url=database_url,
                 analytics_path=analytics_path,
                 file_root=file_root,
@@ -123,7 +127,7 @@ def ingest_multiqc_runs(
             grouped,
             run_id=group_run_id,
             project=project,
-            assay=assay,
+            analysis_type_id=analysis_type_id,
             database_url=database_url,
             analytics_path=analytics_path,
             file_root=file_root,
@@ -137,7 +141,7 @@ def ingest_multiqc(
     *,
     run_id: str | None = None,
     project: str | None = None,
-    assay: str | None = None,
+    analysis_type_id: str = QUALITY_CONTROL,
     database_url: str = DEFAULT_DATABASE_URL,
     analytics_path: Path | None = None,
     file_root: Path = Path(".goodomics/files"),
@@ -150,7 +154,7 @@ def ingest_multiqc(
         parsed,
         run_id=resolved_run_id,
         project=project,
-        assay=assay,
+        analysis_type_id=analysis_type_id,
         database_url=database_url,
         analytics_path=analytics_path,
         file_root=file_root,
@@ -162,7 +166,7 @@ def _ingest_multiqc_outputs(
     *,
     run_id: str,
     project: str | None,
-    assay: str | None,
+    analysis_type_id: str,
     database_url: str,
     analytics_path: Path | None,
     file_root: Path,
@@ -172,7 +176,7 @@ def _ingest_multiqc_outputs(
         parsed,
         run_id=run_id,
         project=project,
-        assay=assay,
+        analysis_type_id=analysis_type_id,
         database_url=database_url,
         analytics_path=analytics_path,
         file_root=file_root,
@@ -184,7 +188,7 @@ def _save_multiqc_parse_result(
     *,
     run_id: str,
     project: str | None,
-    assay: str | None,
+    analysis_type_id: str,
     database_url: str,
     analytics_path: Path | None,
     file_root: Path,
@@ -206,7 +210,7 @@ def _save_multiqc_parse_result(
         else None,
         importer_name="multiqc",
         status="complete",
-        parameters_json={"assay": assay},
+        parameters_json={"analysis_type_id": analysis_type_id},
         summary_json={
             "outputs_found": len(parsed.outputs),
             "metrics_ingested": len(parsed.metrics),
@@ -218,6 +222,13 @@ def _save_multiqc_parse_result(
             "source_paths": [str(output.root_dir) for output in parsed.outputs],
         },
     )
+    analysis_type = resolve_analysis_type(analysis_type_id)
+    report_method = analysis_method("multiqc", name="MultiQC", method_kind="importer")
+    upstream_method = analysis_method(
+        "multiqc/inferred_upstream",
+        name="MultiQC inferred upstream analysis",
+        method_kind="workflow",
+    )
     report_run = Run(
         run_id=run_id,
         project_id=project_record.project_id,
@@ -225,8 +236,9 @@ def _save_multiqc_parse_result(
         project=project_record.slug,
         name=f"MultiQC report {run_id}",
         run_kind="multiqc_report",
-        assay=assay,
-        pipeline_name="MultiQC",
+        analysis_type_id=analysis_type.analysis_type_id,
+        method_id=report_method.method_id,
+        status="complete",
         metadata_json={"source": "multiqc_report"},
     )
     subjects = [
@@ -251,9 +263,9 @@ def _save_multiqc_parse_result(
             project=project_record.slug,
             name=f"{sample.sample_id} upstream analysis",
             run_kind="pipeline_run",
-            assay=assay,
-            pipeline_name="MultiQC inferred upstream analysis",
-            status="provisional",
+            analysis_type_id=analysis_type.analysis_type_id,
+            method_id=upstream_method.method_id,
+            status="complete",
             metadata_json={
                 "source": "multiqc_general_stats",
                 "provenance_strength": "inferred",
@@ -288,6 +300,10 @@ def _save_multiqc_parse_result(
         )
         for upstream_run in upstream_runs
     ]
+    run_contracts, run_contract_samples = _run_contract_occurrences(
+        parsed.to_batch(run_id=run_id),
+        runs=[report_run, *upstream_runs],
+    )
 
     files = _copy_multiqc_files(
         parsed.outputs,
@@ -311,6 +327,8 @@ def _save_multiqc_parse_result(
         catalog_store.replace_runs_catalog(
             [report_run, *upstream_runs],
             data_import=data_import,
+            analysis_types=[analysis_type],
+            analysis_methods=[report_method, upstream_method],
             subjects=subjects,
             samples=samples,
             run_samples=run_samples,
@@ -321,6 +339,15 @@ def _save_multiqc_parse_result(
                 )
                 for data_contract in parsed.contracts
             ],
+            data_contract_analysis_types=[
+                DataContractAnalysisType(
+                    data_contract_id=contract.data_contract_id,
+                    analysis_type_id=analysis_type.analysis_type_id,
+                )
+                for contract in parsed.contracts
+            ],
+            run_contracts=run_contracts,
+            run_contract_samples=run_contract_samples,
             data_contract_fields=parsed.contract_fields,
             files=files,
             file_links=file_links,
@@ -354,6 +381,58 @@ def _save_multiqc_parse_result(
         analytics_path=resolved_analytics_path,
         file_root=file_root,
     )
+
+
+def _run_contract_occurrences(
+    batch: Any,
+    *,
+    runs: list[Run],
+) -> tuple[list[RunContract], list[RunContractSample]]:
+    """Build authoritative contract occurrences from emitted analytical rows."""
+
+    run_by_id = {run.run_id: run for run in runs}
+    pairs: dict[tuple[str, str], set[str]] = {}
+    for field_name in type(batch).model_fields:
+        for row in getattr(batch, field_name):
+            run_label = getattr(row, "run_id", None)
+            contract_label = getattr(row, "data_contract_id", None)
+            if run_label is None and getattr(row, "model_extra", None):
+                run_label = row.model_extra.get("run_id")
+            if contract_label is None and getattr(row, "model_extra", None):
+                contract_label = row.model_extra.get("data_contract_id")
+            if not isinstance(run_label, str) or not isinstance(contract_label, str):
+                continue
+            sample_link = getattr(row, "run_sample_id", None)
+            if sample_link is None and getattr(row, "model_extra", None):
+                sample_link = row.model_extra.get("run_sample_id")
+            pairs.setdefault((run_label, contract_label), set())
+            if isinstance(sample_link, str):
+                pairs[(run_label, contract_label)].add(sample_link)
+
+    occurrences: list[RunContract] = []
+    availability: list[RunContractSample] = []
+    for run_label, contract_label in sorted(pairs):
+        run = run_by_id[run_label]
+        occurrence_id = f"{run_label}:{contract_label}"
+        occurrences.append(
+            RunContract(
+                run_contract_id=occurrence_id,
+                run_id=run_label,
+                data_contract_id=contract_label,
+                producer_method_id=run.method_id,
+                producer_version=run.method_version,
+                status="available",
+            )
+        )
+        availability.extend(
+            RunContractSample(
+                run_contract_id=occurrence_id,
+                run_sample_id=run_sample_id,
+                availability="observed",
+            )
+            for run_sample_id in sorted(pairs[(run_label, contract_label)])
+        )
+    return occurrences, availability
 
 
 def _copy_multiqc_files(

@@ -9,37 +9,31 @@ from pydantic import BaseModel
 
 from goodomics.schemas.models import AnalyticsIngestBatch
 
+_OCCURRENCE_COLUMNS = frozenset(
+    {"data_contract_id", "run_contract_id", "run_id", "run_sample_id", "sample_id"}
+)
+
 CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
     "entity_attributes": frozenset({"data_contract_id", "field_id"}),
-    "sample_metrics": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id", "field_id"}
-    ),
-    "feature_value_numeric": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "feature_call": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "sample_interval_values": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "copy_number_segments": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
+    "sample_metrics": _OCCURRENCE_COLUMNS | {"field_id"},
+    "feature_value_numeric": _OCCURRENCE_COLUMNS,
+    "feature_call": _OCCURRENCE_COLUMNS,
+    "sample_interval_values": _OCCURRENCE_COLUMNS,
+    "copy_number_segments": _OCCURRENCE_COLUMNS,
     "variant_annotations": frozenset({"data_contract_id"}),
     "variant_transcript_annotations": frozenset({"data_contract_id"}),
-    "sample_variant_calls": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
-    "sample_structural_variant_calls": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id"}
-    ),
+    "sample_variant_calls": _OCCURRENCE_COLUMNS,
+    "sample_structural_variant_calls": _OCCURRENCE_COLUMNS,
     "timeline_events": frozenset({"subject_id", "sample_id", "run_sample_id"}),
-    "result_payloads": frozenset(
-        {"data_contract_id", "run_id", "run_sample_id", "sample_id", "field_id"}
-    ),
+    "result_payloads": _OCCURRENCE_COLUMNS | {"field_id"},
     "gene_alteration_state": frozenset(
-        {"run_sample_id", "sample_id", "subject_id", "data_contract_id"}
+        {
+            "run_sample_id",
+            "sample_id",
+            "subject_id",
+            "data_contract_id",
+            "run_contract_id",
+        }
     ),
     "cohort_summaries": frozenset({"sample_set_id", "data_contract_id"}),
     "tool_versions": frozenset({"run_id"}),
@@ -90,6 +84,19 @@ def _resolve_record_catalog_ids(
     catalog_id_maps: Mapping[str, Mapping[Any, int]],
 ) -> Any:
     updates: dict[str, int | None] = {}
+    if (
+        "run_contract_id" in columns
+        and _record_value(record, "run_contract_id") is None
+    ):
+        run_id = _record_value(record, "run_id")
+        contract_id = _record_value(record, "data_contract_id")
+        if isinstance(run_id, str) and isinstance(contract_id, str):
+            occurrence_label = f"{run_id}:{contract_id}"
+            occurrence_id = catalog_id_maps.get("run_contract_id", {}).get(
+                occurrence_label
+            )
+            if occurrence_id is not None:
+                updates["run_contract_id"] = int(occurrence_id)
     for column in columns:
         value = _record_value(record, column)
         if value is not None and not isinstance(value, int):

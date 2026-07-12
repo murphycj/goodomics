@@ -30,12 +30,6 @@ LINKERS: dict[str, JsonObject] = {
         "column": "sample_id",
         "description": "Align values by biological sample.",
     },
-    "run_sample": {
-        "id": "run_sample",
-        "label": "Run sample",
-        "column": "run_sample_id",
-        "description": "Align values by sample/run link.",
-    },
     "run": {
         "id": "run",
         "label": "Run",
@@ -63,16 +57,6 @@ LINKERS: dict[str, JsonObject] = {
 }
 
 ANALYSIS_GRAINS: dict[str, JsonObject] = {
-    "run_sample": {
-        "id": "run_sample",
-        "label": "Run samples",
-        "singular_label": "Run sample",
-        "description": "Analyze one row per processed sample/run link.",
-        "default_visualization": "table",
-        "default_linker": "run_sample",
-        "identity_columns": ["run_sample_id", "sample_id", "run_id"],
-        "valid_linkers": ["run_sample", "sample", "run"],
-    },
     "sample": {
         "id": "sample",
         "label": "Samples",
@@ -81,7 +65,7 @@ ANALYSIS_GRAINS: dict[str, JsonObject] = {
         "default_visualization": "table",
         "default_linker": "sample",
         "identity_columns": ["sample_id"],
-        "valid_linkers": ["sample", "run_sample"],
+        "valid_linkers": ["sample"],
     },
     "subject": {
         "id": "subject",
@@ -110,8 +94,8 @@ ANALYSIS_GRAINS: dict[str, JsonObject] = {
         "description": "Analyze genes, regions, features, or measured entities.",
         "default_visualization": "histogram",
         "default_linker": "feature",
-        "identity_columns": ["feature_id", "run_sample_id", "sample_id"],
-        "valid_linkers": ["feature", "sample", "run_sample"],
+        "identity_columns": ["feature_id", "sample_id"],
+        "valid_linkers": ["feature", "sample"],
     },
     "variant": {
         "id": "variant",
@@ -120,8 +104,8 @@ ANALYSIS_GRAINS: dict[str, JsonObject] = {
         "description": "Analyze variant and feature-call rows.",
         "default_visualization": "table",
         "default_linker": "feature",
-        "identity_columns": ["variant_id", "feature_id", "run_sample_id", "sample_id"],
-        "valid_linkers": ["feature", "sample", "run_sample"],
+        "identity_columns": ["variant_id", "feature_id", "sample_id"],
+        "valid_linkers": ["feature", "sample"],
     },
     "file": {
         "id": "file",
@@ -130,46 +114,46 @@ ANALYSIS_GRAINS: dict[str, JsonObject] = {
         "description": "Analyze stored files and payload artifacts.",
         "default_visualization": "table",
         "default_linker": "run",
-        "identity_columns": ["source_file_id", "run_id", "run_sample_id", "sample_id"],
-        "valid_linkers": ["run", "run_sample", "sample"],
+        "identity_columns": ["source_file_id", "run_id", "sample_id"],
+        "valid_linkers": ["run", "sample"],
     },
 }
 
 TEMPLATES: dict[str, JsonObject] = {
-    "qc_metrics_run_samples": {
-        "id": "qc_metrics_run_samples",
-        "label": "QC metrics across run samples",
-        "description": "Start a run-sample table from QC contract fields.",
-        "analysis_grain": "run_sample",
+    "qc_metrics_samples": {
+        "id": "qc_metrics_samples",
+        "label": "QC metrics across samples",
+        "description": "Start a sample table from QC contract fields.",
+        "analysis_grain": "sample",
         "visualization": "table",
-        "linker": {"kind": "run_sample"},
+        "linker": {"kind": "sample"},
         "result_policy": {"mode": "preview"},
     },
     "build_table": {
         "id": "build_table",
         "label": "Build a table",
         "description": "Choose identity and contract columns at the selected grain.",
-        "analysis_grain": "run_sample",
+        "analysis_grain": "sample",
         "visualization": "table",
-        "linker": {"kind": "run_sample"},
+        "linker": {"kind": "sample"},
         "result_policy": {"mode": "preview"},
     },
     "compare_two_fields": {
         "id": "compare_two_fields",
         "label": "Compare two fields",
-        "description": "Create a two-value scatter matched by run sample.",
-        "analysis_grain": "run_sample",
+        "description": "Create a two-value scatter matched by sample.",
+        "analysis_grain": "sample",
         "visualization": "scatter",
-        "linker": {"kind": "run_sample"},
+        "linker": {"kind": "sample"},
         "result_policy": {"mode": "preview"},
     },
     "inspect_one_sample": {
         "id": "inspect_one_sample",
         "label": "Inspect one sample",
         "description": "Start a sample-filtered detail table.",
-        "analysis_grain": "run_sample",
+        "analysis_grain": "sample",
         "visualization": "table",
-        "linker": {"kind": "run_sample"},
+        "linker": {"kind": "sample"},
         "context": {"kind": "sample"},
         "result_policy": {"mode": "preview"},
     },
@@ -417,8 +401,8 @@ def chart_rule(chart_id: str) -> JsonObject:
 def explain_insight_config(config: Mapping[str, Any]) -> str:
     """Build a compact explanation of a normalized insight config."""
 
-    analysis_grain = str(config.get("analysis_grain") or "run_sample")
-    grain = ANALYSIS_GRAINS.get(analysis_grain, ANALYSIS_GRAINS["run_sample"])
+    analysis_grain = str(config.get("analysis_grain") or "sample")
+    grain = ANALYSIS_GRAINS.get(analysis_grain, ANALYSIS_GRAINS["sample"])
     chart = str(config.get("visualization") or "table")
     raw_context = config.get("context")
     context: Mapping[str, Any] = raw_context if isinstance(raw_context, Mapping) else {}
@@ -451,7 +435,7 @@ def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
 
     messages: list[JsonObject] = []
     chart = str(config.get("visualization") or "table")
-    grain = str(config.get("analysis_grain") or "run_sample")
+    grain = str(config.get("analysis_grain") or "sample")
     if grain not in ANALYSIS_GRAINS:
         messages.append(
             {

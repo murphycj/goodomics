@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from goodomics.analysis import EXTERNAL_ONCOLOGY, analysis_method, resolve_analysis_type
 from goodomics.contracts.cbioportal import (
     contract_for_meta as cbioportal_data_contract_for_meta,
 )
@@ -21,12 +22,15 @@ from goodomics.ingest.base import (
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataContract,
+    DataContractAnalysisType,
     DataContractField,
     DataImport,
     FeatureSet,
     FileAsset,
     FileLink,
     Run,
+    RunContract,
+    RunContractSample,
     RunSample,
     Sample,
     SampleSet,
@@ -79,7 +83,7 @@ class CbioPortalParseContext:
     # cBioPortal imports are always sample-first: DataImport owns source-level
     # provenance, and each biological sample gets its own analytical run.
     project_id: str | None
-    assay: str | None
+    analysis_type_id: str
     study_meta: dict[str, str]
     contracts_by_file: dict[str, DataContract]
     metas_by_file: dict[str, CbioPortalMeta]
@@ -117,7 +121,7 @@ def parse_cbioportal_study(
     *,
     data_import_id: str | None = None,
     project_id: str | None = None,
-    assay: str | None = None,
+    analysis_type_id: str = EXTERNAL_ONCOLOGY,
 ) -> NormalizedIngestResult:
     resolved_root = root.resolve()
     if not resolved_root.is_dir():
@@ -133,7 +137,6 @@ def parse_cbioportal_study(
     contracts_by_file = {
         meta.data_filename: _contract_from_meta(
             meta,
-            assay=assay,
             project_id=project_id,
         )
         for meta in metas
@@ -144,7 +147,7 @@ def parse_cbioportal_study(
         root=resolved_root,
         data_import_id=resolved_data_import_id,
         project_id=project_id,
-        assay=assay,
+        analysis_type_id=analysis_type_id,
         study_meta=study_meta,
         contracts_by_file=contracts_by_file,
         metas_by_file=metas_by_file,
@@ -169,6 +172,12 @@ def parse_cbioportal_study(
         },
         metadata_json={"study": study_meta},
     )
+    analysis_type = resolve_analysis_type(analysis_type_id)
+    method = analysis_method(
+        CBIOPORTAL_TOOL,
+        name="cBioPortal importer",
+        method_kind="importer",
+    )
     run_template = Run(
         run_id=resolved_data_import_id,
         project_id=project_id,
@@ -177,8 +186,8 @@ def parse_cbioportal_study(
         or study_meta.get("short_name")
         or resolved_data_import_id,
         run_kind="imported_result",
-        assay=assay,
-        pipeline_name=CBIOPORTAL_TOOL,
+        analysis_type_id=analysis_type.analysis_type_id,
+        method_id=method.method_id,
         status="complete",
         metadata_json={
             "source_format": "cbioportal_study",
@@ -188,6 +197,35 @@ def parse_cbioportal_study(
         samples=sorted(context.samples.values(), key=lambda sample: sample.sample_id),
     )
     runs = [run_template, *_runs_from_context(context, run_template)]
+    contracts = sorted(
+        _data_contracts_from_context(context),
+        key=lambda contract: contract.data_contract_id,
+    )
+    run_contracts = [
+        RunContract(
+            run_contract_id=f"{run.run_id}:{contract.data_contract_id}",
+            run_id=run.run_id,
+            data_contract_id=contract.data_contract_id,
+            producer_method_id=method.method_id,
+            status="available",
+            reference_context_json={
+                "genome_build": contract.metadata_json.get("genome_build")
+            }
+            if contract.metadata_json.get("genome_build")
+            else {},
+        )
+        for run in runs
+        for contract in contracts
+    ]
+    run_contract_samples = [
+        RunContractSample(
+            run_contract_id=f"{run_sample.run_id}:{contract.data_contract_id}",
+            run_sample_id=run_sample.run_sample_id,
+            availability="observed",
+        )
+        for run_sample in context.run_samples.values()
+        for contract in contracts
+    ]
     return NormalizedIngestResult(
         run=runs[0] if runs else run_template,
         runs=runs,
@@ -200,10 +238,18 @@ def parse_cbioportal_study(
             context.run_samples.values(),
             key=lambda run_sample: run_sample.run_sample_id,
         ),
-        data_contracts=sorted(
-            _data_contracts_from_context(context),
-            key=lambda contract: contract.data_contract_id,
-        ),
+        analysis_types=[analysis_type],
+        analysis_methods=[method],
+        data_contracts=contracts,
+        data_contract_analysis_types=[
+            DataContractAnalysisType(
+                data_contract_id=contract.data_contract_id,
+                analysis_type_id=analysis_type.analysis_type_id,
+            )
+            for contract in contracts
+        ],
+        run_contracts=run_contracts,
+        run_contract_samples=run_contract_samples,
         data_contract_fields=sorted(
             context.data_contract_fields.values(),
             key=lambda field: (field.data_contract_id, field.field_id),
@@ -251,17 +297,13 @@ def _read_meta_file(path: Path) -> dict[str, str]:
 def _contract_from_meta(
     meta: CbioPortalMeta,
     *,
-    assay: str | None,
     project_id: str | None,
 ) -> DataContract:
     contract = cbioportal_data_contract_for_meta(
         meta.values,
         source_meta_file=meta.path.name,
     )
-    updates: dict[str, Any] = {
-        "assay": assay or contract.assay,
-        "project_id": project_id,
-    }
+    updates: dict[str, Any] = {"project_id": project_id}
     if contract.data_type == "feature_matrix":
         updates["value_semantics"] = _value_semantics_from_meta(meta.values, contract)
     return contract.model_copy(update=updates)
@@ -839,6 +881,7 @@ class FeatureMatrixBulkLoad:
                 f"""
                 SELECT
                     data_contract_id,
+                    mapped_run_contract_id AS run_contract_id,
                     mapped_run_id AS run_id,
                     mapped_run_sample_id AS run_sample_id,
                     mapped_sample_id AS sample_id,
@@ -938,6 +981,7 @@ class CnaMatrixBulkLoad:
                 f"""
                 SELECT
                     data_contract_id,
+                    mapped_run_contract_id AS run_contract_id,
                     mapped_run_id AS run_id,
                     mapped_run_sample_id AS run_sample_id,
                     mapped_sample_id AS sample_id,
@@ -1042,6 +1086,7 @@ class SegmentBulkLoad:
             f"""
             SELECT
                 {data_contract_id} AS data_contract_id,
+                mapped_run_contract_id AS run_contract_id,
                 mapped_run_id AS run_id,
                 mapped_run_sample_id AS run_sample_id,
                 mapped_sample_id AS sample_id,
@@ -1060,7 +1105,7 @@ class SegmentBulkLoad:
             AND try_cast("seg.mean" AS DOUBLE) IS NOT NULL
             """,
             [
-                self.genome_build or self.contract.genome_build or "unknown",
+                self.genome_build or "unknown",
                 self.source_file_id,
                 str(self.path),
             ],
@@ -1086,7 +1131,7 @@ class MutationBulkLoad:
     def load(self, connection: Any) -> None:
         source = _mutation_source_sql(
             self.path,
-            self.genome_build or self.contract.genome_build,
+            self.genome_build,
         )
         params = [str(self.path)]
         _replace_features_from_source(connection, source, params)
@@ -1194,6 +1239,7 @@ class MutationBulkLoad:
             f"""
             SELECT
                 data_contract_id,
+                mapped_run_contract_id AS run_contract_id,
                 mapped_run_id AS run_id,
                 mapped_run_sample_id AS run_sample_id,
                 mapped_sample_id AS sample_id,
@@ -1273,7 +1319,7 @@ class StructuralVariantBulkLoad:
                         _event_class(row),
                         _genome_from_build(row.get("NCBI_Build"))
                         or self.genome_build
-                        or self.contract.genome_build,
+                        or "unknown",
                         site1_feature,
                         site2_feature,
                         _clean(row.get("Site1_Chromosome")),
@@ -1290,6 +1336,12 @@ class StructuralVariantBulkLoad:
                     resolve_catalog_id(
                         "data_contract_id",
                         self.contract.data_contract_id,
+                        self.catalog_id_maps,
+                    ),
+                    resolve_catalog_id(
+                        "run_contract_id",
+                        f"{_run_id_for_sample(self.run_id, sample_id)}:"
+                        f"{self.contract.data_contract_id}",
                         self.catalog_id_maps,
                     ),
                     resolve_catalog_id(
@@ -1386,6 +1438,7 @@ def _iter_feature_matrix_batches(
                     continue
                 sample_ids = _sample_catalog_values(
                     run_id,
+                    contract_id,
                     sample_id,
                     catalog_id_maps,
                 )
@@ -1395,6 +1448,7 @@ def _iter_feature_matrix_batches(
                         sample_ids[0],
                         sample_ids[1],
                         sample_ids[2],
+                        sample_ids[3],
                         feature_id,
                         value,
                         source_file_id,
@@ -1442,6 +1496,7 @@ def _iter_cna_batches(
                     continue
                 sample_ids = _sample_catalog_values(
                     run_id,
+                    contract_id,
                     sample_id,
                     catalog_id_maps,
                 )
@@ -1452,6 +1507,7 @@ def _iter_cna_batches(
                         sample_ids[0],
                         sample_ids[1],
                         sample_ids[2],
+                        sample_ids[3],
                         feature_id,
                         code,
                         label,
@@ -1497,7 +1553,7 @@ def _add_payload(
                 data_contract_id=payload_contract_id,
                 field_id=field_id,
                 field_role="payload",
-                entity_scope="run_sample",
+                entity_scope="sample",
                 display_name=path.stem.replace("_", " ").title(),
                 value_type="json",
                 primary_table="result_payloads",
@@ -2294,14 +2350,25 @@ def _catalog_value_or_label(
 
 def _sample_catalog_values(
     base_run_id: str,
+    contract_id: str,
     sample_id: str,
     catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
-) -> tuple[Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any]:
     sample_run_id = _run_id_for_sample(base_run_id, sample_id)
     run_sample_id = _run_sample_id(sample_run_id, sample_id)
     if not catalog_id_maps:
-        return sample_run_id, run_sample_id, sample_id
+        return (
+            f"{sample_run_id}:{contract_id}",
+            sample_run_id,
+            run_sample_id,
+            sample_id,
+        )
     return (
+        resolve_catalog_id(
+            "run_contract_id",
+            f"{sample_run_id}:{contract_id}",
+            catalog_id_maps,
+        ),
         resolve_catalog_id("run_id", sample_run_id, catalog_id_maps),
         resolve_catalog_id("run_sample_id", run_sample_id, catalog_id_maps),
         resolve_catalog_id("sample_id", sample_id, catalog_id_maps),
@@ -2395,6 +2462,34 @@ def _mapped_data_contract_id_sql(
     return _sql_string(base_contract_id)
 
 
+def _mapped_run_contract_id_sql(
+    sample_column: str,
+    *,
+    base_run_id: str,
+    base_contract_id: str,
+    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+) -> str:
+    sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
+    if catalog_id_maps:
+        occurrence_map = catalog_id_maps.get("run_contract_id", {})
+        return _catalog_case_sql(
+            sample_value,
+            {
+                str(sample_id): occurrence_id
+                for sample_id in catalog_id_maps.get("sample_id", {})
+                if (
+                    occurrence_id := occurrence_map.get(
+                        f"{_run_id_for_sample(base_run_id, str(sample_id))}:"
+                        f"{base_contract_id}"
+                    )
+                )
+                is not None
+            },
+        )
+    run_id = _mapped_run_id_sql(sample_column, base_run_id=base_run_id)
+    return f"{run_id} || ':' || {_sql_string(base_contract_id)}"
+
+
 def _mapped_sample_source_sql(
     source_sql: str,
     *,
@@ -2407,12 +2502,19 @@ def _mapped_sample_source_sql(
             base_contract_id=base_contract_id,
             catalog_id_maps=catalog_id_maps,
         )
+        run_contract_id = _mapped_run_contract_id_sql(
+            "source.sample_id",
+            base_run_id=base_run_id,
+            base_contract_id=base_contract_id,
+            catalog_id_maps=catalog_id_maps,
+        )
         return f"""
             SELECT
                 source.*,
                 sample_map.run_id AS mapped_run_id,
                 sample_map.run_sample_id AS mapped_run_sample_id,
                 sample_map.sample_id AS mapped_sample_id,
+                {run_contract_id} AS mapped_run_contract_id,
                 {data_contract_id} AS data_contract_id
             FROM ({source_sql}) source
             LEFT JOIN {_CATALOG_SAMPLE_MAP_TABLE} sample_map
@@ -2436,12 +2538,19 @@ def _mapped_sample_source_sql(
         "sample_id",
         catalog_id_maps=catalog_id_maps,
     )
+    mapped_run_contract_id = _mapped_run_contract_id_sql(
+        "sample_id",
+        base_run_id=base_run_id,
+        base_contract_id=base_contract_id,
+        catalog_id_maps=catalog_id_maps,
+    )
     return f"""
         SELECT
             *,
             {mapped_run_id} AS mapped_run_id,
             {mapped_run_sample_id} AS mapped_run_sample_id,
             {mapped_sample_id} AS mapped_sample_id,
+            {mapped_run_contract_id} AS mapped_run_contract_id,
             {data_contract_id} AS data_contract_id
         FROM ({source_sql})
     """
@@ -2594,6 +2703,7 @@ _FEATURE_COLUMNS = (
 )
 _FEATURE_VALUE_COLUMNS = (
     "data_contract_id",
+    "run_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2603,6 +2713,7 @@ _FEATURE_VALUE_COLUMNS = (
 )
 _FEATURE_CALL_COLUMNS = (
     "data_contract_id",
+    "run_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2617,6 +2728,7 @@ _FEATURE_CALL_COLUMNS = (
 )
 _SEGMENT_COLUMNS = (
     "data_contract_id",
+    "run_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2655,6 +2767,7 @@ _VARIANT_ANNOTATION_COLUMNS = (
 )
 _SAMPLE_VARIANT_CALL_COLUMNS = (
     "data_contract_id",
+    "run_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",
@@ -2686,6 +2799,7 @@ _SV_EVENT_COLUMNS = (
 )
 _SV_CALL_COLUMNS = (
     "data_contract_id",
+    "run_contract_id",
     "run_id",
     "run_sample_id",
     "sample_id",

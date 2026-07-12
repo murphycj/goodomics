@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from goodomics.analysis import GENERIC_ANALYSIS, analysis_method, resolve_analysis_type
 from goodomics.contracts.base import contract as make_contract
 from goodomics.contracts.registry import built_in_data_contract
 from goodomics.contracts.tool import tool_contract_from_id
@@ -16,12 +17,15 @@ from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
     DataContract,
+    DataContractAnalysisType,
     DataContractField,
     DataImport,
     Feature,
     FileAsset,
     FileLink,
     Run,
+    RunContract,
+    RunContractSample,
     RunSample,
     Sample,
     UnresolvedAnalyticalRecord,
@@ -39,6 +43,18 @@ from goodomics.storage.sqlalchemy import (
 )
 
 ParserFunction = Callable[[Any, "ParserOutput"], None]
+
+
+def _emitted_contract_ids(batch: AnalyticsIngestBatch) -> set[str]:
+    contract_ids: set[str] = set()
+    for field_name in type(batch).model_fields:
+        for row in getattr(batch, field_name):
+            value = getattr(row, "data_contract_id", None)
+            if value is None and getattr(row, "model_extra", None):
+                value = row.model_extra.get("data_contract_id")
+            if isinstance(value, str):
+                contract_ids.add(value)
+    return contract_ids
 
 
 @dataclass
@@ -71,7 +87,7 @@ class ParserOutput:
     run_id: str
     parser_key: str
     project_id: str
-    assay: str | None = None
+    analysis_type_id: str = GENERIC_ANALYSIS
     data_import_id: str | None = None
     data_contracts: dict[str, DataContract] = field(default_factory=dict)
     samples: dict[str, Sample] = field(default_factory=dict)
@@ -382,12 +398,19 @@ class ParserOutput:
             project=project_slug,
             name=self.run_id,
             run_kind="imported_result",
-            assay=self.assay,
-            pipeline_name=self.parser_key,
+            analysis_type_id=self.analysis_type_id,
+            method_id=self.parser_key,
             status="complete",
             metadata_json={"source": "custom_parser"},
             samples=sorted(self.samples.values(), key=lambda sample: sample.sample_id),
         )
+        analysis_type = resolve_analysis_type(self.analysis_type_id)
+        method = analysis_method(
+            self.parser_key,
+            name=self.parser_key,
+            method_kind="importer",
+        )
+        emitted_contract_ids = _emitted_contract_ids(self.batch)
         return NormalizedIngestResult(
             run=run,
             data_import=data_import,
@@ -396,10 +419,38 @@ class ParserOutput:
                 self.run_samples.values(),
                 key=lambda run_sample: run_sample.run_sample_id,
             ),
+            analysis_types=[analysis_type],
+            analysis_methods=[method],
             data_contracts=sorted(
                 self.data_contracts.values(),
                 key=lambda data_contract: data_contract.data_contract_id,
             ),
+            data_contract_analysis_types=[
+                DataContractAnalysisType(
+                    data_contract_id=contract_id,
+                    analysis_type_id=analysis_type.analysis_type_id,
+                )
+                for contract_id in sorted(emitted_contract_ids)
+            ],
+            run_contracts=[
+                RunContract(
+                    run_contract_id=f"{self.run_id}:{contract_id}",
+                    run_id=self.run_id,
+                    data_contract_id=contract_id,
+                    producer_method_id=method.method_id,
+                    status="available",
+                )
+                for contract_id in sorted(emitted_contract_ids)
+            ],
+            run_contract_samples=[
+                RunContractSample(
+                    run_contract_id=f"{self.run_id}:{contract_id}",
+                    run_sample_id=run_sample.run_sample_id,
+                    availability="observed",
+                )
+                for contract_id in sorted(emitted_contract_ids)
+                for run_sample in self.run_samples.values()
+            ],
             data_contract_fields=sorted(
                 self.data_contract_fields.values(),
                 key=lambda field: (field.data_contract_id, field.field_id),
@@ -439,7 +490,7 @@ class ParserOutput:
             data_contract_id=namespace,
             field_id=field_id,
             field_role="metric",
-            entity_scope="run_sample",
+            entity_scope="sample",
             display_name=name,
             value_type="numeric" if value_type == "numeric" else "string",
             unit=unit,
@@ -472,7 +523,7 @@ class ParserOutput:
             data_contract_id=namespace,
             field_id=field_id,
             field_role="payload",
-            entity_scope="run_sample",
+            entity_scope="sample",
             display_name=name,
             value_type="json",
             primary_table="result_payloads",
@@ -518,7 +569,7 @@ class CustomParser:
             data_contract_provider=self.contracts,
             ingest_parameters=(
                 "project",
-                "assay",
+                "analysis_type_id",
                 "run_id",
                 "database_url",
                 "analytics_path",
@@ -530,7 +581,7 @@ class CustomParser:
         value: Any,
         *,
         project: str | None = None,
-        assay: str | None = None,
+        analysis_type_id: str = GENERIC_ANALYSIS,
         run_id: str | None = None,
         database_url: str | None = None,
         analytics_path: Path | None = None,
@@ -547,7 +598,7 @@ class CustomParser:
             run_id=resolved_run_id,
             parser_key=self.key,
             project_id=project_record.project_id,
-            assay=assay,
+            analysis_type_id=analysis_type_id,
             data_import_id=data_import_id,
         )
         for data_contract in self.contracts:
@@ -561,9 +612,14 @@ class CustomParser:
             store.replace_run_catalog(
                 normalized.run,
                 data_import=normalized.data_import,
+                analysis_types=normalized.analysis_types,
+                analysis_methods=normalized.analysis_methods,
                 samples=normalized.samples,
                 run_samples=normalized.run_samples,
                 data_contracts=normalized.data_contracts,
+                data_contract_analysis_types=normalized.data_contract_analysis_types,
+                run_contracts=normalized.run_contracts,
+                run_contract_samples=normalized.run_contract_samples,
                 data_contract_fields=normalized.data_contract_fields,
                 files=normalized.files,
                 file_links=normalized.file_links,

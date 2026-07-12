@@ -23,13 +23,17 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from goodomics.analysis import GENERIC_ANALYSIS, analysis_method, resolve_analysis_type
 from goodomics.contracts.registry import built_in_data_contract
 from goodomics.contracts.sdk import GOODOMICS_SDK_METRICS
 from goodomics.projects import analytics_path_for_project
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    DataContractAnalysisType,
     DataContractField,
     Run,
+    RunContract,
+    RunContractSample,
     RunSample,
     Sample,
     UnresolvedAnalyticalRecord,
@@ -84,8 +88,17 @@ class GoodomicsRun:
     project: str | None = None
     """Project ID, slug, display-ish name, or ``None`` for the default workspace."""
 
-    assay: str | None = None
-    """Optional assay label copied onto run, run-sample, and contract records."""
+    analysis_type_id: str = GENERIC_ANALYSIS
+    """Controlled analysis type ID for the run."""
+
+    method_id: str = "goodomics-sdk"
+    """Stable ID for the script, notebook, tool, or workflow being logged."""
+
+    method_version: str | None = None
+    """Optional version of the primary analysis method."""
+
+    method_kind: str = "script"
+    """Workflow, tool, algorithm, notebook, benchmark, script, or importer."""
 
     database_url: str | None = None
     """Optional SQL catalog database URL override."""
@@ -307,7 +320,7 @@ class GoodomicsRun:
         data_contracts = (
             [
                 built_in_data_contract(data_contract_id).model_copy(
-                    update={"assay": self.assay, "project_id": project.project_id}
+                    update={"project_id": project.project_id}
                 )
             ]
             if self.metrics
@@ -315,12 +328,21 @@ class GoodomicsRun:
         )
         # The SQL catalog run stores execution/context metadata and links to the
         # stable samples. It does not store the metric values themselves.
+        analysis_type = resolve_analysis_type(self.analysis_type_id)
+        method = analysis_method(
+            self.method_id,
+            name=self.method_id,
+            method_kind=self.method_kind,
+        )
         catalog_run = Run(
             run_id=run_id,
             project_id=project.project_id,
             project=project.slug,
             name=self.name,
-            assay=self.assay,
+            analysis_type_id=analysis_type.analysis_type_id,
+            method_id=method.method_id,
+            method_version=self.method_version,
+            status="complete",
             samples=samples,
             metadata_json={"source": "goodomics-sdk"},
         )
@@ -329,9 +351,39 @@ class GoodomicsRun:
         catalog_result = asyncio.run(
             store.replace_run_catalog(
                 catalog_run,
+                analysis_types=[analysis_type],
+                analysis_methods=[method],
                 samples=samples,
                 run_samples=run_samples,
                 data_contracts=data_contracts,
+                data_contract_analysis_types=[
+                    DataContractAnalysisType(
+                        data_contract_id=data_contract_id,
+                        analysis_type_id=analysis_type.analysis_type_id,
+                    )
+                ]
+                if self.metrics
+                else [],
+                run_contracts=[
+                    RunContract(
+                        run_contract_id=f"{run_id}:{data_contract_id}",
+                        run_id=run_id,
+                        data_contract_id=data_contract_id,
+                        producer_method_id=method.method_id,
+                        producer_version=self.method_version,
+                        status="available",
+                    )
+                ]
+                if self.metrics
+                else [],
+                run_contract_samples=[
+                    RunContractSample(
+                        run_contract_id=f"{run_id}:{data_contract_id}",
+                        run_sample_id=run_sample.run_sample_id,
+                        availability="observed",
+                    )
+                    for run_sample in run_samples
+                ],
                 data_contract_fields=_metric_contract_fields(
                     self.metrics,
                     data_contract_id=data_contract_id,
@@ -417,7 +469,7 @@ def _metric_contract_fields(
                 data_contract_id=data_contract_id,
                 field_id=field_id,
                 field_role="metric",
-                entity_scope="run_sample",
+                entity_scope="sample",
                 display_name=metric.name,
                 value_type=value_type,
                 unit=metric.unit,
@@ -444,7 +496,10 @@ def run(
     name: str,
     *,
     project: str | None = None,
-    assay: str | None = None,
+    analysis_type_id: str = GENERIC_ANALYSIS,
+    method_id: str = "goodomics-sdk",
+    method_version: str | None = None,
+    method_kind: str = "script",
     database_url: str | None = None,
     analytics_path: str | Path | None = None,
     auto_persist: bool = True,
@@ -455,8 +510,10 @@ def run(
         name: Public run label used as the SDK run ID.
         project: Project ID, slug, display-ish name, or ``None`` for the default
             workspace.
-        assay: Optional assay label copied onto run, run-sample, and contract
-            records.
+        analysis_type_id: Controlled analysis type ID.
+        method_id: Stable primary analysis method ID.
+        method_version: Optional primary method version.
+        method_kind: Method catalog kind.
         database_url: Optional SQL catalog database URL override.
         analytics_path: Optional direct DuckDB analytics file override.
         auto_persist: Whether successful context-manager exit should call
@@ -471,7 +528,10 @@ def run(
     return GoodomicsRun(
         name=name,
         project=project,
-        assay=assay,
+        analysis_type_id=analysis_type_id,
+        method_id=method_id,
+        method_version=method_version,
+        method_kind=method_kind,
         database_url=database_url,
         analytics_path=Path(analytics_path) if analytics_path is not None else None,
         auto_persist=auto_persist,

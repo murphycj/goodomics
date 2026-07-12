@@ -140,10 +140,10 @@ def _custom_contract(
         data_contract_id=data_contract_id,
         name=name,
         data_type="result_payload",
-        producer_tool="cbioportal",
         value_type="mixed",
-        entity_grain="run_sample",
+        entity_grain="sample",
         query_modes_json={"modes": ["payload"]},
+        intrinsic_producer_families_json={"families": ["cbioportal"]},
         description=(
             values.get("contract_description")
             or values.get("profile_description")

@@ -26,7 +26,7 @@ def run_ingest(
     *,
     ingest_type: str,
     project: str | None,
-    assay: str | None,
+    analysis_type_id: str | None,
     run_id: str | None,
     database_url: str | None,
     analytics_path: Path | None,
@@ -42,7 +42,7 @@ def run_ingest(
     # their historical parameter names while routing through one registry path.
     kwargs = {
         "project": project,
-        "assay": assay,
+        "analysis_type_id": analysis_type_id,
         "database_url": resolved_database_url,
         "analytics_path": analytics_path,
         "file_root": file_root,
@@ -52,7 +52,9 @@ def run_ingest(
     if run_id is not None:
         kwargs[source.run_id_parameter] = run_id
     callable_kwargs = {
-        key: value for key, value in kwargs.items() if key in source.ingest_parameters
+        key: value
+        for key, value in kwargs.items()
+        if key in source.ingest_parameters and value is not None
     }
     return IngestRouteResult(
         ingest_type=source.key,

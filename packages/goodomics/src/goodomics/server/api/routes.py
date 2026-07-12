@@ -18,7 +18,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast, get_args, get_origin
+from typing import Any, Literal, cast, get_args, get_origin
 from uuid import uuid4
 
 import yaml
@@ -29,6 +29,7 @@ from sqlalchemy import func, or_
 from sqlmodel import SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.analysis import GENERIC_ANALYSIS, analysis_method, resolve_analysis_type
 from goodomics.projects import (
     DEFAULT_PROJECT_ID,
     analytics_path_for_project,
@@ -38,7 +39,7 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.report.html import render_report, render_report_result
-from goodomics.schemas.models import Run, Sample
+from goodomics.schemas.models import Run, RunSample, Sample
 from goodomics.server.ai import (
     AIProviderNotConfigured,
     ChatMessage,
@@ -64,12 +65,16 @@ from goodomics.server.insights import (
 )
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    AnalysisMethodRecord,
+    AnalysisTypeRecord,
+    DataContractAnalysisTypeRecord,
     DataContractFieldRecord,
     DataContractRecord,
     DataImportRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
+    RunContractRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
@@ -93,7 +98,12 @@ class RunCreate(BaseModel):
     run_id: str | None = None
     project_id: str | None = None
     project: str | None = None
-    assay: str | None = None
+    analysis_type_id: str = GENERIC_ANALYSIS
+    method_id: str = "goodomics-api"
+    method_version: str | None = None
+    method_kind: Literal[
+        "workflow", "tool", "algorithm", "notebook", "benchmark", "script", "importer"
+    ] = "script"
     samples: list[Sample] = Field(default_factory=list)
 
 
@@ -101,7 +111,9 @@ class RunPatch(BaseModel):
     """Fields that can be patched on an existing run."""
 
     project: str | None = None
-    assay: str | None = None
+    analysis_type_id: str | None = None
+    method_id: str | None = None
+    method_version: str | None = None
 
 
 class RunPageRead(BaseModel):
@@ -143,9 +155,9 @@ class SampleRunRead(BaseModel):
     project_id: str | None = None
     name: str | None = None
     run_kind: str
-    assay: str | None = None
-    pipeline_name: str | None = None
-    pipeline_version: str | None = None
+    analysis_type_id: str
+    method_id: str
+    method_version: str | None = None
     status: str
     created_at: datetime
     run_sample_id: str
@@ -553,7 +565,8 @@ class DataContractRead(BaseModel):
     data_contract_id: str
     name: str
     data_type: str
-    assay: str | None = None
+    compatible_analysis_type_ids: list[str] = Field(default_factory=list)
+    intrinsic_producer_families: dict[str, JsonValue] = Field(default_factory=dict)
     entity_grain: str | None = None
     value_semantics: str | None = None
     summary: dict[str, JsonValue] = Field(default_factory=dict)
@@ -563,6 +576,16 @@ class DataContractRead(BaseModel):
     description: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
     fields: list[DataContractFieldRead] = Field(default_factory=list)
+
+
+class ContractResultOptionsRead(BaseModel):
+    """Bounded result-scope options compatible with one data contract."""
+
+    analysis_types: list[dict[str, str]] = Field(default_factory=list)
+    methods: list[dict[str, str]] = Field(default_factory=list)
+    method_versions: list[str] = Field(default_factory=list)
+    runs: list[dict[str, str]] = Field(default_factory=list)
+    statuses: list[str] = Field(default_factory=list)
 
 
 class AnalyticsMetricRead(BaseModel):
@@ -1151,7 +1174,9 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
         run_id=payload.run_id or _new_id("run"),
         project_id=project.project_id,
         project=project.slug,
-        assay=payload.assay,
+        analysis_type_id=payload.analysis_type_id,
+        method_id=payload.method_id,
+        method_version=payload.method_version,
         samples=[
             sample.model_copy(
                 update={"project_id": sample.project_id or project.project_id}
@@ -1159,7 +1184,26 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
             for sample in payload.samples
         ],
     )
-    await request.app.state.store.save_run(run)
+    await request.app.state.store.replace_run_catalog(
+        run,
+        analysis_types=[resolve_analysis_type(payload.analysis_type_id)],
+        analysis_methods=[
+            analysis_method(
+                payload.method_id,
+                name=payload.method_id,
+                method_kind=payload.method_kind,
+            )
+        ],
+        samples=run.samples,
+        run_samples=[
+            RunSample(
+                run_sample_id=f"{run.run_id}:{sample.sample_id}",
+                run_id=run.run_id,
+                sample_id=sample.sample_id,
+            )
+            for sample in run.samples
+        ],
+    )
     return run
 
 
@@ -1186,6 +1230,35 @@ async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
             )
             if row is None:
                 raise HTTPException(status_code=404, detail="Run not found")
+            if "analysis_type_id" in values:
+                analysis_type = await get_record_where(
+                    session,
+                    AnalysisTypeRecord,
+                    AnalysisTypeRecord.analysis_type_id
+                    == values.pop("analysis_type_id"),
+                    AnalysisTypeRecord.project_id == row.project_id,
+                )
+                if analysis_type is None:
+                    raise HTTPException(status_code=422, detail="Unknown analysis type")
+                if analysis_type.id is None:
+                    raise HTTPException(status_code=500, detail="Invalid analysis type")
+                row.analysis_type_id = analysis_type.id
+            if "method_id" in values:
+                method = await get_record_where(
+                    session,
+                    AnalysisMethodRecord,
+                    AnalysisMethodRecord.method_id == values.pop("method_id"),
+                    AnalysisMethodRecord.project_id == row.project_id,
+                )
+                if method is None:
+                    raise HTTPException(
+                        status_code=422, detail="Unknown analysis method"
+                    )
+                if method.id is None:
+                    raise HTTPException(
+                        status_code=500, detail="Invalid analysis method"
+                    )
+                row.method_id = method.id
             for key, value in values.items():
                 setattr(row, key, value)
             session.add(row)
@@ -1344,8 +1417,13 @@ async def list_data_contracts(
         if project_pk is not None:
             contracts = _prefer_project_contract_rows(contracts, project_pk)
         fields_by_contract = await _fields_by_contract(session, contracts)
+        compatibility = await _contract_analysis_type_labels(session, contracts)
     return [
-        _data_contract_read(contract, fields_by_contract.get(contract.id, []))
+        _data_contract_read(
+            contract,
+            fields_by_contract.get(contract.id, []),
+            compatibility.get(contract.id, []),
+        )
         for contract in contracts
     ]
 
@@ -1385,7 +1463,98 @@ async def get_data_contract(
         if contract is None:
             raise HTTPException(status_code=404, detail="Data contract not found")
         fields_by_contract = await _fields_by_contract(session, [contract])
-    return _data_contract_read(contract, fields_by_contract.get(contract.id, []))
+        compatibility = await _contract_analysis_type_labels(session, [contract])
+    return _data_contract_read(
+        contract,
+        fields_by_contract.get(contract.id, []),
+        compatibility.get(contract.id, []),
+    )
+
+
+@router.get(
+    "/contract-result-options/{data_contract_id:path}",
+    response_model=ContractResultOptionsRead,
+)
+async def get_contract_result_options(
+    data_contract_id: str,
+    request: Request,
+    project_id: str = Query(...),
+) -> ContractResultOptionsRead:
+    """Return compatible methods, versions, runs, and statuses for a contract."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        contract = (
+            await session.exec(
+                select(DataContractRecord).where(
+                    DataContractRecord.data_contract_id == data_contract_id,
+                    DataContractRecord.project_id == project.id,
+                )
+            )
+        ).first()
+        if contract is None:
+            raise HTTPException(status_code=404, detail="Data contract not found")
+        rows = list(
+            (
+                await session.exec(
+                    select(
+                        RunContractRecord,
+                        RunRecord,
+                        AnalysisTypeRecord,
+                        AnalysisMethodRecord,
+                    )
+                    .join(
+                        RunRecord,
+                        cast(Any, RunRecord.id) == RunContractRecord.run_id,
+                    )
+                    .join(
+                        AnalysisTypeRecord,
+                        cast(Any, AnalysisTypeRecord.id) == RunRecord.analysis_type_id,
+                    )
+                    .join(
+                        AnalysisMethodRecord,
+                        cast(Any, AnalysisMethodRecord.id) == RunRecord.method_id,
+                    )
+                    .where(
+                        RunContractRecord.data_contract_id == contract.id,
+                        RunRecord.project_id == project.id,
+                    )
+                    .limit(500)
+                )
+            ).all()
+        )
+    analysis_types = {
+        analysis_type.analysis_type_id: analysis_type.name
+        for _, _, analysis_type, _ in rows
+    }
+    methods = {method.method_id: method.name for _, _, _, method in rows}
+    return ContractResultOptionsRead(
+        analysis_types=[
+            {"id": identifier, "name": name}
+            for identifier, name in sorted(analysis_types.items())
+        ],
+        methods=[
+            {"id": identifier, "name": name}
+            for identifier, name in sorted(methods.items())
+        ],
+        method_versions=sorted(
+            {
+                str(occurrence.producer_version or run.method_version)
+                for occurrence, run, _, _ in rows
+                if occurrence.producer_version or run.method_version
+            }
+        ),
+        runs=[
+            {"id": run.run_id, "name": run.name or run.run_id} for _, run, _, _ in rows
+        ],
+        statuses=sorted(
+            {
+                value
+                for occurrence, run, _, _ in rows
+                for value in (run.status, occurrence.status)
+            }
+        ),
+    )
 
 
 @router.get("/files/{file_id}/content")
@@ -3348,7 +3517,6 @@ async def _list_runs(
             run_filter = or_(
                 func.lower(RunRecord.run_id).like(pattern),
                 func.lower(RunRecord.name).like(pattern),
-                func.lower(RunRecord.assay).like(pattern),
                 func.lower(RunRecord.status).like(pattern),
             )
             count_statement = count_statement.where(run_filter)
@@ -3378,9 +3546,19 @@ async def _run_from_row_public(session: AsyncSession, row: RunRecord) -> Run:
         project=row.project,
         name=row.name,
         run_kind=row.run_kind,
-        assay=row.assay,
-        pipeline_name=row.pipeline_name,
-        pipeline_version=row.pipeline_version,
+        analysis_type_id=cast(
+            str,
+            await _public_label(
+                session, AnalysisTypeRecord, "analysis_type_id", row.analysis_type_id
+            ),
+        ),
+        method_id=cast(
+            str,
+            await _public_label(
+                session, AnalysisMethodRecord, "method_id", row.method_id
+            ),
+        ),
+        method_version=row.method_version,
         parameters_json=row.parameters_json,
         started_at=row.started_at,
         ended_at=row.ended_at,
@@ -3454,9 +3632,19 @@ async def _sample_run_from_rows_public(
         ),
         name=run.name,
         run_kind=run.run_kind,
-        assay=run.assay,
-        pipeline_name=run.pipeline_name,
-        pipeline_version=run.pipeline_version,
+        analysis_type_id=cast(
+            str,
+            await _public_label(
+                session, AnalysisTypeRecord, "analysis_type_id", run.analysis_type_id
+            ),
+        ),
+        method_id=cast(
+            str,
+            await _public_label(
+                session, AnalysisMethodRecord, "method_id", run.method_id
+            ),
+        ),
+        method_version=run.method_version,
         status=run.status,
         created_at=run.created_at,
         run_sample_id=run_sample.run_sample_id,
@@ -3921,6 +4109,38 @@ async def _fields_by_contract(
     return grouped
 
 
+async def _contract_analysis_type_labels(
+    session: AsyncSession,
+    contracts: list[DataContractRecord],
+) -> dict[int | None, list[str]]:
+    """Load compatible controlled analysis-type labels by contract."""
+
+    contract_ids = [contract.id for contract in contracts if contract.id is not None]
+    if not contract_ids:
+        return {}
+    rows = (
+        await session.exec(
+            select(DataContractAnalysisTypeRecord, AnalysisTypeRecord)
+            .join(
+                AnalysisTypeRecord,
+                cast(Any, AnalysisTypeRecord.id)
+                == DataContractAnalysisTypeRecord.analysis_type_id,
+            )
+            .where(
+                cast(Any, DataContractAnalysisTypeRecord.data_contract_id).in_(
+                    contract_ids
+                )
+            )
+        )
+    ).all()
+    grouped: dict[int | None, list[str]] = {}
+    for association, analysis_type in rows:
+        grouped.setdefault(association.data_contract_id, []).append(
+            analysis_type.analysis_type_id
+        )
+    return grouped
+
+
 def _prefer_project_contract_rows(
     contracts: list[DataContractRecord],
     project_pk: int,
@@ -3938,6 +4158,7 @@ def _prefer_project_contract_rows(
 def _data_contract_read(
     contract: DataContractRecord,
     fields: list[DataContractFieldRecord],
+    compatible_analysis_type_ids: list[str] | None = None,
 ) -> DataContractRead:
     """Convert a data contract catalog row into its API response model."""
 
@@ -3951,7 +4172,8 @@ def _data_contract_read(
         data_contract_id=contract.data_contract_id,
         name=contract.name,
         data_type=contract.data_type,
-        assay=contract.assay,
+        compatible_analysis_type_ids=compatible_analysis_type_ids or [],
+        intrinsic_producer_families=dict(contract.intrinsic_producer_families_json),
         entity_grain=contract.entity_grain,
         value_semantics=contract.value_semantics,
         summary=dict(contract.summary_json),
