@@ -9,7 +9,7 @@ contracts:
     producer_tool: fastqc
     feature_type: tool_output
     value_type: mixed
-    entity_grain: run_sample
+    entity_grain: sample
     query_modes: [sample, metric, payload, cohort]
     description: Metrics and result payloads from FastQC outputs.
     metadata_json:
@@ -18,7 +18,7 @@ contracts:
       tool: fastqc
     fields:
       - field_id: general_stats.fastqc_raw_percent_gc
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Percent GC
         value_type: numeric
         unit: percent
@@ -35,7 +35,7 @@ contracts:
           tool_context: raw
           multiqc_module: general_stats
       - field_id: general_stats.fastqc_raw_total_sequences
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Total sequences
         value_type: numeric
         primary_table: sample_metrics

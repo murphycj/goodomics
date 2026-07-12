@@ -9,7 +9,7 @@ contracts:
     producer_tool: bbtools
     feature_type: tool_output
     value_type: mixed
-    entity_grain: run_sample
+    entity_grain: sample
     query_modes: [sample, metric, payload, cohort]
     description: Metrics and result payloads from BBTools outputs.
     metadata_json:

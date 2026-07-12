@@ -9,7 +9,7 @@ contracts:
     producer_tool: salmon
     feature_type: tool_output
     value_type: mixed
-    entity_grain: run_sample
+    entity_grain: sample
     query_modes: [sample, metric, payload, cohort]
     description: Metrics and result payloads from Salmon outputs.
     metadata_json:
@@ -18,7 +18,7 @@ contracts:
       tool: salmon
     fields:
       - field_id: general_stats.salmon_percent_mapped
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Percent mapped
         value_type: numeric
         unit: percent
@@ -34,7 +34,7 @@ contracts:
           producer_module: general_stats
           multiqc_module: general_stats
       - field_id: multiqc_salmon.percent_mapped
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Percent mapped
         value_type: numeric
         unit: percent
@@ -50,7 +50,7 @@ contracts:
           producer_module: multiqc_salmon
           multiqc_module: multiqc_salmon
       - field_id: multiqc_salmon.num_processed
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Number processed
         value_type: numeric
         primary_table: sample_metrics
@@ -65,7 +65,7 @@ contracts:
           producer_module: multiqc_salmon
           multiqc_module: multiqc_salmon
       - field_id: multiqc_salmon.num_mapped
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Number mapped
         value_type: numeric
         primary_table: sample_metrics
@@ -80,7 +80,7 @@ contracts:
           producer_module: multiqc_salmon
           multiqc_module: multiqc_salmon
       - field_id: multiqc_salmon.salmon_version
-        entity_scope: run_sample
+        entity_scope: sample
         display_name: Salmon version
         value_type: string
         primary_table: sample_metrics

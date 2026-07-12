@@ -9,7 +9,7 @@ contracts:
     producer_tool: goodomics-sdk
     feature_type: metric
     value_type: mixed
-    entity_grain: run_sample
+    entity_grain: sample
     query_modes: [sample, metric, cohort]
     description: User-logged metrics captured through the Goodomics SDK.
     metadata_json:
