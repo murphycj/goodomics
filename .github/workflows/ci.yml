@@ -66,3 +66,89 @@ jobs:
           file: docker/Dockerfile.server
           push: false
           tags: goodomics/server:ci
+
+  deploy-demo:
+    name: Deploy demo to Railway
+    if: github.ref == 'refs/heads/main'
+    needs: python
+    runs-on: ubuntu-latest
+    concurrency:
+      group: railway-demo
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/murphycj/goodomics-demo
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Goodomics
+        run: uv sync --frozen --package goodomics
+
+      - name: Download demo data
+        run: |
+          curl --fail --location --retry 3 \
+            --output "${RUNNER_TEMP}/rna-seq-data.zip" \
+            https://seqera.io/examples/rna-seq/data.zip
+          mkdir -p "${RUNNER_TEMP}/rna-seq"
+          unzip -q "${RUNNER_TEMP}/rna-seq-data.zip" \
+            -d "${RUNNER_TEMP}/rna-seq"
+
+      - name: Generate MultiQC output
+        run: |
+          uvx --from multiqc==1.35 multiqc \
+            "${RUNNER_TEMP}/rna-seq/data" \
+            --config "${RUNNER_TEMP}/rna-seq/multiqc_config.yaml" \
+            --outdir "${RUNNER_TEMP}/rna-seq/multiqc" \
+            --force
+
+      - name: Ingest demo data
+        run: |
+          uv run --package goodomics goodomics ingest \
+            --type multiqc \
+            "${RUNNER_TEMP}/rna-seq/multiqc"
+          test -s .goodomics/goodomics.db
+          test -s .goodomics/projects/prj_default/analytics.duckdb
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish demo image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.server
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:main
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=goodomics-demo
+          cache-to: type=gha,mode=max,scope=goodomics-demo
+
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+
+      - name: Deploy image to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway redeploy --service "${{ vars.RAILWAY_SERVICE_ID }}" --yes
