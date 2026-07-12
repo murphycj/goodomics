@@ -67,13 +67,13 @@ jobs:
           push: false
           tags: goodomics/server:ci
 
-  deploy-demo:
-    name: Deploy demo to Railway
+  publish-demo:
+    name: Publish demo container image
     if: github.ref == 'refs/heads/main'
     needs: python
     runs-on: ubuntu-latest
     concurrency:
-      group: railway-demo
+      group: demo-container-image
       cancel-in-progress: true
     permissions:
       contents: read
@@ -144,11 +144,3 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha,scope=goodomics-demo
           cache-to: type=gha,mode=max,scope=goodomics-demo
-
-      - name: Install Railway CLI
-        run: npm install --global @railway/cli
-
-      - name: Deploy image to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway redeploy --service "${{ vars.RAILWAY_SERVICE_ID }}" --yes
