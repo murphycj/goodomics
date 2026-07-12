@@ -447,6 +447,7 @@ CATALOG_ID_COLUMNS = frozenset(
         "project_id",
         "data_contract_id",
         "run_id",
+        "run_contract_id",
         "run_sample_id",
         "sample_id",
         "sample_set_id",
@@ -637,6 +638,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "sample_metrics": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -647,6 +649,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "feature_set_members": ("feature_set_id", "feature_id"),
         "feature_value_numeric": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -655,6 +658,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "feature_call": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -664,6 +668,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "genomic_intervals": ("feature_id",),
         "sample_interval_values": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -672,6 +677,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "copy_number_segments": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -690,6 +696,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "sample_variant_calls": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -703,6 +710,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         ),
         "sample_structural_variant_calls": (
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -718,6 +726,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         "result_payloads": (
             "payload_id",
             "data_contract_id",
+            "run_contract_id",
             "run_id",
             "run_sample_id",
             "sample_id",
@@ -730,6 +739,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "subject_id",
             "feature_id",
             "data_contract_id",
+            "run_contract_id",
             "source_event_id",
         ),
         "cohort_summaries": (
@@ -1211,6 +1221,7 @@ class DuckDBAnalyticsStore:
                 NULL AS subject_id,
                 va.feature_id,
                 svc.data_contract_id,
+                svc.run_contract_id,
                 'mutation' AS alteration_type,
                 va.consequence AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1237,6 +1248,7 @@ class DuckDBAnalyticsStore:
                 NULL AS subject_id,
                 feature_id,
                 data_contract_id,
+                run_contract_id,
                 'feature_call' AS alteration_type,
                 call_code AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1267,6 +1279,7 @@ class DuckDBAnalyticsStore:
                 NULL AS subject_id,
                 sve.site1_feature_id AS feature_id,
                 ssvc.data_contract_id,
+                ssvc.run_contract_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1294,6 +1307,7 @@ class DuckDBAnalyticsStore:
                 NULL AS subject_id,
                 sve.site2_feature_id AS feature_id,
                 ssvc.data_contract_id,
+                ssvc.run_contract_id,
                 'sv' AS alteration_type,
                 sve.event_class AS alteration_subtype,
                 TRUE AS is_altered,
@@ -1420,10 +1434,18 @@ def insert_public_select(
         for index, column in enumerate(columns)
         if column in integer_table.dimensions
     ]
+    target_columns = tuple(
+        (
+            integer_table.dimensions[column].physical_column
+            if column in integer_table.dimensions
+            else column
+        )
+        for column in columns
+    )
     connection.execute(
         f"""
         INSERT INTO {integer_table.table_name}
-            ({_column_list(integer_table.physical_columns)})
+            ({_column_list(target_columns)})
         SELECT {", ".join(select_columns)}
         FROM ({select_sql}) source
         {" ".join(joins)}

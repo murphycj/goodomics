@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import Field, SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.analysis import analysis_method, resolve_analysis_type
 from goodomics.projects import (
     DEFAULT_PROJECT_ID,
     DEFAULT_PROJECT_NAME,
@@ -21,13 +22,18 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.schemas.models import (
+    AnalysisMethod,
+    AnalysisType,
     DataContract,
+    DataContractAnalysisType,
     DataContractField,
     DataImport,
     FileAsset,
     FileLink,
     Project,
     Run,
+    RunContract,
+    RunContractSample,
     RunRelationship,
     RunSample,
     Sample,
@@ -40,29 +46,11 @@ from goodomics.storage.database import create_async_database_engine
 RecordT = TypeVar("RecordT", bound=SQLModel)
 
 
-async def _repair_current_schema(connection: Any) -> None:
-    """Apply tiny current-schema repairs for local pre-release SQLite catalogs."""
-
-    if connection.dialect.name != "sqlite":
-        return
-    sample_set_columns = (
-        await connection.exec_driver_sql("PRAGMA table_info(sample_sets)")
-    ).fetchall()
-    if not sample_set_columns:
-        return
-    column_names = {str(row[1]) for row in sample_set_columns}
-    if "updated_at" not in column_names:
-        await connection.exec_driver_sql(
-            "ALTER TABLE sample_sets ADD COLUMN updated_at DATETIME"
-        )
-        await connection.exec_driver_sql(
-            "UPDATE sample_sets SET updated_at = created_at WHERE updated_at IS NULL"
-        )
-
-
 @dataclass(frozen=True)
 class CatalogWriteResult:
     project: ProjectRecord
+    analysis_types: list[AnalysisTypeRecord]
+    analysis_methods: list[AnalysisMethodRecord]
     data_import: DataImportRecord | None
     runs: list[RunRecord]
     subjects: list[SubjectRecord]
@@ -70,6 +58,9 @@ class CatalogWriteResult:
     run_samples: list[RunSampleRecord]
     run_relationships: list[RunRelationshipRecord]
     data_contracts: list[DataContractRecord]
+    data_contract_analysis_types: list[DataContractAnalysisTypeRecord]
+    run_contracts: list[RunContractRecord]
+    run_contract_samples: list[RunContractSampleRecord]
     data_contract_fields: list[DataContractFieldRecord]
     files: list[FileRecord]
     file_links: list[FileLinkRecord]
@@ -80,6 +71,39 @@ class CatalogWriteResult:
 # These SQLModel classes are persistence records, not the public Goodomics
 # schemas. Keep database-only concerns here: table names, primary keys, indexes,
 # foreign keys, JSON column storage, and nullable columns used by SQL backends.
+class AnalysisTypeRecord(SQLModel, table=True):
+    __tablename__ = "analysis_types"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "analysis_type_id", name="uq_analysis_types_project_id"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    analysis_type_id: str = Field(max_length=255, index=True)
+    name: str = Field(max_length=255)
+    description: str | None = None
+    project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class AnalysisMethodRecord(SQLModel, table=True):
+    __tablename__ = "analysis_methods"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "method_id", name="uq_analysis_methods_project_id"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    method_id: str = Field(max_length=255, index=True)
+    name: str = Field(max_length=255)
+    method_kind: str = Field(max_length=64, index=True)
+    description: str | None = None
+    project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
 class RunRecord(SQLModel, table=True):
     __tablename__ = "runs"
 
@@ -92,9 +116,9 @@ class RunRecord(SQLModel, table=True):
     project: str | None = Field(default=None, max_length=255)
     name: str | None = Field(default=None, max_length=255)
     run_kind: str = Field(default="pipeline_run", max_length=64)
-    assay: str | None = Field(default=None, max_length=255)
-    pipeline_name: str | None = Field(default=None, max_length=255)
-    pipeline_version: str | None = Field(default=None, max_length=255)
+    analysis_type_id: int = Field(foreign_key="analysis_types.id", index=True)
+    method_id: int = Field(foreign_key="analysis_methods.id", index=True)
+    method_version: str | None = Field(default=None, max_length=255)
     parameters_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -187,11 +211,6 @@ class DataContractRecord(SQLModel, table=True):
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
     data_type: str = Field(max_length=128, index=True)
-    assay: str | None = Field(default=None, max_length=255)
-    producer_tool: str | None = Field(default=None, max_length=255)
-    producer_tool_version: str | None = Field(default=None, max_length=255)
-    producer_pipeline: str | None = Field(default=None, max_length=255)
-    genome_build: str | None = Field(default=None, max_length=64)
     feature_type: str | None = Field(default=None, max_length=128)
     value_type: str | None = Field(default=None, max_length=128)
     unit: str | None = Field(default=None, max_length=64)
@@ -201,7 +220,62 @@ class DataContractRecord(SQLModel, table=True):
     last_profiled_at: datetime | None = None
     source_fingerprint: str | None = Field(default=None, max_length=255)
     query_modes_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    intrinsic_producer_families_json: dict[str, Any] = Field(
+        default_factory=dict, sa_type=JSON
+    )
     description: str | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class DataContractAnalysisTypeRecord(SQLModel, table=True):
+    __tablename__ = "data_contract_analysis_types"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_contract_id",
+            "analysis_type_id",
+            name="uq_contract_analysis_type",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    data_contract_id: int = Field(foreign_key="data_contracts.id", index=True)
+    analysis_type_id: int = Field(foreign_key="analysis_types.id", index=True)
+
+
+class RunContractRecord(SQLModel, table=True):
+    __tablename__ = "run_contracts"
+    __table_args__ = (
+        UniqueConstraint("run_id", "data_contract_id", name="uq_run_contract"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_contract_id: str = Field(max_length=512, unique=True, index=True)
+    run_id: int = Field(foreign_key="runs.id", index=True)
+    data_contract_id: int = Field(foreign_key="data_contracts.id", index=True)
+    producer_method_id: int | None = Field(
+        default=None, foreign_key="analysis_methods.id", index=True
+    )
+    producer_version: str | None = Field(default=None, max_length=255)
+    reference_context_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    status: str = Field(default="available", max_length=64, index=True)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    created_at: datetime
+
+
+class RunContractSampleRecord(SQLModel, table=True):
+    __tablename__ = "run_contract_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_contract_id", "run_sample_id", name="uq_run_contract_sample"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_contract_id: int = Field(foreign_key="run_contracts.id", index=True)
+    run_sample_id: int = Field(foreign_key="run_samples.id", index=True)
+    availability: str = Field(max_length=64, index=True)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
@@ -341,7 +415,6 @@ class SQLModelGoodomicsStore:
     async def ensure_schema(self) -> None:
         async with self._get_engine().begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
-            await _repair_current_schema(connection)
 
     async def ensure_default_project(self) -> Project:
         return await self.ensure_project(DEFAULT_PROJECT_SLUG)
@@ -392,64 +465,34 @@ class SQLModelGoodomicsStore:
     async def save_run(self, run: Run) -> None:
         # Lightweight save path for callers that provide a Run with embedded
         # samples. Rich ingest paths use replace_run_catalog().
-        await self.ensure_schema()
-        project = await self.ensure_project(run.project_id or run.project)
-        async with AsyncSession(self._get_engine()) as session:
-            project_row = await _require_project_record(session, project.project_id)
-            project_pk = _record_id(project_row)
-            existing_run = await get_record_by_field(
-                session, RunRecord, RunRecord.run_id, run.run_id
-            )
-            existing_run_pk = _record_id(existing_run) if existing_run else None
-            await session.exec(
-                delete(QCDecisionRecord).where(
-                    QCDecisionRecord.run_id == existing_run_pk
+        await self.replace_run_catalog(
+            run,
+            samples=run.samples,
+            run_samples=[
+                RunSample(
+                    run_sample_id=f"{run.run_id}:{sample.sample_id}",
+                    run_id=run.run_id,
+                    sample_id=sample.sample_id,
                 )
-            )
-            await session.exec(
-                delete(RunSampleRecord).where(RunSampleRecord.run_id == existing_run_pk)
-            )
-
-            if existing_run is not None:
-                await session.delete(existing_run)
-
-            run_row = _run_record(
-                run,
-                project,
-                project_pk=project_pk,
-                data_import_pk=None,
-            )
-            session.add(run_row)
-            await session.flush()
-            run_pk = _record_id(run_row)
-            if run.samples:
-                sample_pk_by_label: dict[str, int] = {}
-                for sample in run.samples:
-                    sample_row = await _upsert_sample(session, sample, project_pk)
-                    await session.flush()
-                    sample_pk_by_label[sample.sample_id] = _record_id(sample_row)
-                session.add_all(
-                    [
-                        RunSampleRecord(
-                            run_sample_id=f"{run.run_id}:{sample.sample_id}",
-                            run_id=run_pk,
-                            sample_id=sample_pk_by_label[sample.sample_id],
-                        )
-                        for sample in run.samples
-                    ]
-                )
-            await session.commit()
+                for sample in run.samples
+            ],
+        )
 
     async def replace_run_catalog(
         self,
         run: Run,
         *,
         data_import: DataImport | None = None,
+        analysis_types: list[AnalysisType] | None = None,
+        analysis_methods: list[AnalysisMethod] | None = None,
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
         run_relationships: list[RunRelationship] | None = None,
         data_contracts: list[DataContract] | None = None,
+        data_contract_analysis_types: list[DataContractAnalysisType] | None = None,
+        run_contracts: list[RunContract] | None = None,
+        run_contract_samples: list[RunContractSample] | None = None,
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
@@ -465,11 +508,16 @@ class SQLModelGoodomicsStore:
         return await self.replace_runs_catalog(
             [run],
             data_import=data_import,
+            analysis_types=analysis_types,
+            analysis_methods=analysis_methods,
             subjects=subjects,
             samples=samples or run.samples,
             run_samples=run_samples,
             run_relationships=run_relationships,
             data_contracts=data_contracts,
+            data_contract_analysis_types=data_contract_analysis_types,
+            run_contracts=run_contracts,
+            run_contract_samples=run_contract_samples,
             data_contract_fields=data_contract_fields,
             files=files,
             file_links=normalized_links,
@@ -482,11 +530,16 @@ class SQLModelGoodomicsStore:
         runs: list[Run],
         *,
         data_import: DataImport | None = None,
+        analysis_types: list[AnalysisType] | None = None,
+        analysis_methods: list[AnalysisMethod] | None = None,
         subjects: list[Subject] | None = None,
         samples: list[Sample] | None = None,
         run_samples: list[RunSample] | None = None,
         run_relationships: list[RunRelationship] | None = None,
         data_contracts: list[DataContract] | None = None,
+        data_contract_analysis_types: list[DataContractAnalysisType] | None = None,
+        run_contracts: list[RunContract] | None = None,
+        run_contract_samples: list[RunContractSample] | None = None,
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
@@ -497,6 +550,19 @@ class SQLModelGoodomicsStore:
         # one parsed dataset, such as sample-scoped cBioPortal ingests.
         if not runs:
             raise ValueError("replace_runs_catalog requires at least one run")
+        if analysis_types is None:
+            analysis_types = [
+                resolve_analysis_type(value)
+                for value in sorted({run.analysis_type_id for run in runs})
+            ]
+        if analysis_methods is None:
+            analysis_methods = [
+                analysis_method(
+                    method_id,
+                    method_kind=_method_kind_from_runs(runs, method_id),
+                )
+                for method_id in sorted({run.method_id for run in runs})
+            ]
         await self.ensure_schema()
         project = await self.ensure_project(runs[0].project_id or runs[0].project)
         resolved_runs = [
@@ -534,12 +600,23 @@ class SQLModelGoodomicsStore:
                 await session.flush()
                 data_import_pk = _record_id(data_import_row)
 
+            analysis_type_rows = await _upsert_analysis_types(
+                session, analysis_types or [], project_pk
+            )
+            analysis_method_rows = await _upsert_analysis_methods(
+                session, analysis_methods or [], project_pk
+            )
+            analysis_type_pk_by_label = _id_map(analysis_type_rows, "analysis_type_id")
+            method_pk_by_label = _id_map(analysis_method_rows, "method_id")
+
             run_rows = [
                 _run_record(
                     run,
                     project,
                     project_pk=project_pk,
                     data_import_pk=data_import_pk,
+                    analysis_type_pk=analysis_type_pk_by_label[run.analysis_type_id],
+                    method_pk=method_pk_by_label[run.method_id],
                 )
                 for run in resolved_runs
             ]
@@ -592,6 +669,57 @@ class SQLModelGoodomicsStore:
                 data_contract_fields or [],
                 contract_pk_by_label,
             )
+            contract_analysis_type_rows: list[DataContractAnalysisTypeRecord] = []
+            for item in data_contract_analysis_types or []:
+                contract_pk = contract_pk_by_label[item.data_contract_id]
+                analysis_type_pk = analysis_type_pk_by_label[item.analysis_type_id]
+                row = await get_record_where(
+                    session,
+                    DataContractAnalysisTypeRecord,
+                    DataContractAnalysisTypeRecord.data_contract_id == contract_pk,
+                    DataContractAnalysisTypeRecord.analysis_type_id == analysis_type_pk,
+                )
+                if row is None:
+                    row = DataContractAnalysisTypeRecord(
+                        data_contract_id=contract_pk,
+                        analysis_type_id=analysis_type_pk,
+                    )
+                contract_analysis_type_rows.append(row)
+            session.add_all(contract_analysis_type_rows)
+            await session.flush()
+
+            run_contract_rows = [
+                RunContractRecord(
+                    run_contract_id=item.run_contract_id,
+                    run_id=run_pk_by_label[item.run_id],
+                    data_contract_id=contract_pk_by_label[item.data_contract_id],
+                    producer_method_id=_optional_map_lookup(
+                        method_pk_by_label, item.producer_method_id
+                    ),
+                    producer_version=item.producer_version,
+                    reference_context_json=dict(item.reference_context_json),
+                    status=item.status,
+                    started_at=item.started_at,
+                    ended_at=item.ended_at,
+                    metadata_json=dict(item.metadata_json),
+                    created_at=item.created_at,
+                )
+                for item in run_contracts or []
+            ]
+            session.add_all(run_contract_rows)
+            await session.flush()
+            run_contract_pk_by_label = _id_map(run_contract_rows, "run_contract_id")
+            run_contract_sample_rows = [
+                RunContractSampleRecord(
+                    run_contract_id=run_contract_pk_by_label[item.run_contract_id],
+                    run_sample_id=run_sample_pk_by_label[item.run_sample_id],
+                    availability=item.availability,
+                    metadata_json=dict(item.metadata_json),
+                )
+                for item in run_contract_samples or []
+            ]
+            session.add_all(run_contract_sample_rows)
+            await session.flush()
 
             file_rows = await _upsert_files(session, files or [], project_pk)
             file_pk_by_label = _id_map(file_rows, "file_id")
@@ -668,6 +796,8 @@ class SQLModelGoodomicsStore:
 
             result = CatalogWriteResult(
                 project=_snapshot_record(project_row),
+                analysis_types=_snapshot_records(analysis_type_rows),
+                analysis_methods=_snapshot_records(analysis_method_rows),
                 data_import=(
                     _snapshot_record(data_import_row)
                     if data_import_row is not None
@@ -679,6 +809,11 @@ class SQLModelGoodomicsStore:
                 run_samples=_snapshot_records(run_sample_rows),
                 run_relationships=_snapshot_records(run_relationship_rows),
                 data_contracts=_snapshot_records(contract_rows),
+                data_contract_analysis_types=_snapshot_records(
+                    contract_analysis_type_rows
+                ),
+                run_contracts=_snapshot_records(run_contract_rows),
+                run_contract_samples=_snapshot_records(run_contract_sample_rows),
                 data_contract_fields=_snapshot_records(contract_field_rows),
                 files=_snapshot_records(file_rows),
                 file_links=_snapshot_records(file_link_rows),
@@ -710,6 +845,10 @@ class SQLModelGoodomicsStore:
             data_import_id = await _data_import_public_id(
                 session, run_row.data_import_id
             )
+            analysis_type_id = await _analysis_type_public_id(
+                session, run_row.analysis_type_id
+            )
+            method_id = await _analysis_method_public_id(session, run_row.method_id)
             samples = [
                 await _sample_from_row_public(session, row) for row in sample_rows
             ]
@@ -720,9 +859,9 @@ class SQLModelGoodomicsStore:
             data_import_id=data_import_id,
             name=run_row.name,
             run_kind=run_row.run_kind,
-            assay=run_row.assay,
-            pipeline_name=run_row.pipeline_name,
-            pipeline_version=run_row.pipeline_version,
+            analysis_type_id=analysis_type_id,
+            method_id=method_id,
+            method_version=run_row.method_version,
             parameters_json=run_row.parameters_json,
             started_at=run_row.started_at,
             ended_at=run_row.ended_at,
@@ -844,7 +983,10 @@ def catalog_id_maps_from_records(
 
     return {
         "project_id": _id_map([result.project], "project_id"),
+        "analysis_type_id": _id_map(result.analysis_types, "analysis_type_id"),
+        "method_id": _id_map(result.analysis_methods, "method_id"),
         "data_contract_id": _id_map(result.data_contracts, "data_contract_id"),
+        "run_contract_id": _id_map(result.run_contracts, "run_contract_id"),
         "field_id": _id_map(result.data_contract_fields, "field_id"),
         "run_id": _id_map(result.runs, "run_id"),
         "run_sample_id": _id_map(result.run_samples, "run_sample_id"),
@@ -958,6 +1100,64 @@ async def _upsert_subjects(
     return rows
 
 
+async def _upsert_analysis_types(
+    session: AsyncSession,
+    analysis_types: list[AnalysisType],
+    project_id: int,
+) -> list[AnalysisTypeRecord]:
+    rows: list[AnalysisTypeRecord] = []
+    for item in analysis_types:
+        row = await get_record_where(
+            session,
+            AnalysisTypeRecord,
+            AnalysisTypeRecord.analysis_type_id == item.analysis_type_id,
+            AnalysisTypeRecord.project_id == project_id,
+        )
+        if row is None:
+            row = AnalysisTypeRecord(
+                analysis_type_id=item.analysis_type_id,
+                project_id=project_id,
+                name=item.name,
+            )
+        row.name = item.name
+        row.description = item.description
+        row.metadata_json = dict(item.metadata_json)
+        rows.append(row)
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
+async def _upsert_analysis_methods(
+    session: AsyncSession,
+    methods: list[AnalysisMethod],
+    project_id: int,
+) -> list[AnalysisMethodRecord]:
+    rows: list[AnalysisMethodRecord] = []
+    for item in methods:
+        row = await get_record_where(
+            session,
+            AnalysisMethodRecord,
+            AnalysisMethodRecord.method_id == item.method_id,
+            AnalysisMethodRecord.project_id == project_id,
+        )
+        if row is None:
+            row = AnalysisMethodRecord(
+                method_id=item.method_id,
+                project_id=project_id,
+                name=item.name,
+                method_kind=item.method_kind,
+            )
+        row.name = item.name
+        row.method_kind = item.method_kind
+        row.description = item.description
+        row.metadata_json = dict(item.metadata_json)
+        rows.append(row)
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
 async def _upsert_samples(
     session: AsyncSession,
     samples: list[Sample],
@@ -1018,11 +1218,6 @@ async def _upsert_data_contracts(
                 project_id=contract_project_id,
                 name=contract.name,
                 data_type=contract.data_type,
-                assay=contract.assay,
-                producer_tool=contract.producer_tool,
-                producer_tool_version=contract.producer_tool_version,
-                producer_pipeline=contract.producer_pipeline,
-                genome_build=contract.genome_build,
                 feature_type=contract.feature_type,
                 value_type=contract.value_type,
                 unit=contract.unit,
@@ -1032,6 +1227,9 @@ async def _upsert_data_contracts(
                 last_profiled_at=contract.last_profiled_at,
                 source_fingerprint=contract.source_fingerprint,
                 query_modes_json=dict(contract.query_modes_json),
+                intrinsic_producer_families_json=dict(
+                    contract.intrinsic_producer_families_json
+                ),
                 description=contract.description,
                 metadata_json=dict(contract.metadata_json),
             )
@@ -1039,11 +1237,6 @@ async def _upsert_data_contracts(
             row.project_id = contract_project_id
             row.name = contract.name
             row.data_type = contract.data_type
-            row.assay = contract.assay
-            row.producer_tool = contract.producer_tool
-            row.producer_tool_version = contract.producer_tool_version
-            row.producer_pipeline = contract.producer_pipeline
-            row.genome_build = contract.genome_build
             row.feature_type = contract.feature_type
             row.value_type = contract.value_type
             row.unit = contract.unit
@@ -1053,6 +1246,9 @@ async def _upsert_data_contracts(
             row.last_profiled_at = contract.last_profiled_at
             row.source_fingerprint = contract.source_fingerprint
             row.query_modes_json = dict(contract.query_modes_json)
+            row.intrinsic_producer_families_json = dict(
+                contract.intrinsic_producer_families_json
+            )
             row.description = contract.description
             row.metadata_json = dict(contract.metadata_json)
         rows.append(row)
@@ -1284,12 +1480,32 @@ async def _data_import_public_id(
     return row.data_import_id if row is not None else None
 
 
+async def _analysis_type_public_id(session: AsyncSession, value: int) -> str:
+    row = await get_record_by_field(
+        session, AnalysisTypeRecord, AnalysisTypeRecord.id, value
+    )
+    if row is None:
+        raise RuntimeError(f"Analysis type catalog row {value} was not found")
+    return row.analysis_type_id
+
+
+async def _analysis_method_public_id(session: AsyncSession, value: int) -> str:
+    row = await get_record_by_field(
+        session, AnalysisMethodRecord, AnalysisMethodRecord.id, value
+    )
+    if row is None:
+        raise RuntimeError(f"Analysis method catalog row {value} was not found")
+    return row.method_id
+
+
 def _run_record(
     run: Run,
     project: Project,
     *,
     project_pk: int,
     data_import_pk: int | None,
+    analysis_type_pk: int,
+    method_pk: int,
 ) -> RunRecord:
     return RunRecord(
         run_id=run.run_id,
@@ -1298,9 +1514,9 @@ def _run_record(
         project=run.project or project.slug or project.name,
         name=run.name,
         run_kind=run.run_kind,
-        assay=run.assay,
-        pipeline_name=run.pipeline_name,
-        pipeline_version=run.pipeline_version,
+        analysis_type_id=analysis_type_pk,
+        method_id=method_pk,
+        method_version=run.method_version,
         parameters_json=dict(run.parameters_json),
         started_at=run.started_at,
         ended_at=run.ended_at,
@@ -1308,6 +1524,17 @@ def _run_record(
         metadata_json=dict(run.metadata_json),
         created_at=run.created_at,
     )
+
+
+def _method_kind_from_runs(runs: list[Run], method_id: str) -> str:
+    run_kind = next(run.run_kind for run in runs if run.method_id == method_id)
+    if run_kind == "notebook_run":
+        return "notebook"
+    if run_kind == "benchmark_run":
+        return "benchmark"
+    if run_kind == "imported_result":
+        return "importer"
+    return "workflow"
 
 
 async def _delete_data_import_scoped_catalog(
@@ -1341,6 +1568,26 @@ async def _delete_data_import_scoped_catalog(
         delete(FileLinkRecord).where(FileLinkRecord.data_import_id == data_import_pk)
     )
     if run_ids:
+        run_contract_ids = (
+            await session.exec(
+                select(RunContractRecord.id).where(
+                    cast(Any, RunContractRecord.run_id).in_(list(run_ids))
+                )
+            )
+        ).all()
+        if run_contract_ids:
+            await session.exec(
+                delete(RunContractSampleRecord).where(
+                    cast(Any, RunContractSampleRecord.run_contract_id).in_(
+                        list(run_contract_ids)
+                    )
+                )
+            )
+            await session.exec(
+                delete(RunContractRecord).where(
+                    cast(Any, RunContractRecord.id).in_(list(run_contract_ids))
+                )
+            )
         await session.exec(
             delete(RunRelationshipRecord).where(
                 cast(Any, RunRelationshipRecord.source_run_id).in_(list(run_ids))
@@ -1377,6 +1624,11 @@ async def _delete_run_scoped_catalog(
             select(RunSampleRecord.id).where(RunSampleRecord.run_id == run_pk)
         )
     ).all()
+    run_contract_ids = (
+        await session.exec(
+            select(RunContractRecord.id).where(RunContractRecord.run_id == run_pk)
+        )
+    ).all()
     contract_ids = (
         await session.exec(
             select(DataContractRecord.id).where(
@@ -1408,6 +1660,19 @@ async def _delete_run_scoped_catalog(
             | (RunRelationshipRecord.target_run_id == run_pk)
         )
     )
+    if run_contract_ids:
+        await session.exec(
+            delete(RunContractSampleRecord).where(
+                cast(Any, RunContractSampleRecord.run_contract_id).in_(
+                    list(run_contract_ids)
+                )
+            )
+        )
+        await session.exec(
+            delete(RunContractRecord).where(
+                cast(Any, RunContractRecord.id).in_(list(run_contract_ids))
+            )
+        )
     await session.exec(delete(FileLinkRecord).where(FileLinkRecord.run_id == run_pk))
     await session.exec(delete(RunSampleRecord).where(RunSampleRecord.run_id == run_pk))
     if contract_ids:
