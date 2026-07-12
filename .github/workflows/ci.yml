@@ -82,7 +82,7 @@ jobs:
           context: .
           file: docker/Dockerfile.server
           push: true
-          tags: ${{ env.IMAGE_NAME }}:main
+          tags: ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha,scope=goodomics-main
           cache-to: type=gha,mode=max,scope=goodomics-main
 
@@ -98,7 +98,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_NAME: ghcr.io/murphycj/goodomics
+      IMAGE_NAME: ghcr.io/murphycj/goodomics-demo
 
     steps:
       - name: Check out repository
@@ -158,6 +158,6 @@ jobs:
           context: .
           file: docker/Dockerfile.server
           push: true
-          tags: ${{ env.IMAGE_NAME }}:demo
+          tags: ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha,scope=goodomics-demo
           cache-to: type=gha,mode=max,scope=goodomics-demo
