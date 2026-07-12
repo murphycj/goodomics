@@ -48,25 +48,6 @@ jobs:
       - name: Build goodomics package
         run: uv run python -m build packages/goodomics-full
 
-  docker:
-    name: Docker image build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build server image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.server
-          push: false
-          tags: goodomics/server:ci
-
   publish-main:
     name: Publish standard container image
     if: github.ref == 'refs/heads/main'
