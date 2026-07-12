@@ -35,8 +35,6 @@ def contract(
     producer_tool: str | None = None,
     feature_type: str | None = None,
     value_type: str | None = None,
-    genome_build: str | None = None,
-    assay: str | None = None,
     query_modes: Iterable[str],
     entity_grain: str | None = None,
     value_semantics: str | None = None,
@@ -49,14 +47,14 @@ def contract(
         data_contract_id=data_contract_id,
         name=name,
         data_type=data_type,
-        assay=assay,
-        producer_tool=producer_tool,
-        genome_build=genome_build,
         feature_type=feature_type,
         value_type=value_type,
         entity_grain=entity_grain,
         value_semantics=value_semantics,
         query_modes_json={"modes": list(query_modes)},
+        intrinsic_producer_families_json=(
+            {"families": [producer_tool]} if producer_tool else {}
+        ),
         description=description,
         metadata_json={"contract_scope": "semantic_contract"},
     )

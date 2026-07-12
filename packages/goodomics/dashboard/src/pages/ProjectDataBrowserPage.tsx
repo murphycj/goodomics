@@ -74,7 +74,7 @@ const SAMPLE_COLUMN_OPTIONS: GridColumnOption[] = [
 
 const RUN_COLUMN_OPTIONS: GridColumnOption[] = [
   { key: "run", label: "Run" },
-  { key: "assay", label: "Assay" },
+  { key: "analysis_type_id", label: "Analysis type" },
   { key: "status", label: "Status" },
   { key: "created_at", label: "Created" },
   { key: "samples", label: "Samples" },
@@ -516,11 +516,11 @@ function useRunColumns(hiddenColumns: Set<string>) {
         ),
       },
       {
-        key: "assay",
-        name: "Assay",
+        key: "analysis_type_id",
+        name: "Analysis type",
         minWidth: 160,
         resizable: true,
-        renderCell: ({ row }) => <CellValue value={row.assay} />,
+        renderCell: ({ row }) => <CellValue value={row.analysis_type_id} />,
       },
       {
         key: "status",

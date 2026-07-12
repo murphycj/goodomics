@@ -202,7 +202,7 @@ function RunsTable({
               tabIndex={0}
             >
               <TableCell className="font-bold">{run.name ?? run.run_id}</TableCell>
-              <TableCell>{run.assay ?? "—"}</TableCell>
+              <TableCell>{run.analysis_type_id}</TableCell>
               <TableCell>{run.status}</TableCell>
               <TableCell>{formatDate(run.created_at)}</TableCell>
               <TableCell>{run.samples.length}</TableCell>

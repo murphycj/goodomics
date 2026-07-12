@@ -14,7 +14,7 @@ BUILT_IN_SOURCES: tuple[SourceSpec, ...] = (
         result_printer="goodomics.ingest.runner:print_cbioportal_ingest_result",
         ingest_parameters=(
             "project",
-            "assay",
+            "analysis_type_id",
             "data_import_id",
             "database_url",
             "analytics_path",
@@ -32,7 +32,7 @@ BUILT_IN_SOURCES: tuple[SourceSpec, ...] = (
         result_printer="goodomics.ingest.runner:print_multiqc_ingest_results",
         ingest_parameters=(
             "project",
-            "assay",
+            "analysis_type_id",
             "run_id",
             "database_url",
             "analytics_path",

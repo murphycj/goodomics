@@ -354,11 +354,11 @@ def tool_schemas() -> list[dict[str, Any]]:
         ),
         _tool(
             "list_project_runs",
-            "List project runs with optional status or assay filters.",
+            "List project runs with optional status or analysis-type filters.",
             {
                 "project": _string(required=True),
                 "status": _string(),
-                "assay": _string(),
+                "analysis_type_id": _string(),
                 "limit": _int(),
             },
         ),

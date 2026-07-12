@@ -7,13 +7,18 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from goodomics.schemas.models import (
+    AnalysisMethod,
+    AnalysisType,
     AnalyticsIngestBatch,
     DataContract,
+    DataContractAnalysisType,
     DataContractField,
     DataImport,
     FileAsset,
     FileLink,
     Run,
+    RunContract,
+    RunContractSample,
     RunRelationship,
     RunSample,
     Sample,
@@ -67,7 +72,14 @@ class NormalizedIngestResult:
     samples: list[Sample] = field(default_factory=list)
     run_samples: list[RunSample] = field(default_factory=list)
     run_relationships: list[RunRelationship] = field(default_factory=list)
+    analysis_types: list[AnalysisType] = field(default_factory=list)
+    analysis_methods: list[AnalysisMethod] = field(default_factory=list)
     data_contracts: list[DataContract] = field(default_factory=list)
+    data_contract_analysis_types: list[DataContractAnalysisType] = field(
+        default_factory=list
+    )
+    run_contracts: list[RunContract] = field(default_factory=list)
+    run_contract_samples: list[RunContractSample] = field(default_factory=list)
     data_contract_fields: list[DataContractField] = field(default_factory=list)
     files: list[FileAsset] = field(default_factory=list)
     file_links: list[FileLink] = field(default_factory=list)

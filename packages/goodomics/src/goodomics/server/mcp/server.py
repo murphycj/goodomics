@@ -101,22 +101,22 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
     async def list_project_runs(
         project: str,
         status: str | None = None,
-        assay: str | None = None,
+        analysis_type_id: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """List runs for a project, optionally filtered by status or assay."""
+        """List runs filtered by status or controlled analysis type."""
         return await _logged_tool_call(
             "list_project_runs",
             {
                 "project": project,
                 "status": status,
-                "assay": assay,
+                "analysis_type_id": analysis_type_id,
                 "limit": limit,
             },
             tools.list_project_runs(
                 project=project,
                 status=status,
-                assay=assay,
+                analysis_type_id=analysis_type_id,
                 limit=limit,
             ),
         )

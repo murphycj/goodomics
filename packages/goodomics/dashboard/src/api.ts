@@ -8,7 +8,9 @@ const runSchema = z.object({
   project: z.string().nullable(),
   name: z.string().nullable(),
   run_kind: z.string().default('pipeline_run'),
-  assay: z.string().nullable(),
+  analysis_type_id: z.string(),
+  method_id: z.string(),
+  method_version: z.string().nullable(),
   status: z.string().default('unknown'),
   created_at: z.string(),
   samples: z.array(z.unknown()).default([]),
@@ -64,9 +66,9 @@ const sampleRunSchema = z.object({
   project_id: z.string().nullable(),
   name: z.string().nullable(),
   run_kind: z.string(),
-  assay: z.string().nullable(),
-  pipeline_name: z.string().nullable(),
-  pipeline_version: z.string().nullable(),
+  analysis_type_id: z.string(),
+  method_id: z.string(),
+  method_version: z.string().nullable(),
   status: z.string(),
   created_at: z.string(),
   run_sample_id: z.string(),
@@ -207,7 +209,8 @@ const dataContractSchema = z.object({
   data_contract_id: z.string(),
   name: z.string(),
   data_type: z.string(),
-  assay: z.string().nullable(),
+  compatible_analysis_type_ids: z.array(z.string()).default([]),
+  intrinsic_producer_families: z.record(z.string(), z.unknown()).default({}),
   entity_grain: z.string().nullable(),
   value_semantics: z.string().nullable(),
   summary: z.record(z.string(), z.unknown()).default({}),
@@ -217,6 +220,14 @@ const dataContractSchema = z.object({
   description: z.string().nullable(),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
   fields: z.array(dataContractFieldSchema).default([]),
+});
+
+const contractResultOptionsSchema = z.object({
+  analysis_types: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
+  methods: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
+  method_versions: z.array(z.string()).default([]),
+  runs: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
+  statuses: z.array(z.string()).default([]),
 });
 
 const insightSchema = z.object({
@@ -604,6 +615,14 @@ export function listProjectDatabaseTables(projectId: string) {
 export function listProjectDataContracts(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
   return getJson(`/api/v1/contracts?${params.toString()}`, z.array(dataContractSchema));
+}
+
+export function getContractResultOptions(projectId: string, dataContractId: string) {
+  const params = new URLSearchParams({ project_id: projectId });
+  return getJson(
+    `/api/v1/contract-result-options/${encodeURIComponent(dataContractId)}?${params.toString()}`,
+    contractResultOptionsSchema,
+  );
 }
 
 export function getInsightCatalog() {

@@ -68,7 +68,12 @@ TEMPLATE_OPTION = typer.Option(
     None, "--template", "-T", help="YAML or JSON report template config."
 )
 PROJECT_OPTION = typer.Option(None, "--project", "-p")
-ASSAY_OPTION = typer.Option(None, "--assay", "-a")
+ANALYSIS_TYPE_OPTION = typer.Option(
+    None,
+    "--analysis-type",
+    "-a",
+    help="Controlled analysis type ID, such as rna_sequencing.",
+)
 INGEST_TYPE_OPTION = typer.Option(
     "multiqc",
     "--type",
@@ -128,7 +133,7 @@ def default_ingest(
     results: Path = RESULTS_ARGUMENT,
     ingest_type: str = INGEST_TYPE_OPTION,
     project: str | None = PROJECT_OPTION,
-    assay: str | None = ASSAY_OPTION,
+    analysis_type_id: str | None = ANALYSIS_TYPE_OPTION,
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
     analytics_path: Path | None = ANALYTICS_PATH_OPTION,
@@ -142,7 +147,7 @@ def default_ingest(
             results,
             ingest_type=ingest_type,
             project=project,
-            assay=assay,
+            analysis_type_id=analysis_type_id,
             run_id=run_id,
             database_url=database_url,
             analytics_path=analytics_path,
@@ -246,7 +251,7 @@ def ingest(
     results: Path = RESULTS_ARGUMENT,
     ingest_type: str = INGEST_TYPE_OPTION,
     project: str | None = PROJECT_OPTION,
-    assay: str | None = ASSAY_OPTION,
+    analysis_type_id: str | None = ANALYSIS_TYPE_OPTION,
     report_name: str | None = REPORT_OPTION,
     cohort: str | None = COHORT_OPTION,
     run_id: str | None = RUN_ID_OPTION,
@@ -266,7 +271,7 @@ def ingest(
             results,
             ingest_type=ingest_type,
             project=project,
-            assay=assay,
+            analysis_type_id=analysis_type_id,
             run_id=run_id,
             database_url=database_url,
             analytics_path=analytics_path,

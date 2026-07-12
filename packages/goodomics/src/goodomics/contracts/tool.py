@@ -36,7 +36,7 @@ def tool_results_contract(
         producer_tool=normalized_tool,
         feature_type="tool_output",
         value_type="mixed",
-        entity_grain="run_sample",
+        entity_grain="sample",
         query_modes=["sample", "metric", "payload", "cohort"],
         description=f"Metrics and result payloads from {display_base} outputs.",
     )

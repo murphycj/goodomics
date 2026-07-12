@@ -59,11 +59,8 @@ class DataContractSpec(GoodomicsModel):
     data_contract_id: str
     name: str
     data_type: str
-    assay: str | None = None
     producer_tool: str | None = None
-    producer_tool_version: str | None = None
     producer_pipeline: str | None = None
-    genome_build: str | None = None
     feature_type: str | None = None
     value_type: str | None = None
     unit: str | None = None
@@ -81,11 +78,6 @@ class DataContractSpec(GoodomicsModel):
             data_contract_id=self.data_contract_id,
             name=self.name,
             data_type=self.data_type,
-            assay=self.assay,
-            producer_tool=self.producer_tool,
-            producer_tool_version=self.producer_tool_version,
-            producer_pipeline=self.producer_pipeline,
-            genome_build=self.genome_build,
             feature_type=self.feature_type,
             value_type=self.value_type,
             unit=self.unit,
@@ -94,6 +86,13 @@ class DataContractSpec(GoodomicsModel):
             summary_json=dict(self.summary_json),
             source_fingerprint=self.source_fingerprint,
             query_modes_json={"modes": list(self.query_modes)},
+            intrinsic_producer_families_json={
+                "families": [
+                    value
+                    for value in (self.producer_tool, self.producer_pipeline)
+                    if value
+                ]
+            },
             description=self.description,
             metadata_json=dict(self.metadata_json),
         )

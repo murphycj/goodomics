@@ -16,6 +16,8 @@ from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
+    AnalysisMethodRecord,
+    AnalysisTypeRecord,
     DataContractFieldRecord,
     DataContractRecord,
     DataImportRecord,
@@ -321,10 +323,10 @@ class GoodomicsQueryTools:
         self,
         project: str,
         status: str | None = None,
-        assay: str | None = None,
+        analysis_type_id: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """List runs for one required project with optional assay/status filters."""
+        """List runs for a project with optional analysis-type/status filters."""
 
         # Project-scoped run listing is stricter than list_recent_runs(): a
         # project reference is required and must resolve cleanly.
@@ -336,7 +338,7 @@ class GoodomicsQueryTools:
             "runs": await self._run_rows(
                 project_id=project_id,
                 status=status,
-                assay=assay,
+                analysis_type_id=analysis_type_id,
                 limit=limit,
                 order_recent=True,
             ),
@@ -678,7 +680,7 @@ class GoodomicsQueryTools:
         *,
         project_id: str | None = None,
         status: str | None = None,
-        assay: str | None = None,
+        analysis_type_id: str | None = None,
         limit: int = 20,
         order_recent: bool = False,
     ) -> list[dict[str, Any]]:
@@ -693,8 +695,14 @@ class GoodomicsQueryTools:
             statement = statement.where(RunRecord.project_id == project_pk)
         if status:
             statement = statement.where(func.lower(RunRecord.status) == status.lower())
-        if assay:
-            statement = statement.where(func.lower(RunRecord.assay) == assay.lower())
+        if analysis_type_id:
+            statement = statement.join(
+                AnalysisTypeRecord,
+                cast(Any, AnalysisTypeRecord.id) == RunRecord.analysis_type_id,
+            ).where(
+                func.lower(AnalysisTypeRecord.analysis_type_id)
+                == analysis_type_id.lower()
+            )
         if order_recent:
             statement = statement.order_by(
                 cast(Any, RunRecord.created_at).desc(),
@@ -800,6 +808,12 @@ async def _run_record_payload_public(
     data_import_id = await _public_label(
         session, DataImportRecord, "data_import_id", row.data_import_id
     )
+    analysis_type_id = await _public_label(
+        session, AnalysisTypeRecord, "analysis_type_id", row.analysis_type_id
+    )
+    method_id = await _public_label(
+        session, AnalysisMethodRecord, "method_id", row.method_id
+    )
     app_path = _run_path(project_id, row.run_id)
     return {
         "run_id": row.run_id,
@@ -812,9 +826,9 @@ async def _run_record_payload_public(
             f"[{row.name or row.run_id}]({app_path})" if app_path else row.run_id
         ),
         "run_kind": row.run_kind,
-        "assay": row.assay,
-        "pipeline_name": row.pipeline_name,
-        "pipeline_version": row.pipeline_version,
+        "analysis_type_id": analysis_type_id,
+        "method_id": method_id,
+        "method_version": row.method_version,
         "status": row.status,
         "created_at": row.created_at.isoformat(),
         "started_at": (
@@ -1070,7 +1084,7 @@ def _data_result_payload(
         "data_contract_id": contract.data_contract_id,
         "name": contract.name,
         "data_type": contract.data_type,
-        "assay": contract.assay,
+        "intrinsic_producer_families": contract.intrinsic_producer_families_json,
         "entity_grain": contract.entity_grain,
         "value_semantics": contract.value_semantics,
         "description": contract.description,

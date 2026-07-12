@@ -20,6 +20,7 @@ from rich.progress import (
 )
 from rich.text import Text
 
+from goodomics.analysis import EXTERNAL_ONCOLOGY
 from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import analytics_path_for_project
 from goodomics.storage.analytics_resolution import (
@@ -56,7 +57,7 @@ def ingest_cbioportal_study(
     *,
     data_import_id: str | None = None,
     project: str | None = None,
-    assay: str | None = None,
+    analysis_type_id: str = EXTERNAL_ONCOLOGY,
     database_url: str = DEFAULT_DATABASE_URL,
     analytics_path: Path | None = None,
     show_progress: bool = False,
@@ -89,7 +90,7 @@ def ingest_cbioportal_study(
             root,
             data_import_id=resolved_data_import_id,
             project_id=project_record.project_id,
-            assay=assay,
+            analysis_type_id=analysis_type_id,
         )
         total_steps = 4 + len(parsed.bulk_loads)
         if progress is not None and task_id is not None:
@@ -100,10 +101,15 @@ def ingest_cbioportal_study(
             catalog_store.replace_runs_catalog(
                 parsed.all_runs,
                 data_import=parsed.data_import,
+                analysis_types=parsed.analysis_types,
+                analysis_methods=parsed.analysis_methods,
                 subjects=parsed.subjects,
                 samples=parsed.samples,
                 run_samples=parsed.run_samples,
                 data_contracts=parsed.data_contracts,
+                data_contract_analysis_types=parsed.data_contract_analysis_types,
+                run_contracts=parsed.run_contracts,
+                run_contract_samples=parsed.run_contract_samples,
                 data_contract_fields=parsed.data_contract_fields,
                 files=parsed.files,
                 file_links=parsed.file_links,

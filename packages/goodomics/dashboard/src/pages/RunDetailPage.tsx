@@ -156,7 +156,11 @@ function RunOverview({
           <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
             <Detail label="Run ID" value={run.run_id} />
             <Detail label="Project ref" value={run.project_id ?? "—"} />
-            <Detail label="Assay" value={run.assay ?? "—"} />
+            <Detail label="Analysis type" value={run.analysis_type_id} />
+            <Detail
+              label="Analysis method"
+              value={`${run.method_id}${run.method_version ? ` · ${run.method_version}` : ""}`}
+            />
             <Detail label="Created" value={formatDate(run.created_at)} />
           </div>
         </>
