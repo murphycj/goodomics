@@ -136,6 +136,8 @@ class ProjectRecord(SQLModel, table=True):
     name: str = Field(max_length=255)
     description: str | None = None
     default_report_id: str | None = Field(default=None, max_length=255)
+    visibility: str = Field(default="private", max_length=32, index=True)
+    default_storage_location: str | None = Field(default=None, max_length=255)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
 
@@ -328,6 +330,8 @@ class FileRecord(SQLModel, table=True):
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     path: str | None = Field(default=None, max_length=2048)
     uri: str | None = Field(default=None, max_length=2048)
+    storage_location: str | None = Field(default=None, max_length=255, index=True)
+    object_key: str | None = Field(default=None, max_length=2048)
     file_role: str = Field(max_length=255)
     format: str | None = Field(default=None, max_length=255)
     size_bytes: int | None = None
@@ -1322,6 +1326,8 @@ async def _upsert_files(
                 project_id=project_id,
                 path=file.path,
                 uri=file.uri,
+                storage_location=file.storage_location,
+                object_key=file.object_key,
                 file_role=file.file_role,
                 format=file.format,
                 size_bytes=file.size_bytes,
@@ -1333,6 +1339,8 @@ async def _upsert_files(
             row.project_id = project_id
             row.path = file.path
             row.uri = file.uri
+            row.storage_location = file.storage_location
+            row.object_key = file.object_key
             row.file_role = file.file_role
             row.format = file.format
             row.size_bytes = file.size_bytes
