@@ -151,7 +151,7 @@ def test_run_ingest_routes_multiqc_through_source_registry(tmp_path: Path) -> No
         multiqc_dir,
         ingest_type="multiqc",
         project="demo",
-        assay="rnaseq",
+        analysis_type_id="rna_sequencing",
         run_id="registry-run",
         database_url=database_url,
         analytics_path=analytics_path,
@@ -196,7 +196,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
     result = parse_table.ingest(
         tmp_path / "input.csv",
         project="demo",
-        assay="rnaseq",
+        analysis_type_id="rna_sequencing",
         run_id="custom-run",
         database_url=database_url,
         analytics_path=analytics_path,

@@ -181,7 +181,7 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
         json={
             "run_id": "rna-run",
             "project": "rnaseq-core",
-            "assay": "RNA-seq",
+            "analysis_type_id": "rna_sequencing",
             "samples": [{"sample_id": "S1", "sample_name": "Tumor RNA"}],
         },
     )
@@ -198,7 +198,7 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     assert [run["run_id"] for run in scoped_runs.json()["items"]] == ["rna-run"]
     searched_runs = client.get(
         f"/api/v1/projects/{project['project_id']}/runs",
-        params={"search": "rna-seq"},
+        params={"search": "rna-run"},
     )
     assert searched_runs.status_code == 200
     assert searched_runs.json()["total"] == 1
@@ -322,7 +322,7 @@ def test_query_tools_resolve_project_and_list_read_only_context(
         json={
             "run_id": "rna-prod-run",
             "project": "rnaseq-prod",
-            "assay": "RNA-seq",
+            "analysis_type_id": "rna_sequencing",
             "samples": [{"sample_id": "S1 Read 1", "sample_name": "Tumor RNA"}],
         },
     )
@@ -339,7 +339,9 @@ def test_query_tools_resolve_project_and_list_read_only_context(
     ]:
         return (
             await tools.resolve_project("RNA seq production"),
-            await tools.list_project_runs(created["project_id"], assay="RNA-seq"),
+            await tools.list_project_runs(
+                created["project_id"], analysis_type_id="rna_sequencing"
+            ),
             await tools.list_project_samples("rnaseq-prod", query="tumor"),
             await tools.get_run("rna-prod-run", project="rnaseq-prod"),
             await tools.list_run_samples("rna-prod-run", project="rnaseq-prod"),
@@ -1000,7 +1002,7 @@ def test_contract_browser_and_contract_first_insight_execution(
                             "data_contract_id": "salmon:results",
                         },
                         "fields": ["general_stats.salmon_percent_mapped"],
-                        "entity": "run_sample",
+                        "entity": "sample",
                         "measures": [
                             {
                                 "field": "general_stats.salmon_percent_mapped",
@@ -1027,7 +1029,7 @@ def test_contract_browser_and_contract_first_insight_execution(
     assert result.status_code == 200
     rows = result.json()["result"]["rows"]
     assert rows
-    assert result.json()["result"]["columns"] == ["run_sample_id", "average_mapped"]
+    assert result.json()["result"]["columns"] == ["sample_id", "average_mapped"]
 
 
 def test_contract_series_charts_match_catalog_field_ids(
@@ -1052,14 +1054,14 @@ def test_contract_series_charts_match_catalog_field_ids(
         "version": 1,
         "title": "Salmon mapped",
         "context": {"kind": "cohort"},
-        "analysis_grain": "run_sample",
+        "analysis_grain": "sample",
         "query": {
             "source": {
                 "kind": "data_contract",
                 "data_contract_id": "salmon:results",
             },
             "fields": [field_id],
-            "entity": "run_sample",
+            "entity": "sample",
             "measures": [],
             "limit": 1000,
         },
@@ -1086,9 +1088,7 @@ def test_contract_series_charts_match_catalog_field_ids(
             "visualization": "table",
             "series": [],
             "table_columns": [
-                {"kind": "identity", "column": "run_sample_id"},
                 {"kind": "identity", "column": "sample_id"},
-                {"kind": "identity", "column": "run_id"},
                 {
                     "kind": "contract_field",
                     "contract_id": "salmon:results",
@@ -1098,8 +1098,8 @@ def test_contract_series_charts_match_catalog_field_ids(
             ],
             "query": {
                 **base_config["query"],
-                "dimensions": ["run_sample_id", "sample_id", "run_id"],
-                "columns": ["run_sample_id", "sample_id", "run_id", field_alias],
+                "dimensions": ["sample_id"],
+                "columns": ["sample_id", field_alias],
             },
         }
         histogram_config = {
@@ -1126,11 +1126,9 @@ def test_contract_series_charts_match_catalog_field_ids(
     assert table_response.status_code == 200
     table_result = table_response.json()["result"]
     assert table_result["rows"]
-    assert table_result["analysis_grain"] == "run_sample"
+    assert table_result["analysis_grain"] == "sample"
     assert table_result["columns"] == [
-        "run_sample_id",
         "sample_id",
-        "run_id",
         "general_stats_salmon_percent_mapped",
     ]
     assert isinstance(
@@ -1450,7 +1448,11 @@ def test_insight_and_report_round_trip_execute_and_cache(
     project_id = project["project_id"]
     created_run = client.post(
         "/api/v1/runs",
-        json={"run_id": "report-run-1", "project_id": project_id, "assay": "rna"},
+        json={
+            "run_id": "report-run-1",
+            "project_id": project_id,
+            "analysis_type_id": "rna_sequencing",
+        },
     )
     assert created_run.status_code == 201
 
@@ -1640,7 +1642,7 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
         json={
             "config": {
                 "visualization": "scatter",
-                "analysis_grain": "run_sample",
+                "analysis_grain": "sample",
                 "series": [
                     {
                         "contract_id": "salmon:results",
@@ -1661,12 +1663,11 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
     body = catalog.json()
     assert {chart["id"] for chart in body["charts"]} >= {"scatter", "table"}
     assert {grain["id"] for grain in body["analysis_grains"]} >= {
-        "run_sample",
         "sample",
         "variant",
     }
     assert {template["id"] for template in body["templates"]} >= {
-        "qc_metrics_run_samples",
+        "qc_metrics_samples",
         "compare_two_fields",
         "variant_call_table",
     }
@@ -1785,7 +1786,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
             json={
                 "run_id": f"policy-run-{index}",
                 "project_id": project_id,
-                "assay": "rna",
+                "analysis_type_id": "rna_sequencing",
             },
         )
         assert response.status_code == 201

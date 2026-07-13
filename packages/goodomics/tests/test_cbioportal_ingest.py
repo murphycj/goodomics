@@ -297,7 +297,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         study,
         data_import_id="run-cbio",
         project="demo",
-        assay="cell_line_panel",
+        analysis_type_id="external_oncology",
         database_url=database_url,
         analytics_path=analytics_path,
     )
@@ -533,7 +533,7 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
     result = ingest_cbioportal_study(
         study,
         project="demo",
-        assay="cell_line_panel",
+        analysis_type_id="external_oncology",
         database_url=database_url,
         analytics_path=analytics_path,
     )

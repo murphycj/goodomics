@@ -92,13 +92,13 @@ def _sample_pk(sample_id: str) -> int:
 
 
 def test_sdk_run_collects_metrics_and_files() -> None:
-    qc_run = run("demo", assay="rnaseq")
+    qc_run = run("demo", analysis_type_id="rna_sequencing")
     qc_run.log_metric("sample-1", "reads", 42, unit="count")
     qc_run.metric("status", "ok")
     qc_run.log_file(Path("results") / "multiqc.html")
 
     assert qc_run.name == "demo"
-    assert qc_run.assay == "rnaseq"
+    assert qc_run.analysis_type_id == "rna_sequencing"
     assert qc_run.metrics[0].name == "reads"
     assert qc_run.files == [Path("results") / "multiqc.html"]
 
@@ -109,7 +109,9 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    with run("rnaseq-batch-042", project="rnaseq-core", assay="bulk_rnaseq") as ctx:
+    with run(
+        "rnaseq-batch-042", project="rnaseq-core", analysis_type_id="rna_sequencing"
+    ) as ctx:
         ctx.log_metric("S1", "pct_mapped", 91.2, unit="percent")
         ctx.log_metric("S1", "status", "pass")
 
@@ -118,7 +120,7 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
 
     assert saved_run is not None
     assert saved_run.project == "rnaseq-core"
-    assert saved_run.assay == "bulk_rnaseq"
+    assert saved_run.analysis_type_id == "rna_sequencing"
     assert saved_run.project_id is not None
     assert [sample.sample_id for sample in saved_run.samples] == ["S1"]
 
@@ -147,7 +149,8 @@ def test_schema_models_have_expected_defaults() -> None:
     model = Run(
         run_id="run-1",
         project="project-1",
-        assay="rnaseq",
+        analysis_type_id="rna_sequencing",
+        method_id="test/workflow",
         samples=[Sample(sample_id="sample-1")],
     )
 
