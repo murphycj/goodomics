@@ -247,3 +247,4 @@ packages/goodomics/tests/cbioportal/*/**/*
 
 *.parquet
 multiqc_data.json
+goodomics.toml

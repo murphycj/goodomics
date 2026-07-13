@@ -1,0 +1,69 @@
+[server]
+host = "127.0.0.1"
+port = 8000
+trusted_proxies = []
+
+[database]
+url = "sqlite+aiosqlite:///.goodomics/goodomics.db"
+
+[analytics]
+root = ".goodomics"
+
+[auth]
+enabled = false
+signup_enabled = false
+issuer = "goodomics"
+audience = "goodomics-api"
+token_minutes = 60
+
+[auth.password]
+min_length = 6
+# max_length = 128
+require_uppercase = false
+require_lowercase = false
+require_number = false
+require_symbol = false
+
+[anonymous]
+permissions = [
+  "project.read",
+  "data.read",
+  "database.read",
+  "files.read",
+  "insight.read",
+  "insight.execute",
+  "report.read",
+  "report.execute",
+  "cohort.read",
+  "qc_policy.read",
+  "ai.chat",
+]
+
+[ai]
+provider = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1-mini"
+max_tool_rounds = 4
+
+[rate_limits]
+backend_uri = "memory://"
+login = ["5/minute"]
+ai = ["5/minute", "50/day"]
+ai_concurrent = 2
+ai_installation = ["100/minute"]
+
+[storage]
+default_location = "default"
+
+[storage.locations.default]
+driver = "filesystem"
+root = ".goodomics/files"
+
+# S3-compatible locations use the standard AWS credential chain. Keep access
+# keys out of this file.
+# [storage.locations.archive]
+# driver = "s3"
+# bucket = "goodomics-files"
+# prefix = "managed"
+# endpoint_url = "https://s3.example.org"
+# region = "us-east-1"

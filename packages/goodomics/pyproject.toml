@@ -52,6 +52,12 @@ server = [
   "pydantic-settings>=2",
   "aiosqlite>=0.19",
   "mcp>=1.27,<2",
+  "pwdlib[argon2]>=0.3",
+  "PyJWT>=2.10",
+  "limits>=5",
+  "redis>=5",
+  "python-multipart>=0.0.20",
+  "boto3>=1.35",
 ]
 all = [
   "jinja2>=3",
@@ -67,6 +73,12 @@ all = [
   "greenlet>=3",
   "pydantic-settings>=2",
   "mcp>=1.27,<2",
+  "pwdlib[argon2]>=0.3",
+  "PyJWT>=2.10",
+  "limits>=5",
+  "redis>=5",
+  "python-multipart>=0.0.20",
+  "boto3>=1.35",
 ]
 dev = [
   "pytest",
