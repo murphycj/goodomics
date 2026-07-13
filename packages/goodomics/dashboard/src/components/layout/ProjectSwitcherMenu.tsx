@@ -3,6 +3,7 @@ import { ChevronDown, Plus } from "lucide-react";
 import { useState } from "react";
 import type { GoodomicsProject } from "../../api";
 import { CreateProjectModal } from "../projects/CreateProjectModal";
+import { useAuth } from "../auth/AuthProvider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,7 @@ export function ProjectSwitcherMenu({
   currentProject: GoodomicsProject;
   projects: GoodomicsProject[];
 }) {
+  const { session } = useAuth();
   const [createOpen, setCreateOpen] = useState(false);
 
   return (
@@ -56,14 +58,20 @@ export function ProjectSwitcherMenu({
               </Link>
             </DropdownMenuItem>
           ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
-            <Plus size={16} />
-            Create new project
-          </DropdownMenuItem>
+          {session?.principal.kind !== "anonymous" && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+                <Plus size={16} />
+                Create new project
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} />}
+      {createOpen && session?.principal.kind !== "anonymous" && (
+        <CreateProjectModal onClose={() => setCreateOpen(false)} />
+      )}
     </>
   );
 }
