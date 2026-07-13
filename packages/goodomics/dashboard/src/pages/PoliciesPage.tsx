@@ -3,10 +3,13 @@ import { listNamedRows } from "../api";
 import { GenericRows, Page } from "../components/ui";
 
 /** Simple QC policy registry page while policy editing is still pending. */
-export function PoliciesPage() {
+export function PoliciesPage({ projectId }: { projectId: string }) {
   const policies = useQuery({
-    queryKey: ["qc-policies"],
-    queryFn: () => listNamedRows("/api/v1/qc-policies"),
+    queryKey: ["qc-policies", projectId],
+    queryFn: () =>
+      listNamedRows(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/qc-policies`,
+      ),
   });
   return (
     <Page
