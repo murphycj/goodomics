@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Outlet, useRouterState } from "@tanstack/react-router";
+import { Navigate, Outlet, useRouterState } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { getProject, listProjects } from "../../api";
 import { recordProjectRecentView } from "../../lib/projectRecents";
 import type { SidebarMode } from "../../lib/types";
 import { cn, projectIdFromPath } from "../../lib/utils";
+import { useAuth } from "../auth/AuthProvider";
 import { SearchProvider, useSearch } from "../search/SearchProvider";
 import { useSearchStore } from "../search/searchStore";
 import { Toaster } from "../ui/sonner";
@@ -18,13 +19,47 @@ export function Layout() {
     select: (state) => state.location.pathname,
   });
   const projectId = projectIdFromPath(pathname);
+  const { isLoading, session } = useAuth();
+  const setupRequired = session?.setup_required ?? false;
+  const isAuthPage = pathname === "/login" || pathname === "/setup";
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("hover");
-  const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const projects = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+    enabled: !isLoading && !setupRequired && !isAuthPage,
+  });
   const selectedProject = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId ?? ""),
-    enabled: Boolean(projectId),
+    enabled: !isLoading && !setupRequired && !isAuthPage && Boolean(projectId),
   });
+
+  if (isLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#f7f8fa] text-sm text-[#657082]">
+        Loading Goodomics…
+      </main>
+    );
+  }
+
+  if (setupRequired && pathname !== "/setup") {
+    return <Navigate replace to="/setup" />;
+  }
+
+  if (!setupRequired && pathname === "/setup") {
+    return <Navigate replace to="/" />;
+  }
+
+  if (isAuthPage) {
+    return (
+      <main className="min-h-screen bg-[#f7f8fa] px-4 py-12 md:px-8">
+        <div className="mx-auto max-w-[720px]">
+          <Outlet />
+        </div>
+        <Toaster />
+      </main>
+    );
+  }
 
   return (
     <SearchProvider
