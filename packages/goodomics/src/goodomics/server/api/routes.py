@@ -22,8 +22,18 @@ from typing import Any, Literal, cast, get_args, get_origin
 from uuid import uuid4
 
 import yaml
-from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlmodel import SQLModel, delete, select
@@ -45,9 +55,16 @@ from goodomics.server.ai import (
     ChatMessage,
     ChatResult,
 )
+from goodomics.server.auth import (
+    Principal,
+    authorize_api_request,
+    authorized_project_pks,
+    project_permissions,
+    require_project_permission,
+    seed_project_roles,
+)
 from goodomics.server.db.catalog import CATALOG_TABLES, EDITABLE_TABLES
 from goodomics.server.db.models import (
-    CohortRecord,
     InsightRecord,
     InsightResultCacheRecord,
     InsightRevisionRecord,
@@ -63,6 +80,7 @@ from goodomics.server.insights import (
     execute_report,
     validate_and_explain_config,
 )
+from goodomics.server.rate_limits import principal_rate_key
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     AnalysisMethodRecord,
@@ -85,8 +103,9 @@ from goodomics.storage.sqlalchemy import (
     get_record_where,
 )
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(authorize_api_request)])
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
+UPLOAD_FILE = File(...)
 
 
 # Request/response schemas are kept near the routes that use them so FastAPI's
@@ -193,6 +212,8 @@ class ProjectCreate(BaseModel):
     name: str
     slug: str | None = None
     description: str | None = None
+    visibility: Literal["private", "public"] = "private"
+    default_storage_location: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
@@ -203,6 +224,8 @@ class ProjectPatch(BaseModel):
     slug: str | None = None
     description: str | None = None
     default_report_id: str | None = None
+    visibility: Literal["private", "public"] | None = None
+    default_storage_location: str | None = None
     metadata_json: dict[str, JsonValue] | None = None
 
 
@@ -214,6 +237,8 @@ class ProjectRead(BaseModel):
     name: str
     description: str | None = None
     default_report_id: str | None = None
+    visibility: Literal["private", "public"] = "private"
+    default_storage_location: str | None = None
     metadata_json: dict[str, JsonValue]
     created_at: datetime
     run_count: int = 0
@@ -250,6 +275,8 @@ class FileRead(BaseModel):
     kind: str = "file"
     path: str | None = None
     uri: str | None = None
+    storage_location: str | None = None
+    object_key: str | None = None
     size_bytes: int | None = None
     sha256: str | None = None
     source_path: str | None = None
@@ -465,33 +492,6 @@ class SampleGroupMembersRemove(BaseModel):
     run_sample_ids: list[str]
 
 
-class CohortCreate(BaseModel):
-    """Payload for creating a named cohort definition."""
-
-    cohort_id: str | None = None
-    name: str
-    description: str | None = None
-    filters: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class CohortPatch(BaseModel):
-    """Fields that can be patched on an existing cohort."""
-
-    name: str | None = None
-    description: str | None = None
-    filters: dict[str, JsonValue] | None = None
-
-
-class CohortRead(BaseModel):
-    """Saved cohort definition response."""
-
-    cohort_id: str
-    name: str
-    description: str | None = None
-    filters: dict[str, JsonValue]
-    updated_at: datetime
-
-
 class QCPolicyCreate(BaseModel):
     """Payload for creating a QC policy definition."""
 
@@ -511,6 +511,7 @@ class QCPolicyRead(BaseModel):
     """Saved QC policy response."""
 
     policy_id: str
+    project_id: str
     name: str
     thresholds: dict[str, JsonValue]
     updated_at: datetime
@@ -679,12 +680,23 @@ async def chat_with_ai(payload: AIChatRequest, request: Request) -> ChatResult:
 
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
+    key = principal_rate_key(request)
+    limiter = request.app.state.rate_limiter
+    await limiter.check("ai", key, request.app.state.settings.rate_limits.ai)
+    await limiter.check(
+        "ai-installation",
+        "installation",
+        request.app.state.settings.rate_limits.ai_installation,
+    )
     try:
-        return await request.app.state.ai_chat.chat(
-            payload.messages,
-            project_id=payload.project_id,
-            conversation_id=payload.conversation_id,
-        )
+        async with limiter.concurrent(
+            "ai", key, request.app.state.settings.rate_limits.ai_concurrent
+        ):
+            return await request.app.state.ai_chat.chat(
+                payload.messages,
+                project_id=payload.project_id,
+                conversation_id=payload.conversation_id,
+            )
     except AIProviderNotConfigured as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -695,14 +707,20 @@ async def list_projects(request: Request) -> list[ProjectRead]:
 
     await _ensure_default_project(request)
     await _ensure_schema(request)
+
     async with _session(request) as session:
-        rows = (
-            await session.exec(
-                select(ProjectRecord).order_by(
-                    cast(Any, ProjectRecord.created_at), ProjectRecord.name
-                )
-            )
-        ).all()
+        statement = select(ProjectRecord).order_by(
+            cast(Any, ProjectRecord.created_at), ProjectRecord.name
+        )
+        visible = await authorized_project_pks(
+            session,
+            cast(Principal, request.state.principal),
+            request.app.state.settings,
+        )
+        if visible is not None:
+            statement = statement.where(cast(Any, ProjectRecord.id).in_(visible))
+        rows = (await session.exec(statement)).all()
+
         return [await _project_read(row, session=session) for row in rows]
 
 
@@ -712,21 +730,50 @@ async def create_project(payload: ProjectCreate, request: Request) -> ProjectRea
 
     await _ensure_schema(request)
     slug = validate_project_slug(payload.slug or payload.name)
+
+    # Validate the default storage location if provided.
+    if (
+        payload.default_storage_location is not None
+        and payload.default_storage_location
+        not in request.app.state.settings.storage.locations
+    ):
+        raise HTTPException(status_code=400, detail="Unknown storage location")
+
     async with _session(request) as session:
         existing = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.slug, slug
         )
         if existing is not None:
             raise HTTPException(status_code=409, detail="Project slug already exists")
+
         project = ProjectRecord(
             project_id=_new_project_id(),
             slug=slug,
             name=payload.name.strip() or display_name_from_slug(slug),
             description=payload.description,
+            visibility=payload.visibility,
+            default_storage_location=payload.default_storage_location,
             metadata_json=json.loads(json.dumps(payload.metadata_json)),
             created_at=datetime.now(UTC),
         )
         session.add(project)
+        await session.flush()
+
+        # Seed the default project roles for the new project.
+        roles = await seed_project_roles(session, project)
+        principal = cast(Principal, request.state.principal)
+        if principal.kind == "user" and principal.user_pk is not None:
+            from goodomics.server.db.models import ProjectMembershipRecord
+
+            session.add(
+                ProjectMembershipRecord(
+                    membership_id=f"mem_{uuid4().hex[:20]}",
+                    project_id=cast(int, project.id),
+                    user_id=principal.user_pk,
+                    role_id=cast(int, roles["Owner"].id),
+                    created_at=datetime.now(UTC),
+                )
+            )
         await session.commit()
         await session.refresh(project)
         return await _project_read(project, session=session)
@@ -793,6 +840,145 @@ async def list_project_run_files(
     return await _list_run_files(run_id, request, project_id=project_id)
 
 
+@router.get("/projects/{project_id}/files", response_model=list[FileRead])
+async def list_project_files(project_id: str, request: Request) -> list[FileRead]:
+    """List managed and referenced files linked to a project."""
+
+    project = await _require_project(request, project_id)
+
+    async with _session(request) as session:
+        rows = (
+            await session.exec(
+                select(FileRecord, FileLinkRecord)
+                .join(
+                    FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.id
+                )
+                .where(FileLinkRecord.project_id == project.id)
+                .order_by(FileRecord.file_id)
+            )
+        ).all()
+
+        return [
+            await _file_from_rows_public(
+                session,
+                file,
+                link,
+                association_scope="project",
+                association_reason="File linked to this project.",
+            )
+            for file, link in rows
+        ]
+
+
+@router.post("/projects/{project_id}/files", response_model=FileRead, status_code=201)
+async def upload_project_file(
+    project_id: str,
+    request: Request,
+    upload: UploadFile = UPLOAD_FILE,
+    object_key: str | None = Form(default=None),
+    storage_location: str | None = Form(default=None),
+    file_role: str = Form(default="upload"),
+) -> FileRead:
+    """Upload a managed file to a project's selected named location."""
+
+    project = await _require_project(request, project_id)
+
+    # Determine the storage location for the uploaded file, falling back to the project's default location or the global default.
+    location = (
+        storage_location
+        or project.default_storage_location
+        or request.app.state.settings.storage.default_location
+    )
+    key = object_key or (
+        f"{project_id}/{uuid4().hex}/{Path(upload.filename or 'upload').name}"
+    )
+
+    try:
+        file_store = request.app.state.file_stores.get(location)
+        metadata = file_store.upload(key, upload.file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # create a new FileRecord with the current timestamp
+    now = datetime.now(UTC)
+    row = FileRecord(
+        file_id=_new_id("file"),
+        project_id=project.id,
+        storage_location=location,
+        object_key=key,
+        file_role=file_role,
+        format=Path(upload.filename or "").suffix.lstrip(".") or None,
+        size_bytes=metadata.size_bytes,
+        sha256=metadata.sha256,
+        created_at=now,
+        metadata_json={"original_filename": upload.filename},
+    )
+    async with _session(request) as session:
+        session.add(row)
+        await session.flush()
+        link = FileLinkRecord(
+            file_id=cast(int, row.id),
+            project_id=project.id,
+            link_role="project_file",
+        )
+        session.add(link)
+        await session.commit()
+        await session.refresh(row)
+        await session.refresh(link)
+
+        return await _file_from_rows_public(
+            session,
+            row,
+            link,
+            association_scope="project",
+            association_reason="Managed project upload.",
+        )
+
+
+@router.delete("/projects/{project_id}/files/{file_id}", status_code=204)
+async def delete_project_file(project_id: str, file_id: str, request: Request) -> None:
+    """Delete a managed project file after removing its final catalog link."""
+
+    project = await _require_project(request, project_id)
+
+    async with _session(request) as session:
+
+        # Retrieve the file record for the given file_id and project, ensuring it exists before deletion.
+        row = (
+            await session.exec(
+                select(FileRecord)
+                .join(
+                    FileLinkRecord, cast(Any, FileLinkRecord.file_id) == FileRecord.id
+                )
+                .where(
+                    FileRecord.file_id == file_id,
+                    FileLinkRecord.project_id == project.id,
+                )
+            )
+        ).first()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        links = (
+            await session.exec(
+                select(FileLinkRecord).where(FileLinkRecord.file_id == row.id)
+            )
+        ).all()
+
+        # delete project-specific links for the file
+        project_links = [link for link in links if link.project_id == project.id]
+
+        for link in project_links:
+            await session.delete(link)
+        if len(project_links) == len(links):
+            if row.storage_location and row.object_key:
+                request.app.state.file_stores.get(row.storage_location).delete(
+                    row.object_key
+                )
+            await session.delete(row)
+        await session.commit()
+
+
 @router.get(
     "/projects/{project_id}/runs/{run_id}/analytics/metrics",
     response_model=list[AnalyticsMetricRead],
@@ -832,7 +1018,7 @@ async def get_project_file_content(
     project_id: str,
     file_id: str,
     request: Request,
-) -> FileResponse:
+) -> Response:
     """Stream a stored file only if it is linked to the requested project."""
 
     return await _file_content_response(file_id, request, project_id=project_id)
@@ -956,6 +1142,7 @@ async def list_project_sample_run_files(
     await _ensure_schema(request)
     async with _session(request) as session:
         await _get_sample_run_link(session, project_id, sample_id, run_id)
+
     return await _list_run_files(run_id, request, project_id=project_id)
 
 
@@ -981,6 +1168,7 @@ async def list_project_sample_run_analytics_metrics(
         run.id,
         run_sample_id=run_sample.id,
     )
+
     return _analytics_metric_reads(metrics)
 
 
@@ -998,6 +1186,7 @@ async def patch_project(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Project not found")
+
         if "slug" in values and values["slug"] is not None:
             slug = validate_project_slug(str(values["slug"]))
             existing = await get_record_by_field(
@@ -1008,10 +1197,13 @@ async def patch_project(
                     status_code=409, detail="Project slug already exists"
                 )
             row.slug = slug
+
         if "name" in values and values["name"] is not None:
             row.name = str(values["name"]).strip() or row.name
+
         if "description" in values:
             row.description = values["description"]
+
         if "default_report_id" in values:
             default_report_id = values["default_report_id"]
             if default_report_id is not None:
@@ -1021,11 +1213,26 @@ async def patch_project(
                         status_code=404, detail="Default report not found"
                     )
             row.default_report_id = default_report_id
+
         if "metadata_json" in values and values["metadata_json"] is not None:
             row.metadata_json = json.loads(json.dumps(values["metadata_json"]))
+
+        if "visibility" in values and values["visibility"] is not None:
+            row.visibility = values["visibility"]
+
+        if "default_storage_location" in values:
+            location = values["default_storage_location"]
+            if (
+                location is not None
+                and location not in request.app.state.settings.storage.locations
+            ):
+                raise HTTPException(status_code=400, detail="Unknown storage location")
+            row.default_storage_location = location
+
         session.add(row)
         await session.commit()
         await session.refresh(row)
+
         return await _project_read(row, session=session)
 
 
@@ -1068,6 +1275,11 @@ async def search_samples(
         return []
     pattern = f"%{term}%"
     async with _session(request) as session:
+        visible = await authorized_project_pks(
+            session,
+            cast(Principal, request.state.principal),
+            request.app.state.settings,
+        )
         sample_statement = select(SampleRecord).where(
             (func.lower(SampleRecord.sample_id).like(pattern))
             | (func.lower(SampleRecord.sample_name).like(pattern))
@@ -1075,6 +1287,10 @@ async def search_samples(
         if project_id is not None:
             sample_statement = sample_statement.where(
                 SampleRecord.project_id == project_pk
+            )
+        elif visible is not None:
+            sample_statement = sample_statement.where(
+                cast(Any, SampleRecord.project_id).in_(visible)
             )
         sample_rows = (await session.exec(sample_statement.limit(limit))).all()
 
@@ -1084,6 +1300,10 @@ async def search_samples(
         )
         if project_id is not None:
             run_statement = run_statement.where(RunRecord.project_id == project_pk)
+        elif visible is not None:
+            run_statement = run_statement.where(
+                cast(Any, RunRecord.project_id).in_(visible)
+            )
         remaining = max(limit - len(sample_rows), 0)
         run_rows = (
             (await session.exec(run_statement.limit(remaining))).all()
@@ -1170,6 +1390,9 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
     project = await request.app.state.store.ensure_project(
         payload.project_id or payload.project
     )
+    project_row = await _require_project(request, project.project_id)
+    await require_project_permission(request, project_row, "data.ingest")
+
     run = Run(
         run_id=payload.run_id or _new_id("run"),
         project_id=project.project_id,
@@ -1212,8 +1435,13 @@ async def get_run(run_id: str, request: Request) -> Run:
     """Return a run by public run ID."""
 
     run = await request.app.state.store.get_run(run_id)
+
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.project_id is not None:
+        await _require_project(request, run.project_id)
+
     return run
 
 
@@ -1558,18 +1786,19 @@ async def get_contract_result_options(
 
 
 @router.get("/files/{file_id}/content")
-async def get_file_content(file_id: str, request: Request) -> FileResponse:
+async def get_file_content(file_id: str, request: Request) -> Response:
     """Stream a stored file by public file ID."""
 
     return await _file_content_response(file_id, request)
 
 
+# TODO: handle large files differently
 async def _file_content_response(
     file_id: str,
     request: Request,
     *,
     project_id: str | None = None,
-) -> FileResponse:
+) -> Response:
     """Validate file visibility and return a FastAPI file response."""
 
     await _ensure_schema(request)
@@ -1577,7 +1806,9 @@ async def _file_content_response(
         row = await get_record_by_field(
             session, FileRecord, FileRecord.file_id, file_id
         )
+
         if row is not None and project_id is not None:
+            # Ensure the file is linked to the specified project. If no link exists, treat the file as not found.
             project_pk = await _project_pk(request, project_id, session=session)
             link = (
                 await session.exec(
@@ -1589,16 +1820,53 @@ async def _file_content_response(
             ).first()
             if link is None:
                 row = None
+        elif row is not None:
+            # If no project ID is provided, check if the file has any project link and enforce project access if necessary.
+            link = (
+                await session.exec(
+                    select(FileLinkRecord).where(FileLinkRecord.file_id == row.id)
+                )
+            ).first()
+            if link is not None and link.project_id is not None:
+                linked_project_id = await _public_label(
+                    session, ProjectRecord, "project_id", link.project_id
+                )
+                if linked_project_id is not None:
+                    await _require_project(request, linked_project_id)
+
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
+
+    # If the file has a storage location and object key, attempt to retrieve the file from the storage backend. Otherwise, check if the file has a local path and serve it from the filesystem.
+    if row.storage_location and row.object_key:
+        try:
+            store = request.app.state.file_stores.get(row.storage_location)
+            metadata = store.metadata(row.object_key)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Stored file not found"
+            ) from None
+        return StreamingResponse(
+            store.iter_bytes(row.object_key),
+            media_type=metadata.content_type or "application/octet-stream",
+            headers={
+                "Content-Length": str(metadata.size_bytes),
+                "Content-Disposition": (
+                    f'attachment; filename="{Path(row.object_key).name}"'
+                ),
+            },
+        )
+
     if row.path is None:
         raise HTTPException(status_code=404, detail="Stored file not found")
+
     # Only serve files whose catalog row points at an existing local file.
     path = Path(row.path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file not found")
     if not path.is_file():
         raise HTTPException(status_code=400, detail="Stored path is not a file")
+
     return FileResponse(path)
 
 
@@ -1610,13 +1878,22 @@ async def list_insights(
     """List saved insights globally or for one project."""
 
     await _ensure_schema(request)
+
     if project_id is not None:
         await _require_project(request, project_id)
+
     async with _session(request) as session:
         statement = select(InsightRecord)
         if project_id is not None:
             statement = statement.where(InsightRecord.project_id == project_id)
+        else:
+            visible = await _authorized_project_labels(request, session)
+            if visible is not None:
+                statement = statement.where(
+                    cast(Any, InsightRecord.project_id).in_(visible)
+                )
         rows = (await session.exec(statement)).all()
+
     return [_saved_insight_read(row) for row in rows]
 
 
@@ -1658,6 +1935,8 @@ async def create_insight(
             config=payload.config,
             created_at=now,
             updated_at=now,
+            created_by_user_id=getattr(request.state.principal, "user_pk", None),
+            updated_by_user_id=getattr(request.state.principal, "user_pk", None),
         )
         revision = InsightRevisionRecord(
             insight_id=insight_id,
@@ -1675,10 +1954,17 @@ async def get_insight(insight_ref: str, request: Request) -> SavedInsightRead:
     """Return a saved insight by ID or stable URL slug."""
 
     await _ensure_schema(request)
+
     async with _session(request) as session:
         row = await _get_insight_by_ref(session, insight_ref)
+
     if row is None:
         raise HTTPException(status_code=404, detail="Insight not found")
+
+    if row.project_id is not None:
+        project = await _require_project(request, row.project_id)
+        await require_project_permission(request, project, "insight.read")
+
     return _saved_insight_read(row)
 
 
@@ -1690,17 +1976,28 @@ async def patch_insight(
 
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
+
     if values:
         async with _session(request) as session:
             insight = await _get_insight_by_ref(session, insight_ref)
+
             if insight is None:
                 raise HTTPException(status_code=404, detail="Insight not found")
+
+            if insight.project_id is not None:
+                project = await _require_project(request, insight.project_id)
+                await require_project_permission(request, project, "insight.edit")
+
             insight_id = insight.insight_id
             updated_at = datetime.now(UTC)
             for key, value in values.items():
                 setattr(insight, key, value)
             insight.updated_at = updated_at
+            insight.updated_by_user_id = getattr(
+                request.state.principal, "user_pk", None
+            )
             session.add(insight)
+
             if "config" in values:
                 session.add(
                     InsightRevisionRecord(
@@ -1718,10 +2015,17 @@ async def delete_insight(insight_ref: str, request: Request) -> Response:
     """Delete a saved insight, its revisions, and cached results."""
 
     await _ensure_schema(request)
+
     async with _session(request) as session:
         insight = await _get_insight_by_ref(session, insight_ref)
+
         if insight is None:
             raise HTTPException(status_code=404, detail="Insight not found")
+
+        if insight.project_id is not None:
+            project = await _require_project(request, insight.project_id)
+            await require_project_permission(request, project, "insight.delete")
+
         insight_id = insight.insight_id
         insight_revision_id = cast(Any, InsightRevisionRecord.insight_id)
         insight_cache_id = cast(Any, InsightResultCacheRecord.insight_id)
@@ -1733,6 +2037,7 @@ async def delete_insight(insight_ref: str, request: Request) -> Response:
         )
         await session.delete(insight)
         await session.commit()
+
     return Response(status_code=204)
 
 
@@ -1771,6 +2076,7 @@ async def execute_adhoc_insight(
                 project_id=payload.project_id,
                 config=payload.config or {},
                 refresh=payload.refresh,
+                persist_results=await _may_persist_results(request, payload.project_id),
             )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1802,6 +2108,7 @@ async def execute_saved_insight(
                 insight=insight,
                 config=payload.config,
                 refresh=payload.refresh,
+                persist_results=await _may_persist_results(request, project_id),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1818,10 +2125,19 @@ async def list_reports(
     await _ensure_schema(request)
     if project_id is not None:
         await _require_project(request, project_id)
+
     async with _session(request) as session:
         statement = select(ReportRecord)
+
         if project_id is not None:
             statement = statement.where(ReportRecord.project_id == project_id)
+        else:
+            visible = await _authorized_project_labels(request, session)
+
+            if visible is not None:
+                statement = statement.where(
+                    cast(Any, ReportRecord.project_id).in_(visible)
+                )
         rows = (await session.exec(statement)).all()
     return [_saved_report_read(row) for row in rows]
 
@@ -1846,6 +2162,8 @@ async def create_report(
             config=payload.config,
             created_at=now,
             updated_at=now,
+            created_by_user_id=getattr(request.state.principal, "user_pk", None),
+            updated_by_user_id=getattr(request.state.principal, "user_pk", None),
         )
         revision = ReportRevisionRecord(
             report_id=report_id,
@@ -1867,8 +2185,10 @@ async def render_standalone_report(
     await _ensure_schema(request)
     rendered_report_id = payload.rendered_report_id or _new_id("rendered_report")
     created_at = datetime.now(UTC)
+
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
+
     if payload.report_id is not None:
         # Saved-report rendering executes the report model and stores the final
         # offline HTML so it can be viewed/exported later.
@@ -1886,6 +2206,7 @@ async def render_standalone_report(
                 report=report,
                 insights=insights,
                 refresh=payload.refresh,
+                persist_results=await _may_persist_results(request, project_id),
             )
             html = render_report_result(result)
             title = report.name
@@ -1895,6 +2216,7 @@ async def render_standalone_report(
         project_id = payload.project_id
         html = render_report(payload.results, title=payload.title)
         title = payload.title
+
     values = RenderedReportRecord(
         rendered_report_id=rendered_report_id,
         project_id=project_id,
@@ -1904,12 +2226,15 @@ async def render_standalone_report(
         html=html,
         created_at=created_at,
     )
-    async with _session(request) as session:
-        existing = await session.get(RenderedReportRecord, rendered_report_id)
-        if existing is not None:
-            await session.delete(existing)
-        session.add(values)
-        await session.commit()
+
+    if await _may_persist_results(request, project_id):
+        async with _session(request) as session:
+            existing = await session.get(RenderedReportRecord, rendered_report_id)
+            if existing is not None:
+                await session.delete(existing)
+            session.add(values)
+            await session.commit()
+
     return RenderedReportRead(
         rendered_report_id=rendered_report_id,
         project_id=project_id,
@@ -1928,8 +2253,14 @@ async def get_saved_report(report_ref: str, request: Request) -> SavedReportRead
     await _ensure_schema(request)
     async with _session(request) as session:
         row = await _get_report_by_ref(session, report_ref)
+
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
+
+    if row.project_id is not None:
+        project = await _require_project(request, row.project_id)
+        await require_project_permission(request, project, "report.read")
+
     return _saved_report_read(row)
 
 
@@ -1941,17 +2272,28 @@ async def patch_report(
 
     await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
+
     if values:
         async with _session(request) as session:
             report = await _get_report_by_ref(session, report_ref)
+
             if report is None:
                 raise HTTPException(status_code=404, detail="Report not found")
+
+            if report.project_id is not None:
+                project = await _require_project(request, report.project_id)
+                await require_project_permission(request, project, "report.edit")
+
             report_id = report.report_id
             updated_at = datetime.now(UTC)
             for key, value in values.items():
                 setattr(report, key, value)
             report.updated_at = updated_at
+            report.updated_by_user_id = getattr(
+                request.state.principal, "user_pk", None
+            )
             session.add(report)
+
             if "config" in values:
                 session.add(
                     ReportRevisionRecord(
@@ -1961,6 +2303,7 @@ async def patch_report(
                     )
                 )
             await session.commit()
+
     return await get_saved_report(report_ref, request)
 
 
@@ -1971,8 +2314,14 @@ async def delete_report(report_ref: str, request: Request) -> Response:
     await _ensure_schema(request)
     async with _session(request) as session:
         report = await _get_report_by_ref(session, report_ref)
+
         if report is None:
             raise HTTPException(status_code=404, detail="Report not found")
+
+        if report.project_id is not None:
+            project = await _require_project(request, report.project_id)
+            await require_project_permission(request, project, "report.delete")
+
         report_id = report.report_id
         default_project_rows = (
             await session.exec(
@@ -1981,11 +2330,14 @@ async def delete_report(report_ref: str, request: Request) -> Response:
                 )
             )
         ).all()
+
         for project_row in default_project_rows:
             project_row.default_report_id = None
             session.add(project_row)
+
         report_revision_id = cast(Any, ReportRevisionRecord.report_id)
         report_cache_id = cast(Any, ReportResultCacheRecord.report_id)
+
         await session.exec(
             delete(ReportRevisionRecord).where(report_revision_id == report_id)
         )
@@ -1994,6 +2346,7 @@ async def delete_report(report_ref: str, request: Request) -> Response:
         )
         await session.delete(report)
         await session.commit()
+
     return Response(status_code=204)
 
 
@@ -2040,6 +2393,7 @@ async def execute_saved_report(
                 report=report,
                 insights=insights,
                 refresh=payload.refresh,
+                persist_results=await _may_persist_results(request, project_id),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -2339,70 +2693,93 @@ async def list_sample_sets(
         ]
 
 
-@router.get("/cohorts", response_model=list[CohortRead])
-async def list_cohorts(request: Request) -> list[CohortRead]:
-    """List saved cohort definitions."""
+@router.get("/projects/{project_id}/qc-policies", response_model=list[QCPolicyRead])
+async def list_qc_policies(project_id: str, request: Request) -> list[QCPolicyRead]:
+    """List project-owned QC policy definitions."""
 
-    rows = await _list_table(request, CohortRecord)
-    return [CohortRead.model_validate(row.model_dump()) for row in rows]
-
-
-@router.post("/cohorts", response_model=CohortRead, status_code=201)
-async def create_cohort(payload: CohortCreate, request: Request) -> CohortRead:
-    """Create a saved cohort definition."""
-
-    now = datetime.now(UTC)
-    values = payload.model_dump(exclude={"cohort_id"}) | {
-        "cohort_id": payload.cohort_id or _new_id("cohort"),
-        "updated_at": now,
-    }
-    await _insert_values(request, CohortRecord, values)
-    return CohortRead(**values)
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        rows = (
+            await session.exec(
+                select(QCPolicyRecord)
+                .where(QCPolicyRecord.project_id == project.id)
+                .order_by(QCPolicyRecord.name)
+            )
+        ).all()
+    return [_qc_policy_read(row, project_id) for row in rows]
 
 
-@router.patch("/cohorts/{cohort_id}", response_model=CohortRead)
-async def patch_cohort(
-    cohort_id: str, payload: CohortPatch, request: Request
-) -> CohortRead:
-    """Patch a saved cohort definition."""
-
-    values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
-    await _patch_values(request, CohortRecord, "cohort_id", cohort_id, values)
-    row = await _get_row(request, CohortRecord, "cohort_id", cohort_id)
-    return CohortRead.model_validate(row.model_dump())
-
-
-@router.get("/qc-policies", response_model=list[QCPolicyRead])
-async def list_qc_policies(request: Request) -> list[QCPolicyRead]:
-    """List saved QC policy definitions."""
-
-    rows = await _list_table(request, QCPolicyRecord)
-    return [QCPolicyRead.model_validate(row.model_dump()) for row in rows]
-
-
-@router.post("/qc-policies", response_model=QCPolicyRead, status_code=201)
-async def create_qc_policy(payload: QCPolicyCreate, request: Request) -> QCPolicyRead:
-    """Create a saved QC policy definition."""
-
-    now = datetime.now(UTC)
-    values = payload.model_dump(exclude={"policy_id"}) | {
-        "policy_id": payload.policy_id or _new_id("policy"),
-        "updated_at": now,
-    }
-    await _insert_values(request, QCPolicyRecord, values)
-    return QCPolicyRead(**values)
-
-
-@router.patch("/qc-policies/{policy_id}", response_model=QCPolicyRead)
-async def patch_qc_policy(
-    policy_id: str, payload: QCPolicyPatch, request: Request
+@router.post(
+    "/projects/{project_id}/qc-policies",
+    response_model=QCPolicyRead,
+    status_code=201,
+)
+async def create_qc_policy(
+    project_id: str, payload: QCPolicyCreate, request: Request
 ) -> QCPolicyRead:
-    """Patch a saved QC policy definition."""
+    """Create a project-owned QC policy definition."""
 
-    values = payload.model_dump(exclude_unset=True) | {"updated_at": datetime.now(UTC)}
-    await _patch_values(request, QCPolicyRecord, "policy_id", policy_id, values)
-    row = await _get_row(request, QCPolicyRecord, "policy_id", policy_id)
-    return QCPolicyRead.model_validate(row.model_dump())
+    project = await _require_project(request, project_id)
+    row = QCPolicyRecord(
+        policy_id=payload.policy_id or _new_id("policy"),
+        project_id=cast(int, project.id),
+        name=payload.name,
+        thresholds=json.loads(json.dumps(payload.thresholds)),
+        updated_at=datetime.now(UTC),
+    )
+    async with _session(request) as session:
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+
+    return _qc_policy_read(row, project_id)
+
+
+@router.patch(
+    "/projects/{project_id}/qc-policies/{policy_id}", response_model=QCPolicyRead
+)
+async def patch_qc_policy(
+    project_id: str, policy_id: str, payload: QCPolicyPatch, request: Request
+) -> QCPolicyRead:
+    """Patch a project-owned QC policy definition."""
+
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        row = (
+            await session.exec(
+                select(QCPolicyRecord).where(
+                    QCPolicyRecord.project_id == project.id,
+                    QCPolicyRecord.policy_id == policy_id,
+                )
+            )
+        ).first()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="QC policy not found")
+        values = payload.model_dump(exclude_unset=True)
+
+        if "name" in values:
+            row.name = values["name"]
+
+        if "thresholds" in values:
+            row.thresholds = json.loads(json.dumps(values["thresholds"]))
+
+        row.updated_at = datetime.now(UTC)
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+
+    return _qc_policy_read(row, project_id)
+
+
+def _qc_policy_read(row: QCPolicyRecord, project_id: str) -> QCPolicyRead:
+    return QCPolicyRead(
+        policy_id=row.policy_id,
+        project_id=project_id,
+        name=row.name,
+        thresholds=row.thresholds,
+        updated_at=row.updated_at,
+    )
 
 
 @router.get("/database/tables", response_model=list[DatabaseTableRead])
@@ -2561,6 +2938,25 @@ async def _ensure_schema(request: Request) -> None:
     await request.app.state.store.ensure_schema()
 
 
+async def _may_persist_results(request: Request, project_id: str | None) -> bool:
+    """
+    Return whether execution may write cache or rendered-report rows.
+    Do not want unauthorized users to persist results, only local or admin principals, or those with project-specific permissions.
+    """
+
+    principal = cast(Principal, request.state.principal)
+    if principal.kind == "local" or principal.is_admin:
+        return True
+    if project_id is None:
+        return False
+    project = await _require_project(request, project_id)
+    async with _session(request) as session:
+        permissions = await project_permissions(
+            session, principal, project, request.app.state.settings
+        )
+    return "result.persist" in permissions
+
+
 def _engine(request: Request):
     """Return the async SQLAlchemy engine owned by the app store."""
 
@@ -2577,6 +2973,17 @@ async def _ensure_default_project(request: Request) -> ProjectRead:
     """Create and return the default project used by first-run dashboards."""
 
     project = await request.app.state.store.ensure_default_project()
+    async with _session(request) as session:
+        row = (
+            await session.exec(
+                select(ProjectRecord).where(
+                    ProjectRecord.project_id == project.project_id
+                )
+            )
+        ).one()
+        await seed_project_roles(session, row)
+        await session.commit()
+
     return await _get_project_read(request, project.project_id)
 
 
@@ -2588,9 +2995,39 @@ async def _require_project(request: Request, project_id: str) -> ProjectRecord:
         row = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, project_id
         )
+        if row is not None:
+            await seed_project_roles(session, row)
+            await session.commit()
+            await session.refresh(row)
+
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    await require_project_permission(request, row, "project.read")
+
     return row
+
+
+async def _authorized_project_labels(
+    request: Request, session: AsyncSession
+) -> set[str] | None:
+    visible = await authorized_project_pks(
+        session,
+        cast(Principal, request.state.principal),
+        request.app.state.settings,
+    )
+
+    if visible is None:
+        return None
+
+    rows = (
+        await session.exec(
+            select(ProjectRecord.project_id).where(
+                cast(Any, ProjectRecord.id).in_(visible)
+            )
+        )
+    ).all()
+
+    return {str(value) for value in rows}
 
 
 async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
@@ -2694,13 +3131,15 @@ async def _sample_set_read(
     return SampleSetRead(
         sample_set_id=row.sample_set_id,
         url_slug=_sample_set_url_slug(row),
-        project_id=project_id
-        if project_id is not None
-        else await _public_label(
-            session,
-            ProjectRecord,
-            "project_id",
-            row.project_id,
+        project_id=(
+            project_id
+            if project_id is not None
+            else await _public_label(
+                session,
+                ProjectRecord,
+                "project_id",
+                row.project_id,
+            )
         ),
         name=row.name,
         kind=row.kind,
@@ -3123,6 +3562,11 @@ async def _get_run_record(request: Request, run_id: str) -> RunRecord:
         row = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if row.project_id is not None:
+        async with _session(request) as session:
+            project = await session.get(ProjectRecord, row.project_id)
+        if project is not None:
+            await require_project_permission(request, project, "data.read")
     return row
 
 
@@ -3511,6 +3955,19 @@ async def _list_runs(
         if project_pk is not None:
             count_statement = count_statement.where(RunRecord.project_id == project_pk)
             rows_statement = rows_statement.where(RunRecord.project_id == project_pk)
+        else:
+            visible = await authorized_project_pks(
+                session,
+                cast(Principal, request.state.principal),
+                request.app.state.settings,
+            )
+            if visible is not None:
+                count_statement = count_statement.where(
+                    cast(Any, RunRecord.project_id).in_(visible)
+                )
+                rows_statement = rows_statement.where(
+                    cast(Any, RunRecord.project_id).in_(visible)
+                )
         term = search.strip().lower()
         if term:
             pattern = f"%{term}%"
@@ -4359,6 +4816,8 @@ async def _file_from_rows_public(
         kind=file.file_role,
         path=file.path,
         uri=file.uri,
+        storage_location=file.storage_location,
+        object_key=file.object_key,
         size_bytes=file.size_bytes,
         sha256=file.sha256,
         source_path=source_path if isinstance(source_path, str) else None,
@@ -4426,6 +4885,8 @@ def _file_from_rows(
         kind=file.file_role,
         path=file.path,
         uri=file.uri,
+        storage_location=file.storage_location,
+        object_key=file.object_key,
         size_bytes=file.size_bytes,
         sha256=file.sha256,
         source_path=source_path if isinstance(source_path, str) else None,
