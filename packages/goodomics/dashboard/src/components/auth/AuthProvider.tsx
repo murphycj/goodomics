@@ -31,6 +31,7 @@ const sessionSchema = z.object({
   memberships: z.array(z.record(z.string(), z.unknown())),
   permissions: z.record(z.string(), z.array(z.string())),
   auth_enabled: z.boolean(),
+  signup_enabled: z.boolean(),
   setup_required: z.boolean(),
   password_policy: passwordPolicySchema,
 });

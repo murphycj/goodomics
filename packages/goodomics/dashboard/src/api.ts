@@ -425,14 +425,18 @@ async function sendJson<T>(
     body: payload ? JSON.stringify(payload) : undefined,
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    const detail =
-      body && typeof body === 'object' && 'detail' in body
-        ? String(body.detail)
-        : `Request failed: ${response.status}`;
-    throw new Error(detail);
+    throw await responseError(response);
   }
   return schema.parse(await response.json());
+}
+
+async function responseError(response: Response): Promise<Error> {
+  const body = await response.json().catch(() => null);
+  const detail =
+    body && typeof body === 'object' && 'detail' in body
+      ? String(body.detail)
+      : `Request failed: ${response.status}`;
+  return new Error(detail);
 }
 
 export function fileContentUrl(file: Pick<StoredFile, 'file_id'>, projectId?: string) {
@@ -568,7 +572,7 @@ export async function createProject(payload: {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw await responseError(response);
   }
   return projectSchema.parse(await response.json());
 }
@@ -582,7 +586,7 @@ export async function patchProject(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return projectSchema.parse(await response.json());
 }
 
@@ -686,7 +690,7 @@ export async function validateInsightConfig(config: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config }),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return insightValidationSchema.parse(await response.json());
 }
 
@@ -885,7 +889,7 @@ export async function createInsight(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return insightSchema.parse(await response.json());
 }
 
@@ -898,7 +902,7 @@ export async function patchInsight(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return insightSchema.parse(await response.json());
 }
 
@@ -966,7 +970,7 @@ export async function createReport(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return reportSchema.parse(await response.json());
 }
 
@@ -979,7 +983,7 @@ export async function patchReport(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw await responseError(response);
   return reportSchema.parse(await response.json());
 }
 

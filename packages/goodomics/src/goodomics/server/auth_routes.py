@@ -76,6 +76,7 @@ class SetupStatusRead(BaseModel):
     """Authentication, first-run setup, and password-policy status."""
 
     auth_enabled: bool
+    signup_enabled: bool
     setup_required: bool
     password_policy: PasswordPolicyRead
 
@@ -198,6 +199,7 @@ class MeRead(BaseModel):
     memberships: list[dict[str, Any]]
     permissions: dict[str, list[str]]
     auth_enabled: bool
+    signup_enabled: bool
     setup_required: bool
     password_policy: PasswordPolicyRead
 
@@ -275,6 +277,7 @@ async def setup_status(request: Request) -> SetupStatusRead:
     if not settings.auth.enabled:
         return SetupStatusRead(
             auth_enabled=False,
+            signup_enabled=False,
             setup_required=False,
             password_policy=password_policy,
         )
@@ -285,6 +288,7 @@ async def setup_status(request: Request) -> SetupStatusRead:
 
     return SetupStatusRead(
         auth_enabled=True,
+        signup_enabled=settings.auth.signup_enabled,
         setup_required=required,
         password_policy=password_policy,
     )
@@ -341,11 +345,26 @@ async def me(request: Request) -> MeRead:
     status = await setup_status(request)
 
     if principal.kind == "anonymous":
+        await request.app.state.store.ensure_schema()
+
+        # Load all public projects for anonymous users to
+        # determine their project-scoped permissions.
+        async with AsyncSession(request.app.state.store._get_engine()) as session:
+            projects = (
+                await session.exec(
+                    select(ProjectRecord).where(ProjectRecord.visibility == "public")
+                )
+            ).all()
+        anonymous_permissions = sorted(request.app.state.settings.anonymous.permissions)
+
         return MeRead(
             principal=_principal_dict(principal),
             memberships=[],
-            permissions={},
+            permissions={
+                project.project_id: anonymous_permissions for project in projects
+            },
             auth_enabled=status.auth_enabled,
+            signup_enabled=status.signup_enabled,
             setup_required=status.setup_required,
             password_policy=status.password_policy,
         )
@@ -356,6 +375,7 @@ async def me(request: Request) -> MeRead:
             memberships=[],
             permissions={"*": sorted(PERMISSIONS)},
             auth_enabled=status.auth_enabled,
+            signup_enabled=status.signup_enabled,
             setup_required=status.setup_required,
             password_policy=status.password_policy,
         )
@@ -399,6 +419,7 @@ async def me(request: Request) -> MeRead:
         ],
         permissions=permission_map,
         auth_enabled=status.auth_enabled,
+        signup_enabled=status.signup_enabled,
         setup_required=status.setup_required,
         password_policy=status.password_policy,
     )
