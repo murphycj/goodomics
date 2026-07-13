@@ -70,10 +70,11 @@ scripts/build-python-packages.sh
 - Prefer readable structure over dense expressions: split complex conditions,
   payload construction, or nested transformations into named intermediate
   values when that makes the code easier to scan.
-- Add docstrings or lightweight comments for public APIs, parser/ingest
-  helpers, storage boundaries, non-trivial transformations, trust boundaries,
-  and important constraints; skip obvious one-line helpers and comments that
-  merely restate the code.
+- Add lightweight comments where they clarify purpose. Skip comments that merely restate the code.
+- Add a concise behavioral docstring to every Python function, including public
+  and private functions, methods, validators, properties, setters, and nested
+  functions. Describe purpose, behavior, or constraints rather than merely
+  restating the function name or signature.
 - For public Python APIs rendered in MkDocs or shown in editor hover, follow a
   non-duplicative docstring pattern: module/class docstrings should explain
   purpose, lifecycle, examples, and behavior; dataclass/model attribute
