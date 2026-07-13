@@ -432,7 +432,8 @@ async def authorize_api_request(request: Request) -> Principal:
             raise HTTPException(status_code=401, detail="Authentication required")
         return principal
 
-    # Extract project ID from path, query parameters, or request body for project-scoped operations.
+    # Extract project ID from path, query parameters, or
+    # request body for project-scoped operations.
     project_id = request.path_params.get("project_id") or request.query_params.get(
         "project_id"
     )
@@ -517,9 +518,7 @@ def _request_permission(method: str, path: str) -> str:
         return (
             "data.ingest"
             if method == "POST"
-            else "data.edit"
-            if mutation
-            else "data.read"
+            else "data.edit" if mutation else "data.read"
         )
     if method == "PATCH":
         return "project.configure"

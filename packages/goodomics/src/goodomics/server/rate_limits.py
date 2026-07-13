@@ -53,7 +53,10 @@ class AsyncRateLimiter:
     async def concurrent(
         self, namespace: str, key: str, maximum: int
     ) -> AsyncIterator[None]:
-        """Context manager to enforce a concurrent request limit for the given namespace and key."""
+        """
+        Context manager to enforce a concurrent request limit
+        for the given namespace and key.
+        """
 
         active_key = (namespace, key)
         async with self._lock:

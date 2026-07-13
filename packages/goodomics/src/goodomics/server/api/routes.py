@@ -883,7 +883,8 @@ async def upload_project_file(
 
     project = await _require_project(request, project_id)
 
-    # Determine the storage location for the uploaded file, falling back to the project's default location or the global default.
+    # Determine the storage location for the uploaded file,
+    # falling back to the project's default location or the global default.
     location = (
         storage_location
         or project.default_storage_location
@@ -942,7 +943,8 @@ async def delete_project_file(project_id: str, file_id: str, request: Request) -
     project = await _require_project(request, project_id)
 
     async with _session(request) as session:
-        # Retrieve the file record for the given file_id and project, ensuring it exists before deletion.
+        # Retrieve the file record for the given file_id and project,
+        # ensuring it exists before deletion.
         row = (
             await session.exec(
                 select(FileRecord)
@@ -1807,7 +1809,8 @@ async def _file_content_response(
         )
 
         if row is not None and project_id is not None:
-            # Ensure the file is linked to the specified project. If no link exists, treat the file as not found.
+            # Ensure the file is linked to the specified project.
+            # If no link exists, treat the file as not found.
             project_pk = await _project_pk(request, project_id, session=session)
             link = (
                 await session.exec(
@@ -1820,7 +1823,8 @@ async def _file_content_response(
             if link is None:
                 row = None
         elif row is not None:
-            # If no project ID is provided, check if the file has any project link and enforce project access if necessary.
+            # If no project ID is provided, check if the file has any
+            # project link and enforce project access if necessary.
             link = (
                 await session.exec(
                     select(FileLinkRecord).where(FileLinkRecord.file_id == row.id)
@@ -1836,7 +1840,9 @@ async def _file_content_response(
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # If the file has a storage location and object key, attempt to retrieve the file from the storage backend. Otherwise, check if the file has a local path and serve it from the filesystem.
+    # If the file has a storage location and object key, attempt to retrieve
+    # the file from the storage backend. Otherwise, check if the file
+    # has a local path and serve it from the filesystem.
     if row.storage_location and row.object_key:
         try:
             store = request.app.state.file_stores.get(row.storage_location)
@@ -2940,7 +2946,8 @@ async def _ensure_schema(request: Request) -> None:
 async def _may_persist_results(request: Request, project_id: str | None) -> bool:
     """
     Return whether execution may write cache or rendered-report rows.
-    Do not want unauthorized users to persist results, only local or admin principals, or those with project-specific permissions.
+    Do not want unauthorized users to persist results, only local
+    or admin principals, or those with project-specific permissions.
     """
 
     principal = cast(Principal, request.state.principal)
