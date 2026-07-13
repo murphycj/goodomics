@@ -9,3 +9,5 @@
 **/node_modules
 packages/goodomics/dashboard/tsconfig.tsbuildinfo
 packages/goodomics/src/goodomics/server/web/static
+/.goodomics
+/goodomics.toml

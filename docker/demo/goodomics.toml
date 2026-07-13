@@ -1,0 +1,31 @@
+[database]
+url = "sqlite+aiosqlite:///../../.goodomics/goodomics.db"
+
+[analytics]
+root = "../../.goodomics"
+
+[auth]
+enabled = true
+signup_enabled = false
+
+[anonymous]
+permissions = [
+  "project.read",
+  "data.read",
+  "database.read",
+  "files.read",
+  "insight.read",
+  "insight.execute",
+  "report.read",
+  "report.execute",
+  "cohort.read",
+  "qc_policy.read",
+  "ai.chat",
+]
+
+[storage]
+default_location = "default"
+
+[storage.locations.default]
+driver = "filesystem"
+root = "../../.goodomics/files"

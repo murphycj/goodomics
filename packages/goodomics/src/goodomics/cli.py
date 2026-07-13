@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
@@ -35,6 +36,13 @@ class LogLevel(StrEnum):
     info = "info"
     debug = "debug"
     trace = "trace"
+
+
+class ProjectVisibility(StrEnum):
+    """Supported project access levels for CLI project management."""
+
+    private = "private"
+    public = "public"
 
 
 class GoodomicsTyperGroup(TyperGroup):
@@ -419,8 +427,6 @@ def serve(
     settings = load_settings(config_path, cli_overrides={"server": server_overrides})
     # Uvicorn cannot pass a settings object to an import-string factory, so the
     # selected path is exported for reload workers and read by load_settings().
-    import os
-
     os.environ["GOODOMICS_CONFIG"] = str(config_path)
     uvicorn.run(
         "goodomics.server.app:create_app",
@@ -430,6 +436,45 @@ def serve(
         log_level=log_level.value,
         log_config=build_uvicorn_log_config(log_level.value),
         factory=True,
+    )
+
+
+projects_app = typer.Typer(help="Manage Goodomics projects.")
+app.add_typer(projects_app, name="projects")
+
+
+@projects_app.command("set-visibility")
+def projects_set_visibility(
+    project: str,
+    visibility: ProjectVisibility,
+    database_url: str | None = DATABASE_URL_OPTION,
+    config: Path | None = CONFIG_OPTION,
+    admin_email: str | None = ADMIN_EMAIL_OPTION,
+) -> None:
+    """Set an existing project to public or private visibility."""
+
+    settings = _load_setup_settings(config)
+    store = SQLModelGoodomicsStore(database_url or settings.database_url)
+
+    async def update_visibility() -> str:
+        """Authorize the operation and persist project visibility."""
+
+        try:
+            if settings.auth.enabled:
+                await store.ensure_schema()
+                async with AsyncSession(store._get_engine()) as session:
+                    await _require_cli_admin(session, settings, admin_email)
+            return await store.set_project_visibility(project, visibility.value)
+        finally:
+            await store._get_engine().dispose()
+
+    try:
+        project_id = asyncio.run(update_visibility())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        f"Set project [bold]{project_id}[/bold] visibility to "
+        f"[bold]{visibility.value}[/bold]"
     )
 
 
@@ -495,7 +540,9 @@ async def _require_cli_admin(
         await _bootstrap_cli_admin(session, settings)
         return
     email = admin_email or typer.prompt("Administrator email")
-    password = typer.prompt("Administrator password", hide_input=True)
+    password = os.environ.get("GOODOMICS_ADMIN_PASSWORD") or typer.prompt(
+        "Administrator password", hide_input=True
+    )
     administrator = await authenticate_user(session, email, password)
     if administrator is None or not administrator.is_admin:
         raise typer.BadParameter("Invalid installation administrator credentials")

@@ -16,6 +16,19 @@ COPY --from=dashboard /app/packages/goodomics/src/goodomics/server/web/static \
 
 RUN pip install uv && uv sync --frozen --package goodomics
 
+# Demo builds explicitly provide a prepared state archive. Standard builds
+# leave this unset and never copy ignored local databases or configuration.
+ARG GOODOMICS_STATE_ARCHIVE
+RUN if [ -n "${GOODOMICS_STATE_ARCHIVE}" ]; then \
+      tar -xf "/app/${GOODOMICS_STATE_ARCHIVE}" -C /app; \
+      rm -f "/app/${GOODOMICS_STATE_ARCHIVE}"; \
+    fi
+
+# Demo builds select their tracked configuration in place. Keeping the file at
+# the same relative path preserves its config-relative state paths.
+ARG GOODOMICS_CONFIG_FILE
+ENV GOODOMICS_CONFIG=${GOODOMICS_CONFIG_FILE}
+
 EXPOSE 8000
 
 CMD ["uv", "run", "--package", "goodomics", "goodomics", "serve", "--host", "0.0.0.0", "--port", "8000"]

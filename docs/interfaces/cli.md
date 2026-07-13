@@ -100,3 +100,25 @@ bearer tokens. Goodomics does not send password-recovery email in this release.
 Goodomics rejects user-management commands when authentication is disabled and
 prevents disabling the final active installation administrator. Creating the
 first administrator from the CLI also closes the dashboard's setup flow.
+
+For non-interactive installation automation, `GOODOMICS_ADMIN_PASSWORD` supplies
+the authorizing administrator password without placing it on the command line.
+Keep that variable in a secret store rather than in the TOML configuration.
+
+## Manage project visibility
+
+Use a project ID or slug to make an existing project public or private:
+
+```bash
+goodomics projects set-visibility rnaseq-core public \
+  --admin-email owner@example.org
+goodomics projects set-visibility rnaseq-core private \
+  --admin-email owner@example.org
+```
+
+When authentication is enabled, this operation requires an active installation
+administrator, using the same hidden prompt or administrator environment
+variables as user management. With authentication disabled, the local operator
+can change visibility directly. Public visibility and the `[anonymous]`
+permission list work together: visibility exposes the project, while the TOML
+permissions determine which anonymous operations are allowed within it.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from sqlalchemy import JSON, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -465,6 +465,24 @@ class SQLModelGoodomicsStore:
                 session, ProjectRecord, ProjectRecord.project_id, project_id
             )
         return _project_from_row(row) if row is not None else None
+
+    async def set_project_visibility(
+        self,
+        reference: str,
+        visibility: Literal["private", "public"],
+    ) -> str:
+        """Set an existing project's visibility and return its stable ID."""
+
+        await self.ensure_schema()
+        async with AsyncSession(self._get_engine()) as session:
+            row = await _resolve_project_row(session, reference.strip())
+            if row is None:
+                raise ValueError(f"Project not found: {reference}")
+            project_id = row.project_id
+            row.visibility = visibility
+            session.add(row)
+            await session.commit()
+            return project_id
 
     async def save_run(self, run: Run) -> None:
         # Lightweight save path for callers that provide a Run with embedded

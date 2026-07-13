@@ -248,3 +248,5 @@ packages/goodomics/tests/cbioportal/*/**/*
 *.parquet
 multiqc_data.json
 goodomics.toml
+!docker/demo/goodomics.toml
+docker/demo-state.tar

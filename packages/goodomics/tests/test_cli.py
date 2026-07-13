@@ -9,7 +9,11 @@ from goodomics.cli import app
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.server.db.models import InstallationStateRecord
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import RunRecord, SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    ProjectRecord,
+    RunRecord,
+    SQLModelGoodomicsStore,
+)
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from typer.testing import CliRunner
@@ -53,6 +57,25 @@ enabled = true
         encoding="utf-8",
     )
     return config_path
+
+
+def _project_visibility(database_path: Path, project_id: str) -> str:
+    """Load a persisted project's visibility for a CLI assertion."""
+
+    async def load() -> str:
+        """Query project visibility and release the test database engine."""
+
+        store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
+        async with AsyncSession(store._get_engine()) as session:
+            row = (
+                await session.exec(
+                    select(ProjectRecord).where(ProjectRecord.project_id == project_id)
+                )
+            ).one()
+        await store._get_engine().dispose()
+        return row.visibility
+
+    return asyncio.run(load())
 
 
 def test_report_command_writes_html(tmp_path: Path) -> None:
@@ -390,6 +413,75 @@ def test_cli_preserves_the_final_active_administrator(tmp_path: Path) -> None:
 
     assert disabled.exit_code == 0
     assert "Disabled user owner@example.org" in disabled.stdout
+
+
+def test_project_visibility_uses_administrator_environment(
+    tmp_path: Path,
+) -> None:
+    """Authorize a project visibility change from non-interactive credentials."""
+
+    database_path = tmp_path / "state" / "goodomics.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    config_path = _write_auth_config(tmp_path, database_path)
+    store = SQLModelGoodomicsStore(database_url)
+    project = asyncio.run(store.ensure_default_project())
+    asyncio.run(store._get_engine().dispose())
+    bootstrap = runner.invoke(
+        app,
+        [
+            "users",
+            "create-admin",
+            "--email",
+            "owner@example.org",
+            "--password",
+            "correct horse battery staple",
+            "--config",
+            str(config_path),
+        ],
+        env={"GOODOMICS_AUTH_SECRET": AUTH_SECRET},
+    )
+    assert bootstrap.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "projects",
+            "set-visibility",
+            "default",
+            "public",
+            "--config",
+            str(config_path),
+        ],
+        env={
+            "GOODOMICS_ADMIN_EMAIL": "owner@example.org",
+            "GOODOMICS_ADMIN_PASSWORD": "correct horse battery staple",
+            "GOODOMICS_AUTH_SECRET": AUTH_SECRET,
+        },
+    )
+
+    assert result.exit_code == 0
+    assert f"Set project {project.project_id} visibility to public" in result.stdout
+    assert _project_visibility(database_path, project.project_id) == "public"
+
+
+def test_project_visibility_rejects_unknown_project(tmp_path: Path) -> None:
+    """Reject visibility changes that do not resolve an existing project."""
+
+    database_path = tmp_path / "state" / "goodomics.db"
+    result = runner.invoke(
+        app,
+        [
+            "projects",
+            "set-visibility",
+            "missing",
+            "private",
+            "--database-url",
+            f"sqlite+aiosqlite:///{database_path}",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Project not found: missing" in result.output
 
 
 def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:

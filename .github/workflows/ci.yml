@@ -117,30 +117,46 @@ jobs:
       - name: Install Goodomics
         run: uv sync --frozen --package goodomics
 
-      - name: Download demo data
+      - name: Download MultiQC demo report
         run: |
           curl --fail --location --retry 3 \
-            --output "${RUNNER_TEMP}/rna-seq-data.zip" \
-            https://seqera.io/examples/rna-seq/data.zip
-          mkdir -p "${RUNNER_TEMP}/rna-seq"
-          unzip -q "${RUNNER_TEMP}/rna-seq-data.zip" \
-            -d "${RUNNER_TEMP}/rna-seq"
+            --output "${RUNNER_TEMP}/multiqc_report.zip" \
+            https://seqera.io/examples/rna-seq/multiqc_report.zip
+          mkdir -p "${RUNNER_TEMP}/rna-seq/multiqc"
+          unzip -q "${RUNNER_TEMP}/multiqc_report.zip" \
+            -d "${RUNNER_TEMP}/rna-seq/multiqc"
+          test -s "${RUNNER_TEMP}/rna-seq/multiqc/multiqc_data/multiqc.parquet"
 
-      - name: Generate MultiQC output
+      - name: Initialize authenticated demo data
+        env:
+          GOODOMICS_ADMIN_EMAIL: ${{ secrets.GOODOMICS_ADMIN_EMAIL }}
+          GOODOMICS_ADMIN_PASSWORD: ${{ secrets.GOODOMICS_ADMIN_PASSWORD }}
         run: |
-          uvx --from multiqc==1.35 multiqc \
-            "${RUNNER_TEMP}/rna-seq/data" \
-            --config "${RUNNER_TEMP}/rna-seq/multiqc_config.yaml" \
-            --outdir "${RUNNER_TEMP}/rna-seq/multiqc" \
-            --force
+          if [ -z "${GOODOMICS_ADMIN_PASSWORD}" ]; then
+            echo "::error::The GOODOMICS_ADMIN_PASSWORD secret is required"
+            exit 1
+          fi
+          export GOODOMICS_AUTH_SECRET="$(uv run python -c \
+            'import secrets; print(secrets.token_urlsafe(48))')"
 
-      - name: Ingest demo data
-        run: |
           uv run --package goodomics goodomics ingest \
             --type multiqc \
+            --config docker/demo/goodomics.toml \
             "${RUNNER_TEMP}/rna-seq/multiqc"
+
+          uv run --package goodomics goodomics users create-admin \
+            --email "${GOODOMICS_ADMIN_EMAIL}" \
+            --password "${GOODOMICS_ADMIN_PASSWORD}" \
+            --config docker/demo/goodomics.toml
+
+          uv run --package goodomics goodomics projects set-visibility \
+            default public \
+            --config docker/demo/goodomics.toml
+
           test -s .goodomics/goodomics.db
           test -s .goodomics/projects/prj_default/analytics.duckdb
+
+          tar -cf docker/demo-state.tar .goodomics
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -157,6 +173,9 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.server
+          build-args: |
+            GOODOMICS_CONFIG_FILE=docker/demo/goodomics.toml
+            GOODOMICS_STATE_ARCHIVE=docker/demo-state.tar
           push: true
           tags: ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha,scope=goodomics-demo
