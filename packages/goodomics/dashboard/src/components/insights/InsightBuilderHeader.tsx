@@ -13,6 +13,7 @@ export function InsightBuilderHeader({
   description,
   descriptionOpen,
   isSaving,
+  canSave,
   onBack,
   onDescriptionChange,
   onDescriptionOpenChange,
@@ -24,6 +25,7 @@ export function InsightBuilderHeader({
   description: string;
   descriptionOpen: boolean;
   isSaving: boolean;
+  canSave: boolean;
   onBack: () => void;
   onDescriptionChange: (value: string) => void;
   onDescriptionOpenChange: (value: boolean) => void;
@@ -43,7 +45,7 @@ export function InsightBuilderHeader({
           value={title}
           onChange={(event) => onTitleChange(event.target.value)}
         />
-        <div className="flex overflow-hidden rounded-lg">
+        {canSave && <div className="flex overflow-hidden rounded-lg">
           <Button
             className="h-8 rounded-r-none"
             disabled={isSaving}
@@ -67,7 +69,7 @@ export function InsightBuilderHeader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
       </div>
       {descriptionOpen ? (
         <div className="mt-1 flex items-start gap-1.5">
