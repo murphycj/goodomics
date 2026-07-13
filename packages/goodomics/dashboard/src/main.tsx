@@ -7,12 +7,15 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
+import { AuthProvider } from "./components/auth/AuthProvider";
 import { Layout } from "./components/layout/Layout";
 import { getProject } from "./api";
 import { queryClient } from "./lib/queryClient";
+import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { DatabasePage } from "./pages/DatabasePage";
 import { HomePage } from "./pages/HomePage";
 import { InsightsPage } from "./pages/InsightsPage";
+import { LoginPage } from "./pages/LoginPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
 import { ProjectDataBrowserPage } from "./pages/ProjectDataBrowserPage";
 import { ProjectHomePage } from "./pages/ProjectHomePage";
@@ -20,6 +23,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { SampleDetailPage } from "./pages/SampleDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SetupPage } from "./pages/SetupPage";
 import "./styles.css";
 
 const rootRoute = createRootRoute({ component: Layout });
@@ -27,6 +31,21 @@ const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: HomePage,
+});
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginPage,
+});
+const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup",
+  component: SetupPage,
+});
+const adminUsersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/users",
+  component: AdminUsersPage,
 });
 const projectRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -116,7 +135,7 @@ const insightEditRoute = createRoute({
 const policiesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/qc-policies",
-  component: PoliciesPage,
+  component: PoliciesRouteAdapter,
 });
 const databaseRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -132,6 +151,9 @@ const settingsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     homeRoute,
+    loginRoute,
+    setupRoute,
+    adminUsersRoute,
     projectRoute,
     runDetailRoute,
     runsRoute,
@@ -301,6 +323,12 @@ function SettingsRouteAdapter() {
   return <SettingsPage projectId={projectId} />;
 }
 
+/** Route adapter that scopes QC policies to the current project. */
+function PoliciesRouteAdapter() {
+  const { projectId } = policiesRoute.useParams();
+  return <PoliciesPage projectId={projectId} />;
+}
+
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;
@@ -309,6 +337,8 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
   </QueryClientProvider>,
 );
