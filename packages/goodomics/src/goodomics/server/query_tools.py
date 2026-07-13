@@ -13,6 +13,11 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
+from goodomics.server.auth import (
+    Principal,
+    authorized_project_pks,
+    current_principal,
+)
 from goodomics.server.settings import Settings
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
@@ -390,6 +395,11 @@ class GoodomicsQueryTools:
         run = await self.context.store.get_run(run_id)
         if run is None:
             return {"status": "not_found", "run": None}
+        if (
+            run.project_id is not None
+            and await self._get_project(run.project_id) is None
+        ):
+            return {"status": "not_found", "run": None}
         if project:
             project_id, resolution = await self._required_project_id(project)
             if project_id is None:
@@ -577,25 +587,35 @@ class GoodomicsQueryTools:
         # even against a fresh local database.
         await self.context.store.ensure_default_project()
         async with self._session() as session:
-            return list(
-                (
-                    await session.exec(
-                        select(ProjectRecord).order_by(
-                            cast(Any, ProjectRecord.created_at),
-                            ProjectRecord.name,
-                        )
-                    )
-                ).all()
+            statement = select(ProjectRecord).order_by(
+                cast(Any, ProjectRecord.created_at),
+                ProjectRecord.name,
             )
+            visible = await self._visible_project_pks(session)
+            if visible is not None:
+                statement = statement.where(cast(Any, ProjectRecord.id).in_(visible))
+            return list((await session.exec(statement)).all())
 
     async def _get_project(self, project_id: str) -> ProjectRecord | None:
         # Public methods pass stable project_id labels. Most SQL filters need
         # the integer primary key stored on the ProjectRecord.
         await self.context.store.ensure_schema()
         async with self._session() as session:
-            return await get_record_by_field(
+            row = await get_record_by_field(
                 session, ProjectRecord, ProjectRecord.project_id, project_id
             )
+            if row is None:
+                return None
+            visible = await self._visible_project_pks(session)
+            if visible is not None and row.id not in visible:
+                return None
+            return row
+
+    async def _visible_project_pks(self, session: AsyncSession) -> set[int] | None:
+        if not self.context.settings.auth.enabled:
+            return None
+        principal = current_principal.get() or Principal(kind="anonymous")
+        return await authorized_project_pks(session, principal, self.context.settings)
 
     async def _project_summary(self, project: ProjectRecord) -> dict[str, Any]:
         # Project summaries calculate small aggregate counts on demand. That
@@ -712,6 +732,12 @@ class GoodomicsQueryTools:
             statement = statement.order_by(RunRecord.run_id)
         statement = statement.limit(_bounded_limit(limit))
         async with self._session() as session:
+            if project_id is None:
+                visible = await self._visible_project_pks(session)
+                if visible is not None:
+                    statement = statement.where(
+                        cast(Any, RunRecord.project_id).in_(visible)
+                    )
             rows = (await session.exec(statement)).all()
             return [await _run_record_payload_public(session, row) for row in rows]
 
