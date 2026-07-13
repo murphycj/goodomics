@@ -11,7 +11,7 @@ import type {
 } from "../api";
 import { payloadKindLabel, payloadShapeSummary } from "../lib/resultShapes";
 import {
-  fileContentUrl,
+  openFileContent,
   getProjectSample,
   listProjectRunFiles,
   listProjectRunPayloads,
@@ -141,14 +141,8 @@ export function SampleDetailPage({
           ?.filter((file) => file.kind === "multiqc_report")
           .slice(0, 1)
           .map((file) => (
-            <Button asChild key={file.file_id}>
-              <a
-                href={fileContentUrl(file, projectId)}
-                rel="noreferrer"
-                target="_blank"
-              >
+            <Button key={file.file_id} onClick={() => void openFileContent(file, projectId)}>
                 <ExternalLink size={16} /> MultiQC report
-              </a>
             </Button>
           ))}
       </div>
@@ -466,14 +460,8 @@ function FilesTable({
                   </TableCell>
                   <TableCell className="text-right">
                     {file.kind.endsWith("report") && (
-                      <Button asChild size="sm">
-                        <a
-                          href={fileContentUrl(file, projectId)}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
+                      <Button size="sm" onClick={() => void openFileContent(file, projectId)}>
                           <ExternalLink size={14} /> Open
-                        </a>
                       </Button>
                     )}
                   </TableCell>
