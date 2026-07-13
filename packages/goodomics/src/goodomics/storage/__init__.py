@@ -7,12 +7,24 @@ from goodomics.storage.database import (
     sqlite_database_path,
 )
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.files import (
+    FileMetadata,
+    FileStore,
+    FileStoreRegistry,
+    FilesystemFileStore,
+    S3FileStore,
+)
 from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
 
 __all__ = [
     "DuckDBAnalyticsStore",
     "GoodomicsStore",
     "SQLModelGoodomicsStore",
+    "FileMetadata",
+    "FileStore",
+    "FileStoreRegistry",
+    "FilesystemFileStore",
+    "S3FileStore",
     "DEFAULT_DATABASE_URL",
     "create_async_database_engine",
     "ensure_sqlite_parent",
