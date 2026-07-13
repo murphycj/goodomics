@@ -5,17 +5,21 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.routing import Route
 
 from goodomics.server.ai import GoodomicsChatService
 from goodomics.server.api.routes import router
+from goodomics.server.auth import resolve_principal
+from goodomics.server.auth_routes import router as auth_router
 from goodomics.server.db.session import create_store
 from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import QueryToolContext
-from goodomics.server.settings import Settings
+from goodomics.server.rate_limits import AsyncRateLimiter
+from goodomics.server.settings import Settings, load_settings
+from goodomics.storage.files import FileStoreRegistry
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
@@ -57,10 +61,10 @@ def _dashboard_static_file(path: str) -> Path | None:
     return None
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the Goodomics server app with API, MCP stream endpoint, and UI routes."""
 
-    settings = Settings()
+    settings = settings or load_settings()
     store = create_store(settings.database_url)
     query_context = QueryToolContext(settings=settings, store=store)
     ai_chat = GoodomicsChatService(query_context)
@@ -88,7 +92,20 @@ def create_app() -> FastAPI:
     app.state.store = store
     app.state.query_context = query_context
     app.state.ai_chat = ai_chat
+    app.state.file_stores = FileStoreRegistry.from_settings(settings)
+    app.state.rate_limiter = AsyncRateLimiter(settings.rate_limits)
+
+    @app.middleware("http")
+    async def resolve_mcp_principal(request: Request, call_next):
+        # MCP transport routes bypass the FastAPI API router dependencies. Set
+        # the same request-scoped principal so shared query tools enforce
+        # project visibility and current SQL role permissions.
+        if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
+            await resolve_principal(request)
+        return await call_next(request)
+
     app.include_router(router)
+    app.include_router(auth_router)
     app.router.routes.extend(
         Route("/mcp", endpoint=route.endpoint, name="mcp")
         for route in mcp_app.routes
