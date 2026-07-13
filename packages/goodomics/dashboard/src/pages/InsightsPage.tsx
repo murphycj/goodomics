@@ -57,6 +57,7 @@ import {
   type SavedInsight,
 } from "../api";
 import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
+import { useAuth } from "../components/auth/AuthProvider";
 import { InsightChartControls } from "../components/insights/InsightChartControls";
 import { InsightPreviewPanel } from "../components/insights/InsightPreviewPanel";
 import {
@@ -146,6 +147,8 @@ export function InsightsPage({
   projectId: string;
   target?: InsightTarget;
 }) {
+  const { can } = useAuth();
+  const canCreate = can("insight.create", projectId);
   // These queries feed both the list view and the builder. Contracts provide the
   // semantic route; database tables provide the lower-level escape hatch.
   const insights = useQuery({
@@ -175,6 +178,10 @@ export function InsightsPage({
   const [selectedInsightId, setSelectedInsightId] = useState<string | null>(
     null,
   );
+  const canSave =
+    selectedInsightId || target.mode === "edit"
+      ? can("insight.edit", projectId)
+      : canCreate;
   const selectedInsight = insights.data?.find(
     (insight) =>
       (target.mode === "edit" &&
@@ -182,13 +189,13 @@ export function InsightsPage({
           insight.url_slug === target.insightRef)) ||
       insight.insight_id === selectedInsightId,
   );
-  const effectiveSelectedInsightId = selectedInsight?.insight_id ?? selectedInsightId;
+  const effectiveSelectedInsightId =
+    selectedInsight?.insight_id ?? selectedInsightId;
   const [title, setTitle] = useState("New insight");
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [tableColumnPickerOpen, setTableColumnPickerOpen] = useState(false);
-  const [analysisGrain, setAnalysisGrain] =
-    useState<AnalysisGrain>("sample");
+  const [analysisGrain, setAnalysisGrain] = useState<AnalysisGrain>("sample");
   const [sampleSetIds, setSampleSetIds] = useState<string[]>([]);
   const [sampleIds, setSampleIds] = useState<string[]>([]);
   const [runSampleIds, setRunSampleIds] = useState<string[]>([]);
@@ -251,16 +258,18 @@ export function InsightsPage({
       numericOnly: nextVisualization !== "table",
     });
     const secondField = nextContract
-      ? nextContract.fields.find(
+      ? (nextContract.fields.find(
           (field) =>
             field.field_id !== firstField &&
             (nextVisualization !== "scatter" || field.value_type === "numeric"),
-        )?.field_id ?? ""
+        )?.field_id ?? "")
       : "";
     const nextContractId = nextContract?.data_contract_id ?? contractId;
     setAnalysisGrain(nextGrain);
     setVisualization(nextVisualization);
-    setLinkerKind(parseLinkerKind(linker.kind) || defaultLinkerForGrain(nextGrain));
+    setLinkerKind(
+      parseLinkerKind(linker.kind) || defaultLinkerForGrain(nextGrain),
+    );
     setQueryMode("contract");
     setSampleSetIds([]);
     setSampleIds([]);
@@ -310,7 +319,11 @@ export function InsightsPage({
     setTableColumns((current) => [
       ...current.filter((item) => item.contractId && item.fieldId),
       {
-        ...blankSeries(current.length, contract.data_contract_id, field.field_id),
+        ...blankSeries(
+          current.length,
+          contract.data_contract_id,
+          field.field_id,
+        ),
         name: "",
       },
     ]);
@@ -453,7 +466,11 @@ export function InsightsPage({
         ? current
         : [
             ...current,
-            blankSeries(current.length, current[0]?.contractId ?? contractId, ""),
+            blankSeries(
+              current.length,
+              current[0]?.contractId ?? contractId,
+              "",
+            ),
           ],
     );
   }, [contractId, queryMode, visualization]);
@@ -495,7 +512,9 @@ export function InsightsPage({
     setDescriptionOpen(Boolean(selectedInsight.description?.trim()));
     setVisualization(String(config.visualization ?? "table"));
     setAnalysisGrain(parseAnalysisGrain(config.analysis_grain));
-    setSampleSetIds(stringArrayConfig(context.sample_set_ids, context.sample_set_id));
+    setSampleSetIds(
+      stringArrayConfig(context.sample_set_ids, context.sample_set_id),
+    );
     setSampleIds(stringArrayConfig(context.sample_ids, context.sample_id));
     setRunSampleIds([]);
     setLinkerKind(parseLinkerKind(linker.kind));
@@ -507,7 +526,10 @@ export function InsightsPage({
     if (source.kind === "contract") {
       setContractId(source.dataContractId);
       const selectedField = firstString(query.y, query.fields, "");
-      const savedSeries = parseSavedSeries(config.series, source.dataContractId);
+      const savedSeries = parseSavedSeries(
+        config.series,
+        source.dataContractId,
+      );
       setFieldId(selectedField || savedSeries[0]?.fieldId || "");
       setSeries(
         savedSeries.length
@@ -630,18 +652,23 @@ export function InsightsPage({
         : Boolean(table || advancedSql.trim())),
     retry: false,
   });
-  const setupWarning = chartSetupWarning({
-    contracts: availableContracts,
-    queryMode,
-    series: visualization === "table" ? tableColumns : series,
-    visualization,
-  }) ?? validationWarning(validation.data);
+  const setupWarning =
+    chartSetupWarning({
+      contracts: availableContracts,
+      queryMode,
+      series: visualization === "table" ? tableColumns : series,
+      visualization,
+    }) ?? validationWarning(validation.data);
   const save = useMutation({
     // Saved insights keep the same config shape that report templates consume,
     // so the dashboard builder and portable YAML/JSON exports stay aligned.
     mutationFn: (continueEditing: boolean) =>
       effectiveSelectedInsightId
-        ? patchInsight(effectiveSelectedInsightId, { name: title, description, config })
+        ? patchInsight(effectiveSelectedInsightId, {
+            name: title,
+            description,
+            config,
+          })
         : createInsight({
             project_id: projectId,
             name: title,
@@ -677,13 +704,15 @@ export function InsightsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button
-            onClick={() => {
-              window.location.href = `/project/${projectId}/insights/new`;
-            }}
-          >
-            <Plus className="h-4 w-4" /> New insight
-          </Button>
+          {canCreate && (
+            <Button
+              onClick={() => {
+                window.location.href = `/project/${projectId}/insights/new`;
+              }}
+            >
+              <Plus className="h-4 w-4" /> New insight
+            </Button>
+          )}
         </div>
         <AsyncBlock query={insights} empty="No saved insights yet.">
           {(data) => (
@@ -708,6 +737,7 @@ export function InsightsPage({
         description={description}
         descriptionOpen={descriptionOpen}
         isSaving={save.isPending}
+        canSave={canSave}
         title={title}
         onBack={() => {
           window.location.href = `/project/${projectId}/insights`;
@@ -736,7 +766,9 @@ export function InsightsPage({
             onRowLimitChange={setResultLimit}
           />
         }
-        resetLabel={visualization === "table" ? "Clear columns" : "Clear series"}
+        resetLabel={
+          visualization === "table" ? "Clear columns" : "Clear series"
+        }
         visualization={visualization}
         onAnalysisGrainChange={selectAnalysisGrain}
         onDescriptionRequest={() => setDescriptionOpen(true)}
@@ -761,7 +793,9 @@ export function InsightsPage({
                   contracts={availableContracts}
                   projectId={projectId}
                   itemLabel="Series"
-                  label={visualization === "scatter" ? "X / Y data" : "Data series"}
+                  label={
+                    visualization === "scatter" ? "X / Y data" : "Data series"
+                  }
                   series={series}
                   setSeries={setSeries}
                   sourceKind={queryMode}
@@ -864,7 +898,9 @@ function chartSetupWarning({
   if (["histogram", "scatter"].includes(visualization)) {
     const nonNumeric = activeSeries
       .slice(0, visualization === "scatter" ? 2 : activeSeries.length)
-      .find((item) => fieldForSeries(contracts, item)?.value_type !== "numeric");
+      .find(
+        (item) => fieldForSeries(contracts, item)?.value_type !== "numeric",
+      );
     if (nonNumeric) {
       return `${seriesDisplayName(contracts, nonNumeric)} must be numeric for this chart type.`;
     }
@@ -1007,7 +1043,9 @@ function SampleFilterDropdown({
 
   useEffect(() => {
     if (!open) {
-      setActiveTab(filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }));
+      setActiveTab(
+        filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }),
+      );
       return;
     }
     setPendingSampleGroupIds(sampleGroupIds);
@@ -1055,7 +1093,9 @@ function SampleFilterDropdown({
         showCloseButton
       >
         <DialogHeader className="shrink-0 pr-10">
-          <DialogTitle className="text-lg">Filter by sample or group</DialogTitle>
+          <DialogTitle className="text-lg">
+            Filter by sample or group
+          </DialogTitle>
         </DialogHeader>
         <Tabs
           className="flex min-h-0 flex-1 flex-col"
@@ -1070,7 +1110,10 @@ function SampleFilterDropdown({
               Sample group
             </TabsTrigger>
           </TabsList>
-          <TabsContent className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex" value="sample">
+          <TabsContent
+            className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex"
+            value="sample"
+          >
             <FilterSearchInput
               placeholder="Search samples..."
               value={sampleSearch}
@@ -1079,7 +1122,9 @@ function SampleFilterDropdown({
             <FilterOptionList
               emptyText="No samples found."
               hasMore={Boolean(samplePages.hasNextPage)}
-              isLoading={samplePages.isLoading || samplePages.isFetchingNextPage}
+              isLoading={
+                samplePages.isLoading || samplePages.isFetchingNextPage
+              }
               onLoadMore={() => void samplePages.fetchNextPage()}
             >
               {samples.map((sample) => {
@@ -1137,7 +1182,8 @@ function SampleFilterDropdown({
               emptyText="No sample groups found."
               hasMore={Boolean(sampleGroupPages.hasNextPage)}
               isLoading={
-                sampleGroupPages.isLoading || sampleGroupPages.isFetchingNextPage
+                sampleGroupPages.isLoading ||
+                sampleGroupPages.isFetchingNextPage
               }
               onLoadMore={() => void sampleGroupPages.fetchNextPage()}
             >
@@ -1145,7 +1191,9 @@ function SampleFilterDropdown({
                 return (
                   <FilterOptionButton
                     key={sampleGroup.sample_set_id}
-                    selected={pendingSampleGroupIds.includes(sampleGroup.sample_set_id)}
+                    selected={pendingSampleGroupIds.includes(
+                      sampleGroup.sample_set_id,
+                    )}
                     subtitle={`${sampleGroup.member_count.toLocaleString()} samples`}
                     title={sampleGroup.name}
                     search={sampleGroupSearch}
@@ -1339,11 +1387,15 @@ function FilterOptionList({
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     if (!hasMore || isLoading) return;
     const element = event.currentTarget;
-    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const remaining =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
     if (remaining < 80) onLoadMore();
   };
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pr-1" onScroll={handleScroll}>
+    <div
+      className="min-h-0 flex-1 overflow-y-auto pr-1"
+      onScroll={handleScroll}
+    >
       <div className="space-y-1">
         {children}
         {!hasItems && !isLoading ? (
@@ -1447,14 +1499,21 @@ function sampleFilterSummary({
   if (sampleIds.length === 1) return `Sample ${sampleIds[0]}`;
   if (sampleIds.length > 1) return `${sampleIds.length} samples`;
   if (sampleGroupIds.length === 1) {
-    return sampleGroup ? `Sample group ${sampleGroup.name}` : `Sample group ${sampleGroupIds[0]}`;
+    return sampleGroup
+      ? `Sample group ${sampleGroup.name}`
+      : `Sample group ${sampleGroupIds[0]}`;
   }
-  if (sampleGroupIds.length > 1) return `${sampleGroupIds.length} sample groups`;
+  if (sampleGroupIds.length > 1)
+    return `${sampleGroupIds.length} sample groups`;
   return "All samples";
 }
 
 function childrenArray(children: React.ReactNode) {
-  return Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
+  return Array.isArray(children)
+    ? children.filter(Boolean)
+    : children
+      ? [children]
+      : [];
 }
 
 function toggleString(values: string[], value: string) {
@@ -1465,7 +1524,11 @@ function toggleString(values: string[], value: string) {
     : [...values, normalized];
 }
 
-function pageNextOffset(lastPage: { items: unknown[]; offset: number; total: number }) {
+function pageNextOffset(lastPage: {
+  items: unknown[];
+  offset: number;
+  total: number;
+}) {
   const nextOffset = lastPage.offset + lastPage.items.length;
   return nextOffset < lastPage.total ? nextOffset : undefined;
 }
@@ -1628,7 +1691,11 @@ type ChartOption = ReturnType<typeof chartOptionsFromCatalog>[number];
 type AnalysisGrainOption = ReturnType<typeof analysisGrainsFromCatalog>[number];
 type TemplateOption = ReturnType<typeof templatesFromCatalog>[number];
 
-function AnalyzeByValue({ option }: { option: AnalysisGrainOption | undefined }) {
+function AnalyzeByValue({
+  option,
+}: {
+  option: AnalysisGrainOption | undefined;
+}) {
   if (!option) return <SelectValue />;
   const GrainIcon = option.Icon;
   return (
@@ -1651,7 +1718,8 @@ function ChartTypePicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const selectedChart = charts.find((chart) => chart.value === value) ?? charts[0];
+  const selectedChart =
+    charts.find((chart) => chart.value === value) ?? charts[0];
   const SelectedChartIcon = selectedChart?.Icon;
   const groups = groupedChartOptions(charts, search);
 
@@ -1680,10 +1748,7 @@ function ChartTypePicker({
           <ChevronDown className="h-4 w-4 shrink-0 text-[#657082]" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="w-[360px] p-2 shadow-none"
-      >
+      <DropdownMenuContent align="start" className="w-[360px] p-2 shadow-none">
         <div className="relative mb-2">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
           <Input
@@ -1901,10 +1966,9 @@ function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
     ["file", "Files"],
   ] as const;
   const items = catalog?.analysis_grains.length
-    ? catalog.analysis_grains.map((grain) => [
-        stringConfig(grain.id),
-        stringConfig(grain.label),
-      ] as const)
+    ? catalog.analysis_grains.map(
+        (grain) => [stringConfig(grain.id), stringConfig(grain.label)] as const,
+      )
     : fallback;
   return items
     .filter((item): item is readonly [AnalysisGrain, string] =>
@@ -1919,14 +1983,13 @@ function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
 
 function templatesFromCatalog(catalog: InsightCatalog | undefined) {
   const items = catalog?.templates.length
-    ? catalog.templates.map((template) => [
-        stringConfig(template.id),
-        stringConfig(template.label),
-      ] as const)
-    : FALLBACK_TEMPLATES.map((template) => [
-        template.id,
-        template.label,
-      ] as const);
+    ? catalog.templates.map(
+        (template) =>
+          [stringConfig(template.id), stringConfig(template.label)] as const,
+      )
+    : FALLBACK_TEMPLATES.map(
+        (template) => [template.id, template.label] as const,
+      );
   return items
     .filter((item) => item[0])
     .map(([value, label]) => ({ value, label: label || value }));
@@ -1983,7 +2046,10 @@ const FALLBACK_TEMPLATES = [
   },
 ] as const;
 
-function templateDefinition(templateId: string, catalog: InsightCatalog | undefined) {
+function templateDefinition(
+  templateId: string,
+  catalog: InsightCatalog | undefined,
+) {
   return (
     catalog?.templates.find((item) => stringConfig(item.id) === templateId) ??
     FALLBACK_TEMPLATES.find((item) => item.id === templateId)
@@ -2018,10 +2084,9 @@ function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
     ["metric", "Metric"],
   ] as const;
   const items = catalog?.charts.length
-    ? catalog.charts.map((chart) => [
-        stringConfig(chart.id),
-        stringConfig(chart.label),
-      ] as const)
+    ? catalog.charts.map(
+        (chart) => [stringConfig(chart.id), stringConfig(chart.label)] as const,
+      )
     : fallback;
   return items
     .filter((item) => item[0])
@@ -2041,10 +2106,10 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
     ["entity", "Entity"],
   ] as const;
   const items = catalog?.linkers.length
-    ? catalog.linkers.map((linker) => [
-        stringConfig(linker.id),
-        stringConfig(linker.label),
-      ] as const)
+    ? catalog.linkers.map(
+        (linker) =>
+          [stringConfig(linker.id), stringConfig(linker.label)] as const,
+      )
     : fallback;
   return items
     .filter((item): item is readonly [LinkerKind, string] =>
@@ -2122,7 +2187,9 @@ function buildContext({
   return {
     kind: "cohort",
     sample_set_id: cleanedSampleSetIds[0],
-    sample_set_ids: cleanedSampleSetIds.length ? cleanedSampleSetIds : undefined,
+    sample_set_ids: cleanedSampleSetIds.length
+      ? cleanedSampleSetIds
+      : undefined,
   };
 }
 
@@ -2203,7 +2270,8 @@ function buildConfig({
     rowLimit: resultLimit,
   });
   if (queryMode === "contract") {
-    const sourceItems = visualization === "table" ? tableColumnItems : seriesItems;
+    const sourceItems =
+      visualization === "table" ? tableColumnItems : seriesItems;
     const activeSeries = sourceItems.filter(
       (item) => item.contractId && item.fieldId,
     );
@@ -2226,7 +2294,9 @@ function buildConfig({
       limit: resultPolicy.limit,
     };
     if (visualization === "table") {
-      const fieldAliases = activeSeries.map((item) => safeFieldAlias(item.fieldId));
+      const fieldAliases = activeSeries.map((item) =>
+        safeFieldAlias(item.fieldId),
+      );
       query.dimensions = identityColumns;
       query.columns = [...identityColumns, ...fieldAliases];
       query.measures = [];
@@ -2421,7 +2491,8 @@ function parseSavedSeries(value: unknown, fallbackContractId: string) {
         fieldId,
         aggregation: stringConfig(item.aggregation) || "raw",
         name: stringConfig(item.name) || stringConfig(item.label),
-        color: stringConfig(item.color) || CHART_COLORS[index % CHART_COLORS.length],
+        color:
+          stringConfig(item.color) || CHART_COLORS[index % CHART_COLORS.length],
         filters: parseSavedFilters(item.filters),
         resultScope: parseSavedResultScope(item.result_scope),
       } satisfies BuilderSeries;
@@ -2439,10 +2510,14 @@ function parseSavedFilters(value: unknown) {
   }));
 }
 
-function serializeResultScope(scope: ResultScope, analysisGrain: AnalysisGrain) {
+function serializeResultScope(
+  scope: ResultScope,
+  analysisGrain: AnalysisGrain,
+) {
   return {
     selection:
-      analysisGrain === "run" && scope.selection === "latest_successful_per_sample"
+      analysisGrain === "run" &&
+      scope.selection === "latest_successful_per_sample"
         ? "all_eligible_runs"
         : scope.selection,
     analysis_type_ids: scope.analysisTypeIds,
@@ -2498,20 +2573,13 @@ function parseResultPolicyMode(value: unknown): ResultPolicyMode {
 }
 
 function isAnalysisGrain(value: string): value is AnalysisGrain {
-  return [
-    "sample",
-    "subject",
-    "run",
-    "feature",
-    "variant",
-    "file",
-  ].includes(value);
+  return ["sample", "subject", "run", "feature", "variant", "file"].includes(
+    value,
+  );
 }
 
 function isLinkerKind(value: string): value is LinkerKind {
-  return ["auto", "sample", "run", "feature", "entity"].includes(
-    value,
-  );
+  return ["auto", "sample", "run", "feature", "entity"].includes(value);
 }
 
 function isResultPolicyMode(value: string): value is ResultPolicyMode {
