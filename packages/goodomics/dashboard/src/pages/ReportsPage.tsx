@@ -64,6 +64,7 @@ import {
   SelectValue,
 } from "../components/ui";
 import { queryClient } from "../lib/queryClient";
+import { useAuth } from "../components/auth/AuthProvider";
 import { cn } from "../lib/utils";
 
 type ReportMode = "list" | "detail";
@@ -82,6 +83,8 @@ export function ReportsPage({
   projectId: string;
   target?: ReportTarget;
 }) {
+  const { can } = useAuth();
+  const canCreate = can("report.create", projectId);
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId),
@@ -100,6 +103,9 @@ export function ReportsPage({
   });
   const mode: ReportMode = target.mode === "list" ? "list" : "detail";
   const isNewReport = target.mode === "new";
+  const canSaveReport = isNewReport
+    ? canCreate
+    : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
   const selectedReport = reports.data?.find(
@@ -237,13 +243,13 @@ export function ReportsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button
+          {canCreate && <Button
             onClick={() => {
               window.location.href = `/project/${projectId}/reports/new`;
             }}
           >
             <Plus className="h-4 w-4" /> New report
-          </Button>
+          </Button>}
         </div>
         <AsyncBlock query={reports} empty="No saved reports yet.">
           {(data) => (
@@ -268,6 +274,7 @@ export function ReportsPage({
         <ReportBuilderHeader
           description={description}
           isSaving={saveReport.isPending}
+          canSave={canSaveReport}
           title={name}
           onBack={() => {
             window.location.href = selectedReport?.url_slug
@@ -497,6 +504,7 @@ function ReportBuilderHeader({
   title,
   description,
   isSaving,
+  canSave,
   onBack,
   onDescriptionChange,
   onSave,
@@ -506,6 +514,7 @@ function ReportBuilderHeader({
   title: string;
   description: string;
   isSaving: boolean;
+  canSave: boolean;
   onBack: () => void;
   onDescriptionChange: (value: string) => void;
   onSave: () => void;
@@ -547,7 +556,7 @@ function ReportBuilderHeader({
             </>
           )}
         </Button>
-        <div className="flex overflow-hidden rounded-lg shadow-sm">
+        {canSave && <div className="flex overflow-hidden rounded-lg shadow-sm">
           <Button
             className="rounded-r-none"
             disabled={isSaving}
@@ -571,7 +580,7 @@ function ReportBuilderHeader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
       </div>
       {showDescription ? (
         <div className="mt-3 flex items-start gap-2">
