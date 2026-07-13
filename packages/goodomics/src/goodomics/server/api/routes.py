@@ -942,7 +942,6 @@ async def delete_project_file(project_id: str, file_id: str, request: Request) -
     project = await _require_project(request, project_id)
 
     async with _session(request) as session:
-
         # Retrieve the file record for the given file_id and project, ensuring it exists before deletion.
         row = (
             await session.exec(

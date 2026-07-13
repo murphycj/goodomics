@@ -314,27 +314,27 @@ def load_settings(
     environment = os.environ if environ is None else environ
     selected = _select_config_path(config_path, environment)
     values: dict[str, Any] = {}
-    
+
     if selected is not None and selected.is_file():
         with selected.open("rb") as handle:
             values = tomllib.load(handle)
         _resolve_config_paths(values, selected.parent)
-    
+
     for variable, path in _ENV_PATHS.items():
         if variable in environment:
             _set_nested(values, path, _parse_env_value(environment[variable]))
-    
+
     for variable, raw in environment.items():
         if not variable.startswith("GOODOMICS_") or "__" not in variable:
             continue
         path = tuple(part.lower() for part in variable[11:].split("__"))
         _set_nested(values, path, _parse_env_value(raw))
-    
+
     if cli_overrides:
         _deep_merge(values, dict(cli_overrides))
-    
+
     values["config_path"] = selected
-    
+
     return Settings.model_validate(values)
 
 
