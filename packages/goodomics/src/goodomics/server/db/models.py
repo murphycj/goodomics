@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON
+from sqlalchemy import JSON, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 INITIAL_TABLES = (
@@ -19,8 +19,12 @@ INITIAL_TABLES = (
     "rendered_reports",
     "insight_result_cache",
     "report_result_cache",
-    "cohorts",
     "qc_policies",
+    "users",
+    "installation_state",
+    "project_roles",
+    "project_role_permissions",
+    "project_memberships",
 )
 
 
@@ -34,6 +38,8 @@ class InsightRecord(SQLModel, table=True):
     config: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
     updated_at: datetime
+    created_by_user_id: int | None = Field(default=None, foreign_key="users.id")
+    updated_by_user_id: int | None = Field(default=None, foreign_key="users.id")
 
 
 class InsightRevisionRecord(SQLModel, table=True):
@@ -55,6 +61,8 @@ class ReportRecord(SQLModel, table=True):
     config: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
     updated_at: datetime
+    created_by_user_id: int | None = Field(default=None, foreign_key="users.id")
+    updated_by_user_id: int | None = Field(default=None, foreign_key="users.id")
 
 
 class ReportRevisionRecord(SQLModel, table=True):
@@ -102,23 +110,84 @@ class ReportResultCacheRecord(SQLModel, table=True):
     created_at: datetime
 
 
-class CohortRecord(SQLModel, table=True):
-    __tablename__ = "cohorts"
-
-    cohort_id: str = Field(primary_key=True, max_length=255)
-    name: str = Field(max_length=255)
-    description: str | None = None
-    filters: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    updated_at: datetime
-
-
 class QCPolicyRecord(SQLModel, table=True):
     __tablename__ = "qc_policies"
 
-    policy_id: str = Field(primary_key=True, max_length=255)
+    id: int | None = Field(default=None, primary_key=True)
+    policy_id: str = Field(max_length=255, unique=True, index=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
     thresholds: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     updated_at: datetime
+
+
+class UserRecord(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(max_length=64, unique=True, index=True)
+    email: str = Field(max_length=320, unique=True, index=True)
+    password_hash: str
+    display_name: str = Field(max_length=255)
+    is_active: bool = Field(default=True, index=True)
+    is_admin: bool = Field(default=False, index=True)
+    must_change_password: bool = False
+    auth_version: int = 1
+    created_at: datetime
+    updated_at: datetime
+
+
+class InstallationStateRecord(SQLModel, table=True):
+    """Durable singleton recording that first-run administrator setup completed."""
+
+    __tablename__ = "installation_state"
+
+    state_key: str = Field(primary_key=True, max_length=64)
+    setup_completed_at: datetime
+    setup_completed_by_user_id: str = Field(max_length=64)
+
+
+class ProjectRoleRecord(SQLModel, table=True):
+    __tablename__ = "project_roles"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_project_roles_project_name"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    role_id: str = Field(max_length=64, unique=True, index=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    name: str = Field(max_length=255)
+    description: str | None = None
+    is_builtin: bool = False
+
+
+class ProjectRolePermissionRecord(SQLModel, table=True):
+    __tablename__ = "project_role_permissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "role_id", "permission", name="uq_project_role_permissions_role_permission"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    role_id: int = Field(foreign_key="project_roles.id", index=True)
+    permission: str = Field(max_length=128, index=True)
+
+
+class ProjectMembershipRecord(SQLModel, table=True):
+    __tablename__ = "project_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "user_id", name="uq_project_memberships_project_user"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    membership_id: str = Field(max_length=64, unique=True, index=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    role_id: int = Field(foreign_key="project_roles.id", index=True)
+    created_at: datetime
 
 
 SERVER_TABLES: dict[str, Any] = {
@@ -131,8 +200,12 @@ SERVER_TABLES: dict[str, Any] = {
         RenderedReportRecord,
         InsightResultCacheRecord,
         ReportResultCacheRecord,
-        CohortRecord,
         QCPolicyRecord,
+        UserRecord,
+        InstallationStateRecord,
+        ProjectRoleRecord,
+        ProjectRolePermissionRecord,
+        ProjectMembershipRecord,
     )
 }
 
