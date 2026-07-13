@@ -518,7 +518,9 @@ def _request_permission(method: str, path: str) -> str:
         return (
             "data.ingest"
             if method == "POST"
-            else "data.edit" if mutation else "data.read"
+            else "data.edit"
+            if mutation
+            else "data.read"
         )
     if method == "PATCH":
         return "project.configure"
