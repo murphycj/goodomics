@@ -4,6 +4,7 @@ import { Search } from "lucide-react";
 import { listProjects } from "../api";
 import { CreateProjectButton } from "../components/projects/CreateProjectModal";
 import { useSearch } from "../components/search/SearchProvider";
+import { useAuth } from "../components/auth/AuthProvider";
 import {
   AsyncBlock,
   CopyButton,
@@ -22,6 +23,7 @@ export function HomePage() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { openSearch } = useSearch();
   const navigate = useNavigate();
+  const { session } = useAuth();
 
   const openProject = (projectId: string) => {
     void navigate({ to: "/project/$projectId", params: { projectId } });
@@ -56,7 +58,7 @@ export function HomePage() {
               stores.
             </p>
           </div>
-          <CreateProjectButton />
+          {session?.principal.kind !== "anonymous" && <CreateProjectButton />}
         </div>
         <AsyncBlock query={projects} empty="No projects have been created yet.">
           {(items) => (
