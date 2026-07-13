@@ -148,7 +148,6 @@ export function InsightsPage({
   target?: InsightTarget;
 }) {
   const { can } = useAuth();
-  const canCreate = can("insight.create", projectId);
   // These queries feed both the list view and the builder. Contracts provide the
   // semantic route; database tables provide the lower-level escape hatch.
   const insights = useQuery({
@@ -181,7 +180,7 @@ export function InsightsPage({
   const canSave =
     selectedInsightId || target.mode === "edit"
       ? can("insight.edit", projectId)
-      : canCreate;
+      : true;
   const selectedInsight = insights.data?.find(
     (insight) =>
       (target.mode === "edit" &&
@@ -704,15 +703,13 @@ export function InsightsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          {canCreate && (
-            <Button
-              onClick={() => {
-                window.location.href = `/project/${projectId}/insights/new`;
-              }}
-            >
-              <Plus className="h-4 w-4" /> New insight
-            </Button>
-          )}
+          <Button
+            onClick={() => {
+              window.location.href = `/project/${projectId}/insights/new`;
+            }}
+          >
+            <Plus className="h-4 w-4" /> New insight
+          </Button>
         </div>
         <AsyncBlock query={insights} empty="No saved insights yet.">
           {(data) => (
@@ -748,6 +745,14 @@ export function InsightsPage({
         onSaveContinue={() => save.mutate(true)}
         onTitleChange={setTitle}
       />
+      {save.error instanceof Error ? (
+        <div
+          className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-sm text-[#b42318]"
+          role="alert"
+        >
+          {save.error.message}
+        </div>
+      ) : null}
       <InsightBuilderControls
         analysisGrain={analysisGrain}
         catalog={catalog.data}

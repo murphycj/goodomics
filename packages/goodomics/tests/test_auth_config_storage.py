@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.server.app import create_app
 from goodomics.server.auth import create_user, hash_password, verify_password
 from goodomics.server.db.models import UserRecord
@@ -114,6 +115,39 @@ def test_auth_disabled_stays_unrestricted_without_secret(tmp_path: Path) -> None
         assert (
             client.post("/api/v1/projects", json={"name": "Local"}).status_code == 201
         )
+
+
+def test_anonymous_session_exposes_public_permissions_and_disabled_signup(
+    tmp_path: Path,
+) -> None:
+    """Expose public-project capabilities while rejecting disabled signup."""
+
+    settings = _secured_settings(tmp_path)
+
+    async def expose_default_project() -> None:
+        """Create the default project and make it visible to anonymous callers."""
+
+        store = SQLModelGoodomicsStore(settings.database_url)
+        await store.ensure_default_project()
+        await store.set_project_visibility(DEFAULT_PROJECT_ID, "public")
+        await store._get_engine().dispose()
+
+    asyncio.run(expose_default_project())
+
+    with TestClient(create_app(settings)) as client:
+        me = client.get("/api/v1/auth/me")
+        signup = client.post(
+            "/api/v1/auth/signup",
+            json={"email": "visitor@example.org", "password": "abc123"},
+        )
+
+    assert me.status_code == 200
+    session = me.json()
+    assert not session["signup_enabled"]
+    assert "insight.execute" in session["permissions"][DEFAULT_PROJECT_ID]
+    assert "insight.create" not in session["permissions"][DEFAULT_PROJECT_ID]
+    assert signup.status_code == 404
+    assert signup.json()["detail"] == "Public signup is disabled"
 
 
 def test_first_run_setup_creates_and_signs_in_installation_admin(

@@ -84,7 +84,6 @@ export function ReportsPage({
   target?: ReportTarget;
 }) {
   const { can } = useAuth();
-  const canCreate = can("report.create", projectId);
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId),
@@ -104,7 +103,7 @@ export function ReportsPage({
   const mode: ReportMode = target.mode === "list" ? "list" : "detail";
   const isNewReport = target.mode === "new";
   const canSaveReport = isNewReport
-    ? canCreate
+    ? true
     : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
@@ -243,13 +242,13 @@ export function ReportsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          {canCreate && <Button
+          <Button
             onClick={() => {
               window.location.href = `/project/${projectId}/reports/new`;
             }}
           >
             <Plus className="h-4 w-4" /> New report
-          </Button>}
+          </Button>
         </div>
         <AsyncBlock query={reports} empty="No saved reports yet.">
           {(data) => (
@@ -317,6 +316,15 @@ export function ReportsPage({
           onSaveLayout={() => saveReport.mutate(false)}
         />
       )}
+
+      {saveReport.error instanceof Error ? (
+        <div
+          className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-sm text-[#b42318]"
+          role="alert"
+        >
+          {saveReport.error.message}
+        </div>
+      ) : null}
 
       {isEditingDetails || editMode ? (
         <section className="shrink-0 border-b border-[#dce3eb] pb-4">
