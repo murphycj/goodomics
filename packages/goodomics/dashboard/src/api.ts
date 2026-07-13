@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiFetch } from './lib/authRequest';
 
 const idSchema = z.union([z.string(), z.number()]);
 
@@ -29,6 +30,8 @@ const projectSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   default_report_id: z.string().nullable(),
+  visibility: z.enum(['private', 'public']).default('private'),
+  default_storage_location: z.string().nullable(),
   metadata_json: z.record(z.string(), z.unknown()).default({}),
   created_at: z.string(),
   run_count: z.number(),
@@ -110,6 +113,8 @@ const fileSchema = z.object({
   kind: z.string(),
   path: z.string().nullable(),
   uri: z.string().nullable(),
+  storage_location: z.string().nullable().optional(),
+  object_key: z.string().nullable().optional(),
   size_bytes: z.number().nullable(),
   sha256: z.string().nullable(),
   source_path: z.string().nullable(),
@@ -333,6 +338,37 @@ const aiChatResponseSchema = z.object({
   tool_calls: z.array(aiToolEvidenceSchema).default([]),
 });
 
+const userSchema = z.object({
+  user_id: z.string(),
+  email: z.string(),
+  display_name: z.string(),
+  is_active: z.boolean(),
+  is_admin: z.boolean(),
+  must_change_password: z.boolean(),
+  created_at: z.string(),
+});
+
+const roleSchema = z.object({
+  role_id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  is_builtin: z.boolean(),
+  permissions: z.array(z.string()),
+});
+
+const membershipSchema = z.object({
+  membership_id: z.string(),
+  user: userSchema,
+  role: roleSchema,
+});
+
+const adminMembershipSchema = z.object({
+  membership_id: z.string(),
+  project_id: z.string(),
+  project_name: z.string(),
+  role: roleSchema,
+});
+
 export type GoodomicsRun = z.infer<typeof runSchema>;
 export type RunsPage = z.infer<typeof runPageSchema>;
 export type GoodomicsProject = z.infer<typeof projectSchema>;
@@ -364,9 +400,13 @@ export type SampleGroupMemberPage = z.infer<typeof sampleGroupMemberPageSchema>;
 export type AiMessage = z.infer<typeof aiMessageSchema>;
 export type AiToolEvidence = z.infer<typeof aiToolEvidenceSchema>;
 export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
+export type GoodomicsUser = z.infer<typeof userSchema>;
+export type ProjectRole = z.infer<typeof roleSchema>;
+export type ProjectMembership = z.infer<typeof membershipSchema>;
+export type AdminMembership = z.infer<typeof adminMembershipSchema>;
 
 async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
-  const response = await fetch(path);
+  const response = await apiFetch(path);
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -379,7 +419,7 @@ async function sendJson<T>(
   payload: Record<string, unknown> | null,
   schema: z.ZodType<T>,
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     method,
     headers: payload ? { 'Content-Type': 'application/json' } : undefined,
     body: payload ? JSON.stringify(payload) : undefined,
@@ -400,6 +440,17 @@ export function fileContentUrl(file: Pick<StoredFile, 'file_id'>, projectId?: st
     return `/api/v1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.file_id)}/content`;
   }
   return `/api/v1/files/${encodeURIComponent(file.file_id)}/content`;
+}
+
+export async function openFileContent(
+  file: Pick<StoredFile, 'file_id'>,
+  projectId?: string,
+) {
+  const response = await apiFetch(fileContentUrl(file, projectId));
+  if (!response.ok) throw new Error(`File request failed: ${response.status}`);
+  const objectUrl = URL.createObjectURL(await response.blob());
+  window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 }
 
 export function listRuns({
@@ -511,7 +562,7 @@ export async function createProject(payload: {
   slug?: string;
   description?: string;
 }) {
-  const response = await fetch('/api/v1/projects', {
+  const response = await apiFetch('/api/v1/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -526,7 +577,7 @@ export async function patchProject(
   projectId: string,
   payload: { default_report_id?: string | null; name?: string; description?: string | null },
 ) {
-  const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
+  const response = await apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -550,7 +601,7 @@ export async function askAi({
   messages: AiMessage[];
   projectId?: string;
 }) {
-  const response = await fetch('/api/v1/ai/chat', {
+  const response = await apiFetch('/api/v1/ai/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -630,7 +681,7 @@ export function getInsightCatalog() {
 }
 
 export async function validateInsightConfig(config: Record<string, unknown>) {
-  const response = await fetch('/api/v1/insights/validate', {
+  const response = await apiFetch('/api/v1/insights/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config }),
@@ -716,7 +767,7 @@ export async function deleteProjectSampleGroup(
   projectId: string,
   sampleSetId: string,
 ) {
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}`,
     { method: 'DELETE' },
   );
@@ -829,7 +880,7 @@ export async function createInsight(payload: {
   description?: string | null;
   config: Record<string, unknown>;
 }) {
-  const response = await fetch('/api/v1/insights', {
+  const response = await apiFetch('/api/v1/insights', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -842,7 +893,7 @@ export async function patchInsight(
   insightId: string,
   payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
 ) {
-  const response = await fetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
+  const response = await apiFetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -852,7 +903,7 @@ export async function patchInsight(
 }
 
 export async function deleteInsight(insightId: string) {
-  const response = await fetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
+  const response = await apiFetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -869,7 +920,7 @@ export async function executeInsight({
   config?: Record<string, unknown>;
   refresh?: boolean;
 }) {
-  const response = await fetch(
+  const response = await apiFetch(
     insightId
       ? `/api/v1/insights/${encodeURIComponent(insightId)}/execute`
       : '/api/v1/insights/execute',
@@ -910,7 +961,7 @@ export async function createReport(payload: {
   description?: string | null;
   config: Record<string, unknown>;
 }) {
-  const response = await fetch('/api/v1/reports', {
+  const response = await apiFetch('/api/v1/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -923,7 +974,7 @@ export async function patchReport(
   reportId: string,
   payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
 ) {
-  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
+  const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -933,7 +984,7 @@ export async function patchReport(
 }
 
 export async function deleteReport(reportId: string) {
-  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
+  const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -948,7 +999,7 @@ export async function executeReport({
   projectId: string;
   refresh?: boolean;
 }) {
-  const response = await fetch(`/api/v1/reports/${encodeURIComponent(reportId)}/execute`, {
+  const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project_id: projectId, refresh: Boolean(refresh) }),
@@ -959,4 +1010,135 @@ export async function executeReport({
 
 export function listNamedRows(path: string) {
   return getJson(path, z.array(z.record(z.string(), z.unknown())));
+}
+
+export function listUsers() {
+  return getJson('/api/v1/users', z.array(userSchema));
+}
+
+export function listProjectRoles(projectId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/roles`,
+    z.array(roleSchema),
+  );
+}
+
+export function listProjectMembers(projectId: string) {
+  return getJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    z.array(membershipSchema),
+  );
+}
+
+export function listUserMemberships(userId: string) {
+  return getJson(
+    `/api/v1/users/${encodeURIComponent(userId)}/memberships`,
+    z.array(adminMembershipSchema),
+  );
+}
+
+export function addProjectMember(projectId: string, userId: string, roleId: string) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
+    'POST',
+    { user_id: userId, role_id: roleId },
+    membershipSchema,
+  );
+}
+
+export function updateProjectMember(
+  projectId: string,
+  membershipId: string,
+  roleId: string,
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(membershipId)}`,
+    'PATCH',
+    { role_id: roleId },
+    membershipSchema,
+  );
+}
+
+export async function deleteProjectMember(
+  projectId: string,
+  membershipId: string,
+) {
+  const response = await apiFetch(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(membershipId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+}
+
+export function updateProjectRole(
+  projectId: string,
+  roleId: string,
+  permissions: string[],
+) {
+  return sendJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/roles/${encodeURIComponent(roleId)}`,
+    'PATCH',
+    { permissions },
+    roleSchema,
+  );
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const response = await apiFetch('/api/v1/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(
+      body && typeof body === 'object' && 'detail' in body
+        ? String(body.detail)
+        : 'Password change failed',
+    );
+  }
+}
+
+export function createInstallationUser(payload: {
+  email: string;
+  password: string;
+  display_name?: string;
+}) {
+  return sendJson(
+    '/api/v1/users',
+    'POST',
+    { ...payload, must_change_password: true },
+    userSchema,
+  );
+}
+
+export function setInstallationUserActive(userId: string, isActive: boolean) {
+  return sendJson(
+    `/api/v1/users/${encodeURIComponent(userId)}`,
+    'PATCH',
+    { is_active: isActive },
+    userSchema,
+  );
+}
+
+export function patchInstallationUser(
+  userId: string,
+  payload: {
+    display_name?: string;
+    email?: string;
+    is_active?: boolean;
+    is_admin?: boolean;
+    password?: string;
+    must_change_password?: boolean;
+  },
+) {
+  return sendJson(
+    `/api/v1/users/${encodeURIComponent(userId)}`,
+    'PATCH',
+    payload,
+    userSchema,
+  );
 }
