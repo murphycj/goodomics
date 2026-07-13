@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { Search, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { GoodomicsProject } from "../../api";
+import { UserMenu } from "../auth/UserMenu";
 import { useSearch } from "../search/SearchProvider";
 import { ProjectSwitcherMenu } from "./ProjectSwitcherMenu";
 
@@ -57,6 +58,7 @@ export function AppHeader({
             ⌘K
           </kbd>
         </button>
+        <UserMenu />
       </div>
     </header>
   );
