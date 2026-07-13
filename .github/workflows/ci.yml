@@ -131,13 +131,16 @@ jobs:
         env:
           GOODOMICS_ADMIN_EMAIL: ${{ secrets.GOODOMICS_ADMIN_EMAIL }}
           GOODOMICS_ADMIN_PASSWORD: ${{ secrets.GOODOMICS_ADMIN_PASSWORD }}
+          GOODOMICS_AUTH_SECRET: ${{ secrets.GOODOMICS_AUTH_SECRET }}
         run: |
           if [ -z "${GOODOMICS_ADMIN_PASSWORD}" ]; then
             echo "::error::The GOODOMICS_ADMIN_PASSWORD secret is required"
             exit 1
           fi
-          export GOODOMICS_AUTH_SECRET="$(uv run python -c \
-            'import secrets; print(secrets.token_urlsafe(48))')"
+          if [ -z "${GOODOMICS_AUTH_SECRET}" ]; then
+            echo "::error::The GOODOMICS_AUTH_SECRET secret is required"
+            exit 1
+          fi
 
           uv run --package goodomics goodomics ingest \
             --type multiqc \
