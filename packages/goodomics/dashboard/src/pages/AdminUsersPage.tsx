@@ -15,17 +15,13 @@ import {
 } from "../api";
 import { useAuth } from "../components/auth/AuthProvider";
 import {
+  AppDialog,
   Badge,
   Button,
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   Input,
   Label,
   Page,
@@ -204,86 +200,81 @@ export function AdminUsersPage() {
       title="User management"
       subtitle="Manage installation accounts and project-level role assignments."
     >
-      <Dialog open={createOpen} onOpenChange={handleCreateOpenChange}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create user</DialogTitle>
-            <p className="m-0 text-sm text-[#657082]">
-              Create an installation account with a temporary password.
+      <AppDialog
+        description="Create an installation account with a temporary password."
+        error={createUser.error?.message}
+        footer={
+          <>
+            <Button
+              onClick={() => handleCreateOpenChange(false)}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                !newEmail.trim() ||
+                !passwordMeetsPolicy(newPassword, passwordPolicy) ||
+                createUser.isPending
+              }
+              type="submit"
+            >
+              <UserPlus size={16} />
+              {createUser.isPending ? "Creating…" : "Create user"}
+            </Button>
+          </>
+        }
+        formProps={{
+          onSubmit: (event) => {
+            event.preventDefault();
+            createUser.mutate();
+          },
+        }}
+        onOpenChange={handleCreateOpenChange}
+        open={createOpen}
+        title="Create user"
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="create-user-name">Name</Label>
+            <Input
+              autoComplete="name"
+              id="create-user-name"
+              onChange={(event) => setNewName(event.target.value)}
+              value={newName}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="create-user-email">Email</Label>
+            <Input
+              autoComplete="email"
+              id="create-user-email"
+              onChange={(event) => setNewEmail(event.target.value)}
+              required
+              type="email"
+              value={newEmail}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="create-user-password">Temporary password</Label>
+            <Input
+              autoComplete="new-password"
+              id="create-user-password"
+              maxLength={passwordPolicy.max_length ?? undefined}
+              minLength={passwordPolicy.min_length}
+              onChange={(event) => setNewPassword(event.target.value)}
+              required
+              type="password"
+              value={newPassword}
+            />
+            <p className="m-0 text-xs text-[#657082]">
+              {describePasswordPolicy(passwordPolicy)} The user must change it
+              after signing in.
             </p>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              createUser.mutate();
-            }}
-          >
-            <div className="space-y-1.5">
-              <Label htmlFor="create-user-name">Name</Label>
-              <Input
-                autoComplete="name"
-                id="create-user-name"
-                onChange={(event) => setNewName(event.target.value)}
-                value={newName}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="create-user-email">Email</Label>
-              <Input
-                autoComplete="email"
-                id="create-user-email"
-                onChange={(event) => setNewEmail(event.target.value)}
-                required
-                type="email"
-                value={newEmail}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="create-user-password">Temporary password</Label>
-              <Input
-                autoComplete="new-password"
-                id="create-user-password"
-                maxLength={passwordPolicy.max_length ?? undefined}
-                minLength={passwordPolicy.min_length}
-                onChange={(event) => setNewPassword(event.target.value)}
-                required
-                type="password"
-                value={newPassword}
-              />
-              <p className="m-0 text-xs text-[#657082]">
-                {describePasswordPolicy(passwordPolicy)} The user must change it
-                after signing in.
-              </p>
-            </div>
-            {createUser.error && (
-              <p className="m-0 rounded-lg border border-[#f0c8c4] bg-[#fff4f2] p-3 text-sm text-[#b42318]">
-                {createUser.error.message}
-              </p>
-            )}
-            <DialogFooter>
-              <Button
-                onClick={() => handleCreateOpenChange(false)}
-                type="button"
-                variant="outline"
-              >
-                Cancel
-              </Button>
-              <Button
-                disabled={
-                  !newEmail.trim() ||
-                  !passwordMeetsPolicy(newPassword, passwordPolicy) ||
-                  createUser.isPending
-                }
-                type="submit"
-              >
-                <UserPlus size={16} />
-                {createUser.isPending ? "Creating…" : "Create user"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </div>
+      </AppDialog>
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.4fr)]">
         <Card className="mt-0">

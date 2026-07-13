@@ -1,9 +1,11 @@
 export { AsyncBlock } from "./AsyncBlock";
+export { AppDialog } from "./AppDialog";
 export { Badge } from "./badge";
 export { Button, buttonVariants } from "./button";
 export { Card, CardContent, CardHeader, CardTitle } from "./card";
 export { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 export { CopyButton } from "./CopyButton";
+export { ConfirmDialog } from "./ConfirmDialog";
 export { DataGridShell, type GridColumnOption } from "./DataGridShell";
 export { DelayedHoverPopover } from "./DelayedHoverPopover";
 export { Detail } from "./Detail";
@@ -11,6 +13,7 @@ export {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -28,6 +31,7 @@ export { GenericRows } from "./GenericRows";
 export { Input } from "./input";
 export { Label } from "./label";
 export { Page } from "./Page";
+export { PermissionDialog } from "./PermissionDialog";
 export { PaginationBar } from "./PaginationBar";
 export { SearchBox } from "./SearchBox";
 export {

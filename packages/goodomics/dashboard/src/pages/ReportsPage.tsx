@@ -43,6 +43,7 @@ import {
   Button,
   Card,
   CardContent,
+  ConfirmDialog,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -116,6 +117,7 @@ export function ReportsPage({
   const selectedReportId = selectedReport?.report_id ?? null;
   const [editMode, setEditMode] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [addSearch, setAddSearch] = useState("");
   const [name, setName] = useState("Project report");
   const [description, setDescription] = useState("");
@@ -197,6 +199,7 @@ export function ReportsPage({
   const removeReport = useMutation({
     mutationFn: (reportId: string) => deleteReport(reportId),
     onSuccess: () => {
+      setDeleteDialogOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       window.location.href = `/project/${projectId}/reports`;
@@ -269,6 +272,22 @@ export function ReportsPage({
 
   return (
     <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-4">
+      <ConfirmDialog
+        confirmLabel="Delete report"
+        description={`Delete “${name}”? This action cannot be undone.`}
+        error={removeReport.error?.message}
+        isPending={removeReport.isPending}
+        onConfirm={() => {
+          if (selectedReportId) removeReport.mutate(selectedReportId);
+        }}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) removeReport.reset();
+        }}
+        open={deleteDialogOpen}
+        title="Delete report"
+        tone="destructive"
+      />
       {isEditingDetails ? (
         <ReportBuilderHeader
           description={description}
@@ -300,11 +319,8 @@ export function ReportsPage({
           }}
           onChangeLayout={() => setEditMode(true)}
           onDelete={() => {
-            if (!selectedReportId) return;
-            const confirmed = window.confirm(
-              `Delete "${name}"? This cannot be undone.`,
-            );
-            if (confirmed) removeReport.mutate(selectedReportId);
+            removeReport.reset();
+            setDeleteDialogOpen(true);
           }}
           onEdit={() => {
             if (!selectedReport?.url_slug) return;

@@ -18,13 +18,8 @@ import {
   type ResultScope,
 } from "./ResultScopeEditor";
 import {
+  AppDialog,
   Button,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -625,31 +620,35 @@ function RenameSeriesDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Rename {itemLabel.toLowerCase()}</DialogTitle>
-        </DialogHeader>
-        <Input
-          autoFocus
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") save();
-          }}
-        />
-        <DialogFooter>
-          <DialogClose asChild>
-            <Button type="button" variant="outline">
-              Cancel
-            </Button>
-          </DialogClose>
+    <AppDialog
+      description="Choose the label shown for this data series."
+      footer={
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
           <Button type="button" onClick={save}>
             Rename
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </>
+      }
+      onOpenChange={onOpenChange}
+      open={open}
+      title={`Rename ${itemLabel.toLowerCase()}`}
+    >
+      <Input
+        autoFocus
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") save();
+        }}
+      />
+    </AppDialog>
   );
 }
 

@@ -5,12 +5,9 @@ import {
   passwordMeetsPolicy,
 } from "../../lib/passwordPolicy";
 import {
+  AppDialog,
   Button,
-  Dialog,
-  DialogContent,
   DialogFooter,
-  DialogHeader,
-  DialogTitle,
   Input,
   Label,
   Tabs,
@@ -55,14 +52,13 @@ export function ProfileDialog({
   if (principal?.kind !== "user" || !passwordPolicy) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle>Profile</DialogTitle>
-          <p className="m-0 text-sm text-[#657082]">
-            Manage your account information and password.
-          </p>
-        </DialogHeader>
+    <AppDialog
+      description="Manage your account information and password."
+      onOpenChange={onOpenChange}
+      open={open}
+      size="md"
+      title="Profile"
+    >
         <Tabs defaultValue="account">
           <TabsList className="w-full">
             <TabsTrigger className="flex-1" value="account">
@@ -193,7 +189,6 @@ export function ProfileDialog({
             </DialogFooter>
           </TabsContent>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+    </AppDialog>
   );
 }
