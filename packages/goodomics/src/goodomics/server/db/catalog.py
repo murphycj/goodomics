@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from sqlmodel import SQLModel
 
 from goodomics.server.db.models import (
-    CohortRecord,
     InsightRecord,
     InsightResultCacheRecord,
     InsightRevisionRecord,
@@ -138,11 +137,6 @@ CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
         ),
         CatalogTable(InsightResultCacheRecord, "cache_id"),
         CatalogTable(ReportResultCacheRecord, "cache_id"),
-        CatalogTable(
-            CohortRecord,
-            "cohort_id",
-            editable_fields=_editable("name", "description", "filters"),
-        ),
         CatalogTable(
             QCPolicyRecord,
             "policy_id",

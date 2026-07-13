@@ -220,6 +220,8 @@ class FileAsset(GoodomicsModel):
     project_id: str | None = None
     path: str | None = None
     uri: str | None = None
+    storage_location: str | None = None
+    object_key: str | None = None
     file_role: str
     format: str | None = None
     size_bytes: int | None = None
