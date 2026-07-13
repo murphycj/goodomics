@@ -156,15 +156,18 @@ function normalizeEChartsOption({
     visualization === "histogram"
       ? normalizeHistogramOption(option, result, colors)
       : { ...option };
+  const yAxisNameGap = estimateYAxisNameGap(normalized.series);
   normalized.xAxis = normalizeAxis(
     normalized.xAxis,
     56,
     displayOptions.xAxisLabel,
+    "x",
   );
   normalized.yAxis = normalizeAxis(
     normalized.yAxis,
-    44,
+    yAxisNameGap,
     displayOptions.yAxisLabel,
+    "y",
     displayOptions.yAxisScale,
   );
   normalized.title = normalizeTitle(normalized.title);
@@ -201,12 +204,13 @@ function normalizeAxis(
   axis: unknown,
   nameGap: number,
   label = "",
+  position: "x" | "y",
   scale: DisplayOptions["yAxisScale"] = "linear",
 ): unknown {
   // ECharts accepts either a single axis object or an array of axes. Normalize
   // both while preserving custom axis settings.
   if (Array.isArray(axis)) {
-    return axis.map((item) => normalizeAxis(item, nameGap, label, scale));
+    return axis.map((item) => normalizeAxis(item, nameGap, label, position, scale));
   }
   if (!isRecord(axis)) return axis;
   const name = label.trim() || (typeof axis.name === "string" ? axis.name : "");
@@ -220,6 +224,21 @@ function normalizeAxis(
     nextAxis.type = "value";
     delete nextAxis.logBase;
   }
+  if (position === "x" && axisType === "category") {
+    const labels = Array.isArray(axis.data)
+      ? axis.data.map(categoryLabel).filter(Boolean)
+      : [];
+    if (labels.some((item) => !isNumericCategoryLabel(item))) {
+      const rotate = categoryLabelRotation(labels);
+      nextAxis.axisLabel = {
+        ...(isRecord(axis.axisLabel) ? axis.axisLabel : {}),
+        hideOverlap: false,
+        interval: 0,
+        margin: rotate ? 12 : 8,
+        rotate,
+      };
+    }
+  }
   if (!name) return nextAxis;
   return {
     ...nextAxis,
@@ -227,6 +246,52 @@ function normalizeAxis(
     nameLocation: "middle",
     nameGap,
   };
+}
+
+function categoryLabel(value: unknown) {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return isRecord(value) && typeof value.value === "string" ? value.value : "";
+}
+
+function isNumericCategoryLabel(value: string) {
+  const trimmed = value.trim();
+  return Boolean(trimmed) && Number.isFinite(Number(trimmed));
+}
+
+function categoryLabelRotation(labels: string[]) {
+  const maxLength = Math.max(0, ...labels.map((label) => label.length));
+  if (labels.length > 18 || maxLength > 22) return 90;
+  if (labels.length > 6 || maxLength > 10) return 45;
+  return 0;
+}
+
+function estimateYAxisNameGap(series: unknown) {
+  if (!Array.isArray(series)) return 64;
+  const values = series.flatMap((item) => {
+    if (!isRecord(item) || !Array.isArray(item.data)) return [];
+    return item.data.map(seriesDatumNumericValue).filter(isFiniteNumber);
+  });
+  if (values.length === 0) return 64;
+  const largestMagnitude = Math.max(...values.map((value) => Math.abs(value)));
+  const tickWidth = largestMagnitude.toLocaleString("en-US", {
+    maximumFractionDigits: 2,
+  }).length * 7;
+  return Math.min(140, Math.max(64, tickWidth + 18));
+}
+
+function seriesDatumNumericValue(value: unknown) {
+  if (typeof value === "number") return value;
+  const rawValue = isRecord(value) ? value.value : value;
+  if (typeof rawValue === "number") return rawValue;
+  if (!Array.isArray(rawValue)) return Number.NaN;
+  for (let index = rawValue.length - 1; index >= 0; index -= 1) {
+    if (typeof rawValue[index] === "number") return rawValue[index];
+  }
+  return Number.NaN;
+}
+
+function isFiniteNumber(value: number) {
+  return Number.isFinite(value);
 }
 
 function normalizeLegend(legend: unknown, show: boolean) {

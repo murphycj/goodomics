@@ -13,6 +13,11 @@ import type { DataContract, DataContractField, DatabaseTable } from "../../api";
 import { CHART_COLORS } from "../../lib/chartColors";
 import { fieldShapeSummary, fieldTypeLabel } from "../../lib/resultShapes";
 import {
+  defaultResultScope,
+  ResultScopeEditor,
+  type ResultScope,
+} from "./ResultScopeEditor";
+import {
   Button,
   Dialog,
   DialogClose,
@@ -62,6 +67,7 @@ export type BuilderSeries = {
   name: string;
   color: string;
   filters: BuilderSeriesFilter[];
+  resultScope: ResultScope;
 };
 
 export type SqlSourceSelection = {
@@ -75,8 +81,9 @@ export function InsightSeriesEditor({
   addLabel = "Value",
   allowSqlSource = true,
   contracts,
+  projectId,
   itemLabel = "Value",
-  label = "Values",
+  label = "Data series",
   showAggregation = true,
   tables = [],
   sourceKind = "contract",
@@ -95,6 +102,7 @@ export function InsightSeriesEditor({
   addLabel?: string;
   allowSqlSource?: boolean;
   contracts: DataContract[];
+  projectId: string;
   itemLabel?: string;
   label?: string;
   showAggregation?: boolean;
@@ -135,6 +143,7 @@ export function InsightSeriesEditor({
             item={item}
             key={item.id}
             contracts={contracts}
+            projectId={projectId}
             showAggregation={showAggregation}
             setSeries={setSeries}
             sourceKind={sourceKind}
@@ -166,7 +175,41 @@ export function InsightSeriesEditor({
       >
         <Plus className="h-4 w-4" /> {addLabel}
       </Button>
+      {series.length > 1 && scopesAreCompatible(series, contracts) ? (
+        <Button
+          className="w-auto justify-start"
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() =>
+            setSeries((current) => {
+              const scope = current[0]?.resultScope ?? defaultResultScope();
+              return current.map((item) => ({
+                ...item,
+                resultScope: { ...scope },
+              }));
+            })
+          }
+        >
+          Apply result scope to all series
+        </Button>
+      ) : null}
     </div>
+  );
+}
+
+function scopesAreCompatible(series: BuilderSeries[], contracts: DataContract[]) {
+  const compatibleSets = series.map(
+    (item) =>
+      new Set(
+        contracts.find(
+          (contract) => contract.data_contract_id === item.contractId,
+        )?.compatible_analysis_type_ids ?? [],
+      ),
+  );
+  if (compatibleSets.some((set) => set.size === 0)) return false;
+  return [...compatibleSets[0]].some((value) =>
+    compatibleSets.slice(1).every((set) => set.has(value)),
   );
 }
 
@@ -183,6 +226,7 @@ export function blankSeries(
     name: "",
     color: CHART_COLORS[index % CHART_COLORS.length],
     filters: [],
+    resultScope: defaultResultScope(),
   };
 }
 
@@ -205,6 +249,7 @@ export function contractSeries(
     contractId,
     fieldId: field?.field_id ?? "",
     name: current.name,
+    resultScope: defaultResultScope(),
   };
 }
 
@@ -244,6 +289,7 @@ function SeriesCard({
   itemLabel,
   item,
   contracts,
+  projectId,
   showAggregation,
   setSeries,
   sourceKind,
@@ -264,6 +310,7 @@ function SeriesCard({
   itemLabel: string;
   item: BuilderSeries;
   contracts: DataContract[];
+  projectId: string;
   showAggregation: boolean;
   setSeries: React.Dispatch<React.SetStateAction<BuilderSeries[]>>;
   sourceKind: QueryMode;
@@ -282,6 +329,7 @@ function SeriesCard({
 }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [resultScopeOpen, setResultScopeOpen] = useState(false);
   return (
     <div className="rounded-md border border-[#d6dee8] bg-white p-3 shadow-sm">
       <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
@@ -357,6 +405,18 @@ function SeriesCard({
         {showAggregation && filtersOpen ? (
           <ValueFiltersPanel field={field} item={item} setSeries={setSeries} />
         ) : null}
+        <ResultScopeEditor
+          contract={contracts.find(
+            (candidate) => candidate.data_contract_id === item.contractId,
+          )}
+          projectId={projectId}
+          open={resultScopeOpen}
+          scope={item.resultScope}
+          onOpenChange={setResultScopeOpen}
+          onChange={(resultScope) =>
+            updateSeries(setSeries, item.id, { resultScope })
+          }
+        />
       </div>
       <RenameSeriesDialog
         defaultName={field?.display_name || `${itemLabel} ${index + 1}`}
@@ -750,6 +810,10 @@ function DataSourcePicker({
               ...candidate,
               contractId: contract.data_contract_id,
               fieldId: nextField.field_id,
+              resultScope:
+                candidate.contractId === contract.data_contract_id
+                  ? candidate.resultScope
+                  : defaultResultScope(),
               name:
                 candidate.name && candidate.name !== field?.display_name
                   ? candidate.name
@@ -1173,7 +1237,7 @@ export function filterContractGroups(
         contract.name,
         contract.data_contract_id,
         contract.data_type,
-        contract.assay,
+        contract.compatible_analysis_type_ids.join(" "),
       ]
         .filter(Boolean)
         .join(" ")

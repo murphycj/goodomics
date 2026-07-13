@@ -48,6 +48,7 @@ from goodomics.server.insight_catalog import (
     normalize_result_policy,
     validate_config_shape,
 )
+from goodomics.server.result_resolution import resolve_contract_results
 from goodomics.storage.duckdb import (
     INTEGER_KEYED_TABLES,
     SERIALIZERS_BY_TABLE,
@@ -57,6 +58,8 @@ from goodomics.storage.sqlalchemy import (
     DataContractFieldRecord,
     DataContractRecord,
     ProjectRecord,
+    RunContractRecord,
+    RunContractSampleRecord,
     RunRecord,
     RunSampleRecord,
     SampleRecord,
@@ -185,9 +188,9 @@ def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
 
 
 def _normalize_analysis_grain(value: Any) -> str:
-    """Return a supported analysis grain, defaulting to run_sample."""
-    grain = str(value or "run_sample")
-    return grain if grain in ANALYSIS_GRAINS else "run_sample"
+    """Return a supported public analysis grain, defaulting to sample."""
+    grain = str(value or "sample")
+    return grain if grain in ANALYSIS_GRAINS else "sample"
 
 
 async def execute_insight(
@@ -621,6 +624,7 @@ async def _execute_contract_series_query(
         series_items=series_items,
     )
     series_rows: list[list[JsonObject]] = []
+    selection_diagnostics: list[JsonObject] = []
     for series_item, alias in zip(series_items, aliases, strict=True):
         sql, parameters = await _contract_series_sql(
             session=session,
@@ -632,6 +636,11 @@ async def _execute_contract_series_query(
         )
         _, rows = analytics_store.query_rows(sql, parameters=parameters, limit=limit)
         series_rows.append(rows)
+        runtime_diagnostics = _runtime_metadata(config).get(
+            "result_selection_diagnostics"
+        )
+        if isinstance(runtime_diagnostics, list) and runtime_diagnostics:
+            selection_diagnostics = runtime_diagnostics
     columns, rows, diagnostics = _align_series_rows(
         aliases=aliases,
         linker_column=cast(str | None, linker.get("column")),
@@ -644,6 +653,7 @@ async def _execute_contract_series_query(
             "linker": linker,
             "linker_diagnostics": diagnostics,
             "series_aliases": aliases,
+            "result_selection_diagnostics": selection_diagnostics,
         },
     )
     return columns, rows
@@ -728,6 +738,17 @@ async def _execute_single_series_count_query(
     columns = _columns_for_source("analytics", table)
     parameters: list[Any] = [_record_pk(contract)]
     where_parts = ["data_contract_id = ?"]
+    where_parts.extend(
+        await _resolved_result_where_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item=series_item,
+            contract=contract,
+            columns=columns,
+            parameters=parameters,
+        )
+    )
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
@@ -814,6 +835,17 @@ async def _contract_series_sql(
         )
     parameters: list[Any] = [_record_pk(contract)]
     where_parts = ["data_contract_id = ?"]
+    where_parts.extend(
+        await _resolved_result_where_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item=series_item,
+            contract=contract,
+            columns=columns,
+            parameters=parameters,
+        )
+    )
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
@@ -840,6 +872,57 @@ async def _contract_series_sql(
         f"WHERE {' AND '.join(where_parts)}{group_by} ORDER BY {order}"
     )
     return sql, parameters
+
+
+async def _resolved_result_where_sql(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+    series_item: Mapping[str, Any],
+    contract: DataContractRecord,
+    columns: Sequence[str],
+    parameters: list[Any],
+) -> list[str]:
+    """Resolve and constrain one series to exact produced-result occurrences."""
+
+    if "run_contract_id" not in columns:
+        return []
+    raw_scope = series_item.get("result_scope")
+    result_scope = raw_scope if isinstance(raw_scope, Mapping) else {}
+    resolution = await resolve_contract_results(
+        session=session,
+        project_id=project_id,
+        contract=contract,
+        analysis_grain=_normalize_analysis_grain(config.get("analysis_grain")),
+        result_scope=result_scope,
+    )
+    diagnostics = _runtime_metadata(config).get("result_selection_diagnostics")
+    collected = list(diagnostics) if isinstance(diagnostics, list) else []
+    collected.append(
+        {
+            "series_id": series_item.get("id") or series_item.get("label"),
+            **resolution.diagnostics,
+        }
+    )
+    _set_runtime_metadata(config, {"result_selection_diagnostics": collected})
+    if not resolution.run_contract_pks:
+        return ["1 = 0"]
+    parameters.extend(resolution.run_contract_pks)
+    clauses = [
+        f"run_contract_id IN ({', '.join('?' for _ in resolution.run_contract_pks)})"
+    ]
+    if (
+        _normalize_analysis_grain(config.get("analysis_grain")) != "run"
+        and "run_sample_id" in columns
+    ):
+        if not resolution.run_sample_pks:
+            return ["1 = 0"]
+        parameters.extend(resolution.run_sample_pks)
+        clauses.append(
+            f"run_sample_id IN ({', '.join('?' for _ in resolution.run_sample_pks)})"
+        )
+    return clauses
 
 
 async def _series_contract(
@@ -982,7 +1065,7 @@ async def _resolve_contract_series_linker(
         column_sets.append(set(_columns_for_source("analytics", table)))
     valid = [
         linker_id
-        for linker_id in ("sample", "run_sample", "feature", "run", "entity")
+        for linker_id in ("sample", "feature", "run", "entity")
         if all(LINKERS[linker_id]["column"] in columns for columns in column_sets)
     ]
     requested = normalize_linker(config.get("linker"))
@@ -1066,18 +1149,6 @@ async def _context_where_sql(
             ]
             parameters.extend(sample_pks)
             where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
-        requested_run_sample_ids = _context_string_values(
-            context, "run_sample_ids", "run_sample_id"
-        )
-        if requested_run_sample_ids and "run_sample_id" in columns:
-            run_sample_pks = [
-                await _run_sample_pk(session, project_id, run_sample_id)
-                for run_sample_id in requested_run_sample_ids
-            ]
-            parameters.extend(run_sample_pks)
-            where_parts.append(
-                f"run_sample_id IN ({', '.join('?' for _ in run_sample_pks)})"
-            )
     elif kind == "cohort":
         sample_set_ids = _context_string_values(
             context, "sample_set_ids", "sample_set_id"
@@ -1604,22 +1675,18 @@ async def _compile_contract_query(
         query_config.get("dimensions") or query_config.get("group_by")
     )
     entity_grain = str(
-        query_config.get("entity") or config.get("analysis_grain") or "run_sample"
+        query_config.get("entity") or config.get("analysis_grain") or "sample"
     )
     if not dimensions:
         # Entity grain provides sensible default dimensions. A run_sample insight
         # should naturally group by sample/run link unless the config says
         # otherwise.
-        if entity_grain in {"run_sample", "sample"} and table == "sample_metrics":
-            dimensions = [
-                "run_sample_id" if entity_grain == "run_sample" else "sample_id"
-            ]
+        if entity_grain == "sample" and table == "sample_metrics":
+            dimensions = ["sample_id"]
         elif table == "entity_attributes":
             dimensions = ["entity_id"]
         elif table != "result_payloads":
-            dimensions = [
-                "run_sample_id" if entity_grain == "run_sample" else "sample_id"
-            ]
+            dimensions = ["sample_id"]
 
     columns = _columns_for_source("analytics", table)
     measures = _measures(query_config, config)
@@ -1636,13 +1703,7 @@ async def _compile_contract_query(
         ]
         if not identity_dimensions:
             identity_dimensions = [
-                (
-                    "run_sample_id"
-                    if table == "sample_metrics" and entity_grain != "sample"
-                    else "sample_id"
-                    if table == "sample_metrics"
-                    else "entity_id"
-                )
+                ("sample_id" if table == "sample_metrics" else "entity_id")
             ]
         parameters: list[Any] = []
         select_parts = [
@@ -1666,12 +1727,25 @@ async def _compile_contract_query(
             _field_id_match_sql(parameters, field_rows[field_id])
             for field_id in requested_fields
         ]
+        result_where = await _resolved_result_where_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item={
+                "id": "table",
+                "result_scope": _table_result_scope(config, query_config),
+            },
+            contract=contract,
+            columns=columns,
+            parameters=parameters,
+        )
         group_columns = ", ".join(
             _quote_identifier(item) for item in identity_dimensions
         )
         sql = (
             f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)} "
             f"WHERE data_contract_id = ? AND ({' OR '.join(field_predicates)}) "
+            f"{'AND ' + ' AND '.join(result_where) + ' ' if result_where else ''}"
             f"GROUP BY {group_columns}"
         )
         output_columns = [
@@ -1741,6 +1815,20 @@ async def _compile_contract_query(
 
     parameters: list[Any] = [_record_pk(contract)]
     where_parts = ["data_contract_id = ?"]
+    where_parts.extend(
+        await _resolved_result_where_sql(
+            session=session,
+            project_id=project_id,
+            config=config,
+            series_item={
+                "id": "table",
+                "result_scope": _table_result_scope(config, query_config),
+            },
+            contract=contract,
+            columns=columns,
+            parameters=parameters,
+        )
+    )
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
     for filter_config in [
@@ -1771,6 +1859,19 @@ async def _compile_contract_query(
         sql += f" ORDER BY {order_sql}"
     output_columns = [part.split(" AS ")[-1].strip('"') for part in select_parts]
     return sql, parameters, output_columns
+
+
+def _table_result_scope(
+    config: Mapping[str, Any], query_config: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    direct = query_config.get("result_scope")
+    if isinstance(direct, Mapping):
+        return direct
+    for item in _table_column_items(config):
+        value = item.get("result_scope")
+        if isinstance(value, Mapping):
+            return value
+    return {}
 
 
 async def _compile_mixed_contract_table_query(
@@ -1804,7 +1905,7 @@ async def _compile_mixed_contract_table_query(
     if not dimensions:
         # Keep a final defensive fallback so table previews still have stable
         # row keys if an older or malformed config reaches this path.
-        dimensions = ["run_sample_id", "sample_id", "run_id"]
+        dimensions = ["sample_id"]
 
     parameters: list[Any] = []
     # Each union part selects one requested field from its physical source table.
@@ -1953,7 +2054,7 @@ def identity_dimensions_for_contract_table(config: Mapping[str, Any]) -> list[st
         return ["entity_id", "sample_id"]
     if grain == "run":
         return ["run_id"]
-    return ["run_sample_id", "sample_id", "run_id"]
+    return ["sample_id"]
 
 
 def _unique_alias(alias: str, used_aliases: set[str]) -> str:
@@ -2016,6 +2117,7 @@ def compile_insight_result(
             duplicate_conflicts=0,
             rows_excluded=0,
         ),
+        "result_selection_diagnostics": runtime.get("result_selection_diagnostics", []),
         "visualization": visualization,
         "display": (
             config.get("display") if isinstance(config.get("display"), dict) else {}
@@ -2264,6 +2366,9 @@ async def fingerprint_source(
         contract_id = str(source.get("data_contract_id") or "")
         contract = await _get_contract_record(session, project_id, contract_id)
         field_count = 0
+        occurrence_count = 0
+        availability_count = 0
+        latest_occurrence = None
         if contract is not None:
             # Contract summaries/fingerprints capture data updates, while field
             # count captures schema changes that affect available measures.
@@ -2273,6 +2378,38 @@ async def fingerprint_source(
                         select(func.count())
                         .select_from(DataContractFieldRecord)
                         .where(DataContractFieldRecord.data_contract_id == contract.id)
+                    )
+                ).one()
+            )
+            occurrence_ids = select(RunContractRecord.id).where(
+                RunContractRecord.data_contract_id == contract.id
+            )
+            occurrence_count = int(
+                (
+                    await session.exec(
+                        select(func.count())
+                        .select_from(RunContractRecord)
+                        .where(RunContractRecord.data_contract_id == contract.id)
+                    )
+                ).one()
+            )
+            latest_occurrence = (
+                await session.exec(
+                    select(func.max(RunContractRecord.created_at)).where(
+                        RunContractRecord.data_contract_id == contract.id
+                    )
+                )
+            ).one()
+            availability_count = int(
+                (
+                    await session.exec(
+                        select(func.count())
+                        .select_from(RunContractSampleRecord)
+                        .where(
+                            cast(Any, RunContractSampleRecord.run_contract_id).in_(
+                                occurrence_ids
+                            )
+                        )
                     )
                 ).one()
             )
@@ -2289,6 +2426,13 @@ async def fingerprint_source(
                     else None
                 ),
                 "fields": field_count,
+                "run_contracts": occurrence_count,
+                "run_contract_samples": availability_count,
+                "latest_occurrence": (
+                    latest_occurrence.isoformat()
+                    if isinstance(latest_occurrence, datetime)
+                    else None
+                ),
             }
         )
     if source.get("kind") == "contract_series":
@@ -2889,7 +3033,7 @@ def _default_contract_dimensions(table: str | None) -> list[str]:
     to understand what each value belongs to.
     """
     if table in {"sample_metrics", "feature_value_numeric", "feature_call"}:
-        return ["run_sample_id", "sample_id"]
+        return ["sample_id"]
     if table == "entity_attributes":
         return ["entity_id"]
     if table in {
@@ -2897,11 +3041,10 @@ def _default_contract_dimensions(table: str | None) -> list[str]:
         "sample_variant_calls",
         "sample_structural_variant_calls",
     }:
-        return ["run_sample_id", "sample_id"]
+        return ["sample_id"]
     if table == "result_payloads":
         return [
             "run_id",
-            "run_sample_id",
             "sample_id",
             "source_observation_label",
             "payload_name",

@@ -13,7 +13,6 @@ import {
   Database,
   Dna,
   File,
-  FlaskConical,
   Grid2X2,
   Hash,
   LineChart,
@@ -43,7 +42,6 @@ import {
   listInsights,
   listProjectDatabaseTables,
   listProjectDataContracts,
-  listProjectRunSamples,
   listProjectSampleGroups,
   listProjectSamples,
   listReports,
@@ -54,7 +52,6 @@ import {
   type DatabaseTable,
   type InsightCatalog,
   type InsightValidation,
-  type RunSampleListItem,
   type SampleSet,
   type SampleListItem,
   type SavedInsight,
@@ -62,6 +59,10 @@ import {
 import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
 import { InsightChartControls } from "../components/insights/InsightChartControls";
 import { InsightPreviewPanel } from "../components/insights/InsightPreviewPanel";
+import {
+  defaultResultScope,
+  type ResultScope,
+} from "../components/insights/ResultScopeEditor";
 import {
   InsightSeriesEditor,
   blankSeries,
@@ -122,21 +123,20 @@ type InsightTarget =
   | { mode: "edit"; insightRef: string };
 type QueryMode = "contract" | "table";
 type AnalysisGrain =
-  | "run_sample"
   | "sample"
   | "subject"
   | "run"
   | "feature"
   | "variant"
   | "file";
-type LinkerKind = "auto" | "sample" | "run_sample" | "run" | "feature" | "entity";
+type LinkerKind = "auto" | "sample" | "run" | "feature" | "entity";
 type ResultPolicyMode =
   | "preview"
   | "more_rows"
   | "random_sample"
   | "all_rows"
   | "export_full_data";
-type FilterTab = "sample" | "sample_group" | "run_sample";
+type FilterTab = "sample" | "sample_group";
 
 /** Insight index and builder page for saved charts, metrics, and tables. */
 export function InsightsPage({
@@ -188,7 +188,7 @@ export function InsightsPage({
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [tableColumnPickerOpen, setTableColumnPickerOpen] = useState(false);
   const [analysisGrain, setAnalysisGrain] =
-    useState<AnalysisGrain>("run_sample");
+    useState<AnalysisGrain>("sample");
   const [sampleSetIds, setSampleSetIds] = useState<string[]>([]);
   const [sampleIds, setSampleIds] = useState<string[]>([]);
   const [runSampleIds, setRunSampleIds] = useState<string[]>([]);
@@ -204,7 +204,7 @@ export function InsightsPage({
   const [store, setStore] = useState<Store>("analytics");
   const [table, setTable] = useState("");
   const [visualization, setVisualization] = useState("table");
-  const [linkerKind, setLinkerKind] = useState<LinkerKind>("run_sample");
+  const [linkerKind, setLinkerKind] = useState<LinkerKind>("sample");
   const [resultPolicyMode, setResultPolicyMode] =
     useState<ResultPolicyMode>("preview");
   const [resultLimit, setResultLimit] = useState(5000);
@@ -353,12 +353,12 @@ export function InsightsPage({
       setTitle("New insight");
       setDescription("");
       setDescriptionOpen(false);
-      setAnalysisGrain("run_sample");
+      setAnalysisGrain("sample");
       setSampleSetIds([]);
       setSampleIds([]);
       setRunSampleIds([]);
       setVisualization("table");
-      setLinkerKind("run_sample");
+      setLinkerKind("sample");
       setResultPolicyMode("preview");
       setResultLimit(5000);
       setRandomSeed("goodomics");
@@ -497,7 +497,7 @@ export function InsightsPage({
     setAnalysisGrain(parseAnalysisGrain(config.analysis_grain));
     setSampleSetIds(stringArrayConfig(context.sample_set_ids, context.sample_set_id));
     setSampleIds(stringArrayConfig(context.sample_ids, context.sample_id));
-    setRunSampleIds(stringArrayConfig(context.run_sample_ids, context.run_sample_id));
+    setRunSampleIds([]);
     setLinkerKind(parseLinkerKind(linker.kind));
     setResultPolicyMode(parseResultPolicyMode(resultPolicy.mode));
     setResultLimit(numberConfig(resultPolicy.limit, 5000));
@@ -736,7 +736,7 @@ export function InsightsPage({
             onRowLimitChange={setResultLimit}
           />
         }
-        resetLabel={visualization === "table" ? "Clear columns" : "Clear values"}
+        resetLabel={visualization === "table" ? "Clear columns" : "Clear series"}
         visualization={visualization}
         onAnalysisGrainChange={selectAnalysisGrain}
         onDescriptionRequest={() => setDescriptionOpen(true)}
@@ -756,11 +756,12 @@ export function InsightsPage({
             <Card className="mt-0 p-2.5">
               <CardContent className="space-y-2">
                 <InsightSeriesEditor
-                  addLabel="Value"
+                  addLabel="Add series"
                   advancedSql={advancedSql}
                   contracts={availableContracts}
-                  itemLabel="Value"
-                  label={visualization === "scatter" ? "X / Y values" : "Values"}
+                  projectId={projectId}
+                  itemLabel="Series"
+                  label={visualization === "scatter" ? "X / Y data" : "Data series"}
                   series={series}
                   setSeries={setSeries}
                   sourceKind={queryMode}
@@ -959,7 +960,6 @@ function SampleFilterDropdown({
     useState<string[]>(runSampleIds);
   const [sampleSearch, setSampleSearch] = useState("");
   const [sampleGroupSearch, setSampleGroupSearch] = useState("");
-  const [runSampleSearch, setRunSampleSearch] = useState("");
   const pageSize = 20;
   const samplePages = useInfiniteQuery({
     queryKey: ["insight-filter-samples", projectId, sampleSearch],
@@ -987,19 +987,6 @@ function SampleFilterDropdown({
     initialPageParam: 0,
     getNextPageParam: pageNextOffset,
   });
-  const runSamplePages = useInfiniteQuery({
-    queryKey: ["insight-filter-run-samples", projectId, runSampleSearch],
-    queryFn: ({ pageParam }) =>
-      listProjectRunSamples({
-        projectId,
-        limit: pageSize,
-        offset: pageParam,
-        search: runSampleSearch,
-      }),
-    enabled: open && activeTab === "run_sample",
-    initialPageParam: 0,
-    getNextPageParam: pageNextOffset,
-  });
   const samples = useMemo(
     () => (samplePages.data?.pages ?? []).flatMap((page) => page.items),
     [samplePages.data?.pages],
@@ -1007,10 +994,6 @@ function SampleFilterDropdown({
   const sampleGroups = useMemo(
     () => (sampleGroupPages.data?.pages ?? []).flatMap((page) => page.items),
     [sampleGroupPages.data?.pages],
-  );
-  const runSamples = useMemo(
-    () => (runSamplePages.data?.pages ?? []).flatMap((page) => page.items),
-    [runSamplePages.data?.pages],
   );
   const selectedGroup = sampleGroups.find((sampleGroup) =>
     sampleGroupIds.includes(sampleGroup.sample_set_id),
@@ -1053,11 +1036,6 @@ function SampleFilterDropdown({
     setPendingSampleIds([]);
     setPendingRunSampleIds([]);
   };
-  const selectRunSample = (value: string) => {
-    setPendingRunSampleIds((current) => toggleString(current, value));
-    setPendingSampleGroupIds([]);
-    setPendingSampleIds([]);
-  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -1084,15 +1062,12 @@ function SampleFilterDropdown({
           value={activeTab}
           onValueChange={(value) => setActiveTab(value as FilterTab)}
         >
-          <TabsList className="mb-3 grid shrink-0 grid-cols-3 gap-0">
+          <TabsList className="mb-3 grid shrink-0 grid-cols-2 gap-0">
             <TabsTrigger className="px-2 py-2 text-xs" value="sample">
               Sample
             </TabsTrigger>
             <TabsTrigger className="px-2 py-2 text-xs" value="sample_group">
               Sample group
-            </TabsTrigger>
-            <TabsTrigger className="px-2 py-2 text-xs" value="run_sample">
-              Run sample
             </TabsTrigger>
           </TabsList>
           <TabsContent className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex" value="sample">
@@ -1183,44 +1158,6 @@ function SampleFilterDropdown({
               onClear={() => setOpen(false)}
               onDone={commitFilters}
             />
-          </TabsContent>
-          <TabsContent className="min-h-0 flex-1 flex-col gap-3 data-[state=active]:flex" value="run_sample">
-            <FilterSearchInput
-              placeholder="Search run samples..."
-              value={runSampleSearch}
-              onChange={setRunSampleSearch}
-            />
-            <FilterOptionList
-              emptyText="No run samples found."
-              hasMore={Boolean(runSamplePages.hasNextPage)}
-              isLoading={
-                runSamplePages.isLoading || runSamplePages.isFetchingNextPage
-              }
-              onLoadMore={() => void runSamplePages.fetchNextPage()}
-            >
-              {runSamples.map((runSample) => (
-                <FilterOptionButton
-                  key={runSample.run_sample_id}
-                  selected={pendingRunSampleIds.includes(runSample.run_sample_id)}
-                  subtitle={runSampleSubtitle(runSample)}
-                  title={runSample.run_sample_id}
-                  search={runSampleSearch}
-                  onClick={() => selectRunSample(runSample.run_sample_id)}
-                />
-              ))}
-            </FilterOptionList>
-            {runSampleSearch.trim() ? (
-              <Button
-                className="w-full justify-start"
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => selectRunSample(runSampleSearch.trim())}
-              >
-                Use run sample ID "{runSampleSearch.trim()}"
-              </Button>
-            ) : null}
-            <FilterMenuFooter onClear={clearFilters} onDone={commitFilters} />
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -1485,7 +1422,6 @@ function FilterMenuFooter({
 }
 
 function filterTabForSelection({
-  runSampleIds,
   sampleGroupIds,
   sampleIds,
 }: {
@@ -1493,14 +1429,12 @@ function filterTabForSelection({
   sampleGroupIds: string[];
   sampleIds: string[];
 }): FilterTab {
-  if (runSampleIds.length) return "run_sample";
   if (sampleIds.length) return "sample";
   if (sampleGroupIds.length) return "sample_group";
   return "sample";
 }
 
 function sampleFilterSummary({
-  runSampleIds,
   sampleGroup,
   sampleGroupIds,
   sampleIds,
@@ -1510,8 +1444,6 @@ function sampleFilterSummary({
   sampleGroupIds: string[];
   sampleIds: string[];
 }) {
-  if (runSampleIds.length === 1) return `Run sample ${runSampleIds[0]}`;
-  if (runSampleIds.length > 1) return `${runSampleIds.length} run samples`;
   if (sampleIds.length === 1) return `Sample ${sampleIds[0]}`;
   if (sampleIds.length > 1) return `${sampleIds.length} samples`;
   if (sampleGroupIds.length === 1) {
@@ -1550,19 +1482,6 @@ function sampleSubtitle(sample: SampleListItem) {
       : "",
   ].filter(Boolean);
   return subtitleParts.join(" · ") || undefined;
-}
-
-function runSampleSubtitle(runSample: RunSampleListItem) {
-  return [
-    runSample.sample_name || runSample.sample_id,
-    runSample.sample_name && runSample.sample_name !== runSample.sample_id
-      ? runSample.sample_id
-      : "",
-    runSample.run_name || runSample.run_id,
-    runSample.status,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 }
 
 function highlightSearchMatch(text: string, search: string) {
@@ -1969,13 +1888,11 @@ function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
     file: File,
     feature: Braces,
     run: CirclePlay,
-    run_sample: FlaskConical,
     sample: User,
     subject: Users,
     variant: Dna,
   };
   const fallback = [
-    ["run_sample", "Run samples"],
     ["sample", "Samples"],
     ["subject", "Subjects"],
     ["run", "Runs"],
@@ -2017,36 +1934,36 @@ function templatesFromCatalog(catalog: InsightCatalog | undefined) {
 
 const FALLBACK_TEMPLATES = [
   {
-    id: "qc_metrics_run_samples",
-    label: "QC metrics across run samples",
-    description: "Start a run-sample table from QC contract fields.",
-    analysis_grain: "run_sample",
+    id: "qc_metrics_samples",
+    label: "QC metrics across samples",
+    description: "Start a sample table from QC contract fields.",
+    analysis_grain: "sample",
     visualization: "table",
-    linker: { kind: "run_sample" },
+    linker: { kind: "sample" },
   },
   {
     id: "build_table",
     label: "Build a table",
     description: "Choose identity and contract columns at the selected grain.",
-    analysis_grain: "run_sample",
+    analysis_grain: "sample",
     visualization: "table",
-    linker: { kind: "run_sample" },
+    linker: { kind: "sample" },
   },
   {
     id: "compare_two_fields",
     label: "Compare two fields",
-    description: "Create a two-value scatter matched by run sample.",
-    analysis_grain: "run_sample",
+    description: "Create a two-value scatter matched by sample.",
+    analysis_grain: "sample",
     visualization: "scatter",
-    linker: { kind: "run_sample" },
+    linker: { kind: "sample" },
   },
   {
     id: "inspect_one_sample",
     label: "Inspect one sample",
     description: "Start a sample-filtered detail table.",
-    analysis_grain: "run_sample",
+    analysis_grain: "sample",
     visualization: "table",
-    linker: { kind: "run_sample" },
+    linker: { kind: "sample" },
   },
   {
     id: "explore_feature",
@@ -2119,7 +2036,6 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
   const fallback = [
     ["auto", "Auto"],
     ["sample", "Sample"],
-    ["run_sample", "Run sample"],
     ["run", "Run"],
     ["feature", "Feature"],
     ["entity", "Entity"],
@@ -2140,7 +2056,6 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
 function defaultLinkerForGrain(grain: AnalysisGrain): LinkerKind {
   return (
     {
-      run_sample: "run_sample",
       sample: "sample",
       subject: "entity",
       run: "run",
@@ -2154,13 +2069,12 @@ function defaultLinkerForGrain(grain: AnalysisGrain): LinkerKind {
 function identityColumnsForGrain(grain: AnalysisGrain) {
   return (
     {
-      run_sample: ["run_sample_id", "sample_id", "run_id"],
       sample: ["sample_id"],
       subject: ["entity_id", "sample_id"],
       run: ["run_id"],
-      feature: ["feature_id", "run_sample_id", "sample_id"],
-      variant: ["variant_id", "feature_id", "run_sample_id", "sample_id"],
-      file: ["source_file_id", "run_id", "run_sample_id", "sample_id"],
+      feature: ["feature_id", "sample_id"],
+      variant: ["variant_id", "feature_id", "sample_id"],
+      file: ["source_file_id", "run_id", "sample_id"],
     } satisfies Record<AnalysisGrain, string[]>
   )[grain];
 }
@@ -2189,7 +2103,6 @@ function validationWarning(validation: InsightValidation | undefined) {
 }
 
 function buildContext({
-  runSampleIds,
   sampleIds,
   sampleSetIds,
 }: {
@@ -2198,15 +2111,12 @@ function buildContext({
   sampleSetIds: string[];
 }) {
   const cleanedSampleIds = uniqueNonEmpty(sampleIds);
-  const cleanedRunSampleIds = uniqueNonEmpty(runSampleIds);
   const cleanedSampleSetIds = uniqueNonEmpty(sampleSetIds);
-  if (cleanedSampleIds.length || cleanedRunSampleIds.length) {
+  if (cleanedSampleIds.length) {
     return {
       kind: "sample",
       sample_id: cleanedSampleIds[0],
       sample_ids: cleanedSampleIds.length ? cleanedSampleIds : undefined,
-      run_sample_id: cleanedRunSampleIds[0],
-      run_sample_ids: cleanedRunSampleIds.length ? cleanedRunSampleIds : undefined,
     };
   }
   return {
@@ -2344,6 +2254,7 @@ function buildConfig({
             name: seriesLabel(contracts, item, index),
             label: seriesLabel(contracts, item, index),
             value_mode: "raw",
+            result_scope: serializeResultScope(item.resultScope, analysisGrain),
           })),
         ],
         linker: { kind: linkerKind },
@@ -2429,6 +2340,7 @@ function buildConfig({
         aggregation: item.aggregation || "raw",
         color: item.color,
         filters: normalizedSeriesFilters(item),
+        result_scope: serializeResultScope(item.resultScope, analysisGrain),
       })),
       linker: { kind: linkerKind },
       filters: [],
@@ -2511,6 +2423,7 @@ function parseSavedSeries(value: unknown, fallbackContractId: string) {
         name: stringConfig(item.name) || stringConfig(item.label),
         color: stringConfig(item.color) || CHART_COLORS[index % CHART_COLORS.length],
         filters: parseSavedFilters(item.filters),
+        resultScope: parseSavedResultScope(item.result_scope),
       } satisfies BuilderSeries;
     })
     .filter((item): item is BuilderSeries => Boolean(item));
@@ -2526,9 +2439,52 @@ function parseSavedFilters(value: unknown) {
   }));
 }
 
+function serializeResultScope(scope: ResultScope, analysisGrain: AnalysisGrain) {
+  return {
+    selection:
+      analysisGrain === "run" && scope.selection === "latest_successful_per_sample"
+        ? "all_eligible_runs"
+        : scope.selection,
+    analysis_type_ids: scope.analysisTypeIds,
+    method_ids: scope.methodIds,
+    method_versions: scope.methodVersions,
+    run_ids: scope.runIds,
+    statuses: scope.statuses,
+    started_after: scope.startedAfter || undefined,
+    ended_before: scope.endedBefore || undefined,
+    run_contract_ids: scope.runContractIds,
+  };
+}
+
+function parseSavedResultScope(value: unknown): ResultScope {
+  const fallback = defaultResultScope();
+  if (!isRecord(value)) return fallback;
+  const selection = stringConfig(value.selection);
+  return {
+    ...fallback,
+    selection: [
+      "latest_successful_per_sample",
+      "specific_methods",
+      "specific_versions",
+      "specific_runs",
+      "pinned_results",
+    ].includes(selection)
+      ? (selection as ResultScope["selection"])
+      : fallback.selection,
+    analysisTypeIds: stringArrayConfig(value.analysis_type_ids),
+    methodIds: stringArrayConfig(value.method_ids),
+    methodVersions: stringArrayConfig(value.method_versions),
+    runIds: stringArrayConfig(value.run_ids),
+    statuses: stringArrayConfig(value.statuses),
+    startedAfter: stringConfig(value.started_after),
+    endedBefore: stringConfig(value.ended_before),
+    runContractIds: stringArrayConfig(value.run_contract_ids),
+  };
+}
+
 function parseAnalysisGrain(value: unknown): AnalysisGrain {
   const grain = stringConfig(value);
-  return isAnalysisGrain(grain) ? grain : "run_sample";
+  return isAnalysisGrain(grain) ? grain : "sample";
 }
 
 function parseLinkerKind(value: unknown): LinkerKind {
@@ -2543,7 +2499,6 @@ function parseResultPolicyMode(value: unknown): ResultPolicyMode {
 
 function isAnalysisGrain(value: string): value is AnalysisGrain {
   return [
-    "run_sample",
     "sample",
     "subject",
     "run",
@@ -2554,7 +2509,7 @@ function isAnalysisGrain(value: string): value is AnalysisGrain {
 }
 
 function isLinkerKind(value: string): value is LinkerKind {
-  return ["auto", "sample", "run_sample", "run", "feature", "entity"].includes(
+  return ["auto", "sample", "run", "feature", "entity"].includes(
     value,
   );
 }

@@ -51,6 +51,9 @@ function PreviewAuditBar({
   const context = readRecord(result?.context) ?? readRecord(config.context);
   const linker = readRecord(result?.linker) ?? readRecord(config.linker);
   const diagnostics = readRecord(result?.linker_diagnostics);
+  const resultDiagnostics = Array.isArray(result?.result_selection_diagnostics)
+    ? result.result_selection_diagnostics.map(readRecord).filter(Boolean)
+    : [];
   const policy = readRecord(result?.result_policy) ?? readRecord(config.result_policy);
   const filters = Array.isArray(result?.filters)
     ? result.filters
@@ -63,6 +66,7 @@ function PreviewAuditBar({
     filters.length ? `${filters.length} filters` : "No filters",
     policyLabel(policy),
     diagnosticsLabel(diagnostics),
+    ...resultDiagnostics.flatMap((item) => resultDiagnosticLabels(item)),
   ].filter(Boolean);
   if (chips.length === 0) return null;
   return (
@@ -83,17 +87,27 @@ function contextLabel(context: Record<string, unknown> | null) {
   const kind = stringValue(context?.kind) || "cohort";
   const sampleSet = stringValue(context?.sample_set_id);
   const sample = stringValue(context?.sample_id);
-  const runSample = stringValue(context?.run_sample_id);
   const sampleSets = stringArrayValue(context?.sample_set_ids);
   const samples = stringArrayValue(context?.sample_ids);
-  const runSamples = stringArrayValue(context?.run_sample_ids);
   if (samples.length > 1) return `${samples.length} samples`;
-  if (runSamples.length > 1) return `${runSamples.length} run samples`;
   if (sampleSets.length > 1) return `${sampleSets.length} sample groups`;
   if (sample) return `Sample ${sample}`;
-  if (runSample) return `Run sample ${runSample}`;
   if (sampleSet) return `Sample group ${sampleSet}`;
   return kind === "sample" ? "Sample context" : "All samples";
+}
+
+function resultDiagnosticLabels(diagnostics: Record<string, unknown> | null) {
+  if (!diagnostics) return [];
+  const labels: string[] = [];
+  const selection = stringValue(diagnostics.selection);
+  const missing = stringArrayValue(diagnostics.missing_samples);
+  const warnings = stringArrayValue(diagnostics.warnings);
+  const versions = readRecord(diagnostics.versions);
+  if (selection) labels.push(`Results ${selection.replaceAll("_", " ")}`);
+  if (versions) labels.push(`${Object.keys(versions).length} method versions`);
+  if (missing.length) labels.push(`${missing.length} samples missing`);
+  labels.push(...warnings);
+  return labels;
 }
 
 function stringArrayValue(value: unknown) {
