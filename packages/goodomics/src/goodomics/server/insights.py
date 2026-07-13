@@ -201,6 +201,7 @@ async def execute_insight(
     insight: InsightRecord | None = None,
     config: Mapping[str, Any] | None = None,
     refresh: bool = False,
+    persist_results: bool = True,
 ) -> JsonObject:
     """Execute an insight config or saved insight record.
 
@@ -277,18 +278,19 @@ async def execute_insight(
         result_policy_summary=policy_summary,
     )
     cache_id = f"insight_cache_{uuid4().hex}"
-    session.add(
-        InsightResultCacheRecord(
-            cache_id=cache_id,
-            project_id=project_id,
-            insight_id=insight_id,
-            spec_hash=spec_hash,
-            source_fingerprint=source_fingerprint,
-            result=result,
-            created_at=datetime.now(UTC),
+    if persist_results:
+        session.add(
+            InsightResultCacheRecord(
+                cache_id=cache_id,
+                project_id=project_id,
+                insight_id=insight_id,
+                spec_hash=spec_hash,
+                source_fingerprint=source_fingerprint,
+                result=result,
+                created_at=datetime.now(UTC),
+            )
         )
-    )
-    await session.commit()
+        await session.commit()
     return result
 
 
@@ -300,6 +302,7 @@ async def execute_report(
     report: ReportRecord,
     insights: Sequence[InsightRecord],
     refresh: bool = False,
+    persist_results: bool = True,
 ) -> JsonObject:
     """Execute a saved report by executing its referenced insights."""
 
@@ -352,6 +355,7 @@ async def execute_report(
             insight=insight,
             config=config,
             refresh=refresh,
+            persist_results=persist_results,
         )
         for insight, config in zip(insights, effective_insight_configs, strict=True)
     ]
@@ -366,18 +370,19 @@ async def execute_report(
         "cached": False,
     }
     cache_id = f"report_cache_{uuid4().hex}"
-    session.add(
-        ReportResultCacheRecord(
-            cache_id=cache_id,
-            project_id=project_id,
-            report_id=report_id,
-            spec_hash=spec_hash,
-            source_fingerprint=source_fingerprint,
-            result=result,
-            created_at=datetime.now(UTC),
+    if persist_results:
+        session.add(
+            ReportResultCacheRecord(
+                cache_id=cache_id,
+                project_id=project_id,
+                report_id=report_id,
+                spec_hash=spec_hash,
+                source_fingerprint=source_fingerprint,
+                result=result,
+                created_at=datetime.now(UTC),
+            )
         )
-    )
-    await session.commit()
+        await session.commit()
     return result
 
 
