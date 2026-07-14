@@ -6,7 +6,7 @@
 
 > ## ⚠️ Warning: Goodomics is under heavy development and is not ready for production use.
 
-Goodomics is an early-stage Python package and web app for cohort-aware QC and durable context around omics computational outputs. It starts from a folder of pipeline results, generates a clear report, and then lets you keep building up structured run history, files, metrics, and reviewable context over time. The same grounded context is meant to be agent-ready and MCP-ready, so humans and tools can work from the same run history, files, metrics, and policies.
+Goodomics turns omics data and bioinformatics outputs into visual, structured, and queryable context. Start with a folder of pipeline results and generate a clear report. As your needs grow, add durable context around runs, samples, metrics, files, cohorts, and QC policies. Explore it through the dashboard, SQL, APIs, or AI agents. For shared deployments, enable user management for teams and organizations.
 
 Explore Goodomics in the live demo: [demo.goodomics.com](https://demo.goodomics.com).
 
