@@ -10,6 +10,8 @@ Goodomics is an early-stage Python package and web app for cohort-aware QC and d
 
 Explore Goodomics in the live demo: [demo.goodomics.com](https://demo.goodomics.com).
 
+<br>
+
 ![Overview of how Goodomics works](https://www.goodomics.com/marketing/how-goodomics-works.png)
 
 The repo is organized as a Python monorepo with two package surfaces:
