@@ -591,6 +591,7 @@ class CustomParser:
         resolved_database_url = resolve_database_url(database_url)
         ensure_sqlite_parent(resolved_database_url)
         store = SQLModelGoodomicsStore(resolved_database_url)
+        asyncio.run(store.ensure_schema())
         project_record = asyncio.run(store.ensure_project(project))
         resolved_run_id = run_id or _default_run_id(value, self.key)
         data_import_id = resolved_run_id
@@ -608,23 +609,26 @@ class CustomParser:
             source_path=str(value) if isinstance(value, str | Path) else None,
             project_slug=project_record.slug,
         )
-        catalog_result = asyncio.run(
-            store.replace_run_catalog(
-                normalized.run,
-                data_import=normalized.data_import,
-                analysis_types=normalized.analysis_types,
-                analysis_methods=normalized.analysis_methods,
-                samples=normalized.samples,
-                run_samples=normalized.run_samples,
-                data_contracts=normalized.data_contracts,
-                data_contract_analysis_types=normalized.data_contract_analysis_types,
-                run_contracts=normalized.run_contracts,
-                run_contract_samples=normalized.run_contract_samples,
-                data_contract_fields=normalized.data_contract_fields,
-                files=normalized.files,
-                file_links=normalized.file_links,
+        try:
+            catalog_result = asyncio.run(
+                store.replace_run_catalog(
+                    normalized.run,
+                    data_import=normalized.data_import,
+                    analysis_types=normalized.analysis_types,
+                    analysis_methods=normalized.analysis_methods,
+                    samples=normalized.samples,
+                    run_samples=normalized.run_samples,
+                    data_contracts=normalized.data_contracts,
+                    data_contract_analysis_types=normalized.data_contract_analysis_types,
+                    run_contracts=normalized.run_contracts,
+                    run_contract_samples=normalized.run_contract_samples,
+                    data_contract_fields=normalized.data_contract_fields,
+                    files=normalized.files,
+                    file_links=normalized.file_links,
+                )
             )
-        )
+        finally:
+            asyncio.run(store.dispose())
         catalog_id_maps = catalog_id_maps_from_records(catalog_result)
         resolved_batch = resolve_analytics_batch_catalog_ids(
             normalized.analytics_batch,

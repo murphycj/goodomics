@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -36,10 +38,11 @@ from goodomics.server.db.models import (
     ProjectRoleRecord,
     UserRecord,
 )
+from goodomics.server.db.session import get_session
 from goodomics.server.rate_limits import client_ip
 from goodomics.storage.sqlalchemy import ProjectRecord
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(get_session)])
 
 
 class Credentials(BaseModel):
@@ -218,9 +221,7 @@ async def login(payload: Credentials, request: Request) -> TokenRead:
         "login", client_ip(request, settings), settings.rate_limits.login
     )
 
-    await request.app.state.store.ensure_schema()
-
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = await authenticate_user(session, payload.email, payload.password)
 
         if user is None:
@@ -242,9 +243,7 @@ async def signup(payload: SignupRequest, request: Request) -> TokenRead:
     if not settings.auth.enabled or not settings.auth.signup_enabled:
         raise HTTPException(status_code=404, detail="Public signup is disabled")
 
-    await request.app.state.store.ensure_schema()
-
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         if await installation_setup_required(session):
             raise HTTPException(
                 status_code=409,
@@ -281,9 +280,7 @@ async def setup_status(request: Request) -> SetupStatusRead:
             setup_required=False,
             password_policy=password_policy,
         )
-
-    await request.app.state.store.ensure_schema()
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         required = await installation_setup_required(session)
 
     return SetupStatusRead(
@@ -306,9 +303,8 @@ async def setup(payload: SetupRequest, request: Request) -> TokenRead:
     await request.app.state.rate_limiter.check(
         "login", client_ip(request, settings), settings.rate_limits.login
     )
-    await request.app.state.store.ensure_schema()
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         if not await installation_setup_required(session):
             raise HTTPException(
                 status_code=409, detail="Installation setup is already complete"
@@ -341,15 +337,13 @@ async def setup(payload: SetupRequest, request: Request) -> TokenRead:
 async def me(request: Request) -> MeRead:
     """Return the current principal and its project authorization context."""
 
-    principal = await resolve_principal(request)
+    principal = await resolve_principal(request, _session(request))
     status = await setup_status(request)
 
     if principal.kind == "anonymous":
-        await request.app.state.store.ensure_schema()
-
         # Load all public projects for anonymous users to
         # determine their project-scoped permissions.
-        async with AsyncSession(request.app.state.store._get_engine()) as session:
+        async with _session_context(request) as session:
             projects = (
                 await session.exec(
                     select(ProjectRecord).where(ProjectRecord.visibility == "public")
@@ -380,7 +374,7 @@ async def me(request: Request) -> MeRead:
             password_policy=status.password_policy,
         )
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         rows = (
             await session.exec(
                 select(ProjectMembershipRecord, ProjectRecord, ProjectRoleRecord)
@@ -431,7 +425,7 @@ async def change_password(payload: ChangePasswordRequest, request: Request) -> N
 
     principal = await _require_user(request)
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = await session.get(UserRecord, principal.user_pk)
         if (
             user is None
@@ -459,7 +453,7 @@ async def update_profile(payload: ProfilePatchRequest, request: Request) -> Toke
     principal = await _require_user(request)
     settings = request.app.state.settings
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = await session.get(UserRecord, principal.user_pk)
 
         if user is None:
@@ -521,7 +515,7 @@ async def list_users(request: Request) -> list[UserRead]:
     """List installation users for an authenticated administrator."""
 
     await _require_admin(request)
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         rows = (await session.exec(select(UserRecord).order_by(UserRecord.email))).all()
 
     return [_user_read(user) for user in rows]
@@ -532,7 +526,7 @@ async def add_user(payload: UserCreateRequest, request: Request) -> UserRead:
     """Create an installation user as an authenticated administrator."""
 
     await _require_admin(request)
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         try:
             user = await create_user(
                 session,
@@ -556,7 +550,7 @@ async def list_user_memberships(
 
     await _require_admin(request)
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = (
             await session.exec(select(UserRecord).where(UserRecord.user_id == user_id))
         ).first()
@@ -603,7 +597,7 @@ async def patch_user(
 
     await _require_admin(request)
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = (
             await session.exec(select(UserRecord).where(UserRecord.user_id == user_id))
         ).first()
@@ -709,8 +703,10 @@ async def list_roles(project_id: str, request: Request) -> list[RoleRead]:
     """List seeded and custom roles visible within a project."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.roles.read")
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    await require_project_permission(
+        request, _session(request), project, "project.roles.read"
+    )
+    async with _session_context(request) as session:
         await seed_project_roles(session, project)
         await session.commit()
         roles = (
@@ -731,9 +727,11 @@ async def add_role(
     """Create a custom project role with validated permissions."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.roles.manage")
+    await require_project_permission(
+        request, _session(request), project, "project.roles.manage"
+    )
     _validate_permissions(payload.permissions)
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         role = ProjectRoleRecord(
             role_id=f"rol_{uuid4().hex[:20]}",
             project_id=cast(int, project.id),
@@ -759,9 +757,11 @@ async def patch_role(
     """Update a project role and replace permissions when supplied."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.roles.manage")
+    await require_project_permission(
+        request, _session(request), project, "project.roles.manage"
+    )
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         role = await _role(session, project, role_id)
         if payload.name is not None:
             role.name = payload.name.strip()
@@ -791,9 +791,11 @@ async def list_members(project_id: str, request: Request) -> list[MembershipRead
     """List users and roles assigned to a project."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.members.read")
+    await require_project_permission(
+        request, _session(request), project, "project.members.read"
+    )
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         rows = (
             await session.exec(
                 select(ProjectMembershipRecord, UserRecord, ProjectRoleRecord)
@@ -825,9 +827,11 @@ async def add_member(
     """Assign an installation user to a project role."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.members.manage")
+    await require_project_permission(
+        request, _session(request), project, "project.members.manage"
+    )
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         user = (
             await session.exec(
                 select(UserRecord).where(UserRecord.user_id == payload.user_id)
@@ -870,9 +874,11 @@ async def patch_member(
     """Replace the project role assigned to an existing membership."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.members.manage")
+    await require_project_permission(
+        request, _session(request), project, "project.members.manage"
+    )
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         membership = await _membership(session, project, membership_id)
         role = await _role(session, project, payload.role_id)
         membership.role_id = cast(int, role.id)
@@ -894,8 +900,10 @@ async def delete_member(project_id: str, membership_id: str, request: Request) -
     """Remove an existing membership from a project."""
 
     project = await _project(request, project_id)
-    await require_project_permission(request, project, "project.members.manage")
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    await require_project_permission(
+        request, _session(request), project, "project.members.manage"
+    )
+    async with _session_context(request) as session:
         membership = await _membership(session, project, membership_id)
         await session.delete(membership)
         await session.commit()
@@ -904,7 +912,7 @@ async def delete_member(project_id: str, membership_id: str, request: Request) -
 async def _require_user(request: Request) -> Principal:
     """Resolve and require a signed-in installation user."""
 
-    principal = await resolve_principal(request)
+    principal = await resolve_principal(request, _session(request))
     if principal.kind != "user":
         raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -924,8 +932,7 @@ async def _require_admin(request: Request) -> Principal:
 async def _project(request: Request, project_id: str) -> ProjectRecord:
     """Load a project by public identifier or raise an HTTP not-found error."""
 
-    await request.app.state.store.ensure_schema()
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
+    async with _session_context(request) as session:
         project = (
             await session.exec(
                 select(ProjectRecord).where(ProjectRecord.project_id == project_id)
@@ -936,6 +943,19 @@ async def _project(request: Request, project_id: str) -> ProjectRecord:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project
+
+
+def _session(request: Request) -> AsyncSession:
+    """Return the FastAPI request-scoped SQL session."""
+
+    return cast(AsyncSession, request.state.db_session)
+
+
+@asynccontextmanager
+async def _session_context(request: Request) -> AsyncIterator[AsyncSession]:
+    """Yield the request session without closing it before response completion."""
+
+    yield _session(request)
 
 
 async def _role(

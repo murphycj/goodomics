@@ -15,7 +15,6 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -32,7 +31,7 @@ def _run_cli_in_temporary_directory(
 def _run_pk(database_path: Path, run_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -66,13 +65,13 @@ def _project_visibility(database_path: Path, project_id: str) -> str:
         """Query project visibility and release the test database engine."""
 
         store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             row = (
                 await session.exec(
                     select(ProjectRecord).where(ProjectRecord.project_id == project_id)
                 )
             ).one()
-        await store._get_engine().dispose()
+        await store.dispose()
         return row.visibility
 
     return asyncio.run(load())
@@ -226,9 +225,9 @@ def test_create_admin_closes_first_run_setup(tmp_path: Path) -> None:
 
     async def load_setup_state() -> InstallationStateRecord | None:
         store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             state = await session.get(InstallationStateRecord, "installation")
-        await store._get_engine().dispose()
+        await store.dispose()
         return state
 
     state = asyncio.run(load_setup_state())
@@ -424,8 +423,9 @@ def test_project_visibility_uses_administrator_environment(
     database_url = f"sqlite+aiosqlite:///{database_path}"
     config_path = _write_auth_config(tmp_path, database_path)
     store = SQLModelGoodomicsStore(database_url)
+    asyncio.run(store.ensure_schema())
     project = asyncio.run(store.ensure_default_project())
-    asyncio.run(store._get_engine().dispose())
+    asyncio.run(store.dispose())
     bootstrap = runner.invoke(
         app,
         [

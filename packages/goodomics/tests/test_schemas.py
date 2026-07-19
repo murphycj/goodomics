@@ -38,7 +38,6 @@ from goodomics.storage.sqlalchemy import (
 )
 from pytest import MonkeyPatch
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def _scalar(row: tuple[Any, ...] | None) -> Any:
@@ -49,7 +48,7 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(run_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -62,7 +61,7 @@ def _run_pk(run_id: str) -> int:
 def _field_pk(field_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractFieldRecord).where(
@@ -79,7 +78,7 @@ def _field_pk(field_id: str) -> int:
 def _sample_pk(sample_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)

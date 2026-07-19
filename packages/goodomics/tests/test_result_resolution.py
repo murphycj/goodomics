@@ -25,7 +25,6 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
@@ -33,6 +32,7 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'catalog.db'}"
     store = SQLModelGoodomicsStore(database_url)
+    asyncio.run(store.ensure_schema())
     project = asyncio.run(store.ensure_project("resolver"))
     now = datetime.now(UTC)
     runs = [
@@ -132,7 +132,7 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
     )
 
     async def resolve(scope: dict[str, object] | None = None):
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractRecord).where(

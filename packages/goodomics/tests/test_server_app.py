@@ -43,7 +43,6 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 @pytest.fixture
@@ -71,7 +70,7 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _sample_pk(database_url: str, sample_id: str) -> int:
     async def load() -> int:
         store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)
@@ -86,7 +85,7 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
 def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
     async def load() -> int:
         store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             row = (
                 await session.exec(
                     select(RunSampleRecord).where(
@@ -103,7 +102,7 @@ def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
 def _field_pk(database_url: str, field_id: str) -> int:
     async def load() -> int:
         store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractFieldRecord).where(
@@ -120,7 +119,7 @@ def _field_pk(database_url: str, field_id: str) -> int:
 def _contract_project_ids(database_url: str) -> dict[str, str | None]:
     async def load() -> dict[str, str | None]:
         store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             rows = (
                 await session.exec(
                     select(DataContractRecord, ProjectRecord.project_id)
@@ -1225,11 +1224,12 @@ def test_contract_browser_keeps_legacy_default_project_contracts_visible(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     store = SQLModelGoodomicsStore(database_url)
+    asyncio.run(store.ensure_schema())
     default_project = asyncio.run(store.ensure_default_project())
     other_project = asyncio.run(store.ensure_project("other"))
 
     async def seed_legacy_contract() -> None:
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             contract = DataContractRecord(
                 data_contract_id="multiqc:legacy",
                 project_id=None,

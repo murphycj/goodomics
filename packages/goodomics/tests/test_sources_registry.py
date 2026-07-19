@@ -26,7 +26,6 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def _scalar(row: tuple[Any, ...] | None) -> Any:
@@ -37,7 +36,7 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -50,7 +49,7 @@ def _run_pk(database_url: str, run_id: str) -> int:
 def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractRecord).where(
@@ -260,7 +259,7 @@ def test_tool_contract_reuse_preserves_existing_fields(tmp_path: Path) -> None:
 
     async def load_salmon_fields() -> set[str]:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             contract = (
                 await session.exec(
                     select(DataContractRecord).where(

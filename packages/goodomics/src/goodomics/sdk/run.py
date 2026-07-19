@@ -288,6 +288,7 @@ class GoodomicsRun:
         # SQLite URLs may point at a file in a not-yet-created directory.
         ensure_sqlite_parent(database_url)
         store = SQLModelGoodomicsStore(database_url)
+        asyncio.run(store.ensure_schema())
         # ensure_project() returns the default project when self.project is None,
         # or creates/resolves the requested project otherwise.
         project = asyncio.run(store.ensure_project(self.project))
@@ -348,48 +349,51 @@ class GoodomicsRun:
         )
         # Replace the catalog slice for this run so repeated SDK writes update
         # the run, samples/run_samples, contract, and field definitions together.
-        catalog_result = asyncio.run(
-            store.replace_run_catalog(
-                catalog_run,
-                analysis_types=[analysis_type],
-                analysis_methods=[method],
-                samples=samples,
-                run_samples=run_samples,
-                data_contracts=data_contracts,
-                data_contract_analysis_types=[
-                    DataContractAnalysisType(
+        try:
+            catalog_result = asyncio.run(
+                store.replace_run_catalog(
+                    catalog_run,
+                    analysis_types=[analysis_type],
+                    analysis_methods=[method],
+                    samples=samples,
+                    run_samples=run_samples,
+                    data_contracts=data_contracts,
+                    data_contract_analysis_types=[
+                        DataContractAnalysisType(
+                            data_contract_id=data_contract_id,
+                            analysis_type_id=analysis_type.analysis_type_id,
+                        )
+                    ]
+                    if self.metrics
+                    else [],
+                    run_contracts=[
+                        RunContract(
+                            run_contract_id=f"{run_id}:{data_contract_id}",
+                            run_id=run_id,
+                            data_contract_id=data_contract_id,
+                            producer_method_id=method.method_id,
+                            producer_version=self.method_version,
+                            status="available",
+                        )
+                    ]
+                    if self.metrics
+                    else [],
+                    run_contract_samples=[
+                        RunContractSample(
+                            run_contract_id=f"{run_id}:{data_contract_id}",
+                            run_sample_id=run_sample.run_sample_id,
+                            availability="observed",
+                        )
+                        for run_sample in run_samples
+                    ],
+                    data_contract_fields=_metric_contract_fields(
+                        self.metrics,
                         data_contract_id=data_contract_id,
-                        analysis_type_id=analysis_type.analysis_type_id,
-                    )
-                ]
-                if self.metrics
-                else [],
-                run_contracts=[
-                    RunContract(
-                        run_contract_id=f"{run_id}:{data_contract_id}",
-                        run_id=run_id,
-                        data_contract_id=data_contract_id,
-                        producer_method_id=method.method_id,
-                        producer_version=self.method_version,
-                        status="available",
-                    )
-                ]
-                if self.metrics
-                else [],
-                run_contract_samples=[
-                    RunContractSample(
-                        run_contract_id=f"{run_id}:{data_contract_id}",
-                        run_sample_id=run_sample.run_sample_id,
-                        availability="observed",
-                    )
-                    for run_sample in run_samples
-                ],
-                data_contract_fields=_metric_contract_fields(
-                    self.metrics,
-                    data_contract_id=data_contract_id,
-                ),
+                    ),
+                )
             )
-        )
+        finally:
+            asyncio.run(store.dispose())
         if self.metrics:
             # DuckDB owns the observation values themselves, keeping SDK metrics
             # on the same analytical path as parser and ingest metrics.

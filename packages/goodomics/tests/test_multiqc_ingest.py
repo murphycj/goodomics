@@ -33,7 +33,6 @@ from goodomics.storage.sqlalchemy import (
     SubjectRecord,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def _scalar(row: tuple[Any, ...] | None) -> Any:
@@ -90,7 +89,7 @@ def _resolved_multiqc_batch(parsed: Any, *, run_id: str) -> Any:
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -343,7 +342,7 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
         list[RunSampleRecord],
         list[RunRelationshipRecord],
     ]:
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             imports = (await session.exec(select(DataImportRecord))).all()
             files = (await session.exec(select(FileRecord))).all()
             runs = (await session.exec(select(RunRecord))).all()
@@ -412,7 +411,7 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
         list[RunRelationshipRecord],
     ]:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             return (
                 list((await session.exec(select(SubjectRecord))).all()),
                 list((await session.exec(select(SampleRecord))).all()),

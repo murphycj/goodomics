@@ -16,6 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast, get_args, get_origin
@@ -706,9 +708,8 @@ async def list_projects(request: Request) -> list[ProjectRead]:
     """List projects, creating the default project on first use."""
 
     await _ensure_default_project(request)
-    await _ensure_schema(request)
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         statement = select(ProjectRecord).order_by(
             cast(Any, ProjectRecord.created_at), ProjectRecord.name
         )
@@ -727,8 +728,6 @@ async def list_projects(request: Request) -> list[ProjectRead]:
 @router.post("/projects", response_model=ProjectRead, status_code=201)
 async def create_project(payload: ProjectCreate, request: Request) -> ProjectRead:
     """Create a project with a validated unique slug."""
-
-    await _ensure_schema(request)
     slug = validate_project_slug(payload.slug or payload.name)
 
     # Validate the default storage location if provided.
@@ -739,7 +738,7 @@ async def create_project(payload: ProjectCreate, request: Request) -> ProjectRea
     ):
         raise HTTPException(status_code=400, detail="Unknown storage location")
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         existing = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.slug, slug
         )
@@ -846,7 +845,7 @@ async def list_project_files(project_id: str, request: Request) -> list[FileRead
 
     project = await _require_project(request, project_id)
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         rows = (
             await session.exec(
                 select(FileRecord, FileLinkRecord)
@@ -914,7 +913,7 @@ async def upload_project_file(
         created_at=now,
         metadata_json={"original_filename": upload.filename},
     )
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         session.add(row)
         await session.flush()
         link = FileLinkRecord(
@@ -942,7 +941,7 @@ async def delete_project_file(project_id: str, file_id: str, request: Request) -
 
     project = await _require_project(request, project_id)
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         # Retrieve the file record for the given file_id and project,
         # ensuring it exists before deletion.
         row = (
@@ -1054,8 +1053,7 @@ async def get_project_sample(
     """Return a sample that belongs to, or was processed in, the project."""
 
     project = await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_where(
             session,
             SampleRecord,
@@ -1095,8 +1093,7 @@ async def list_project_sample_runs(
     """List runs in which a project sample appears."""
 
     await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         await _require_project_sample(session, project_id, sample_id)
         rows = await _sample_run_rows(session, project_id, sample_id)
         return [
@@ -1117,8 +1114,7 @@ async def list_project_sample_files(
     """Return files from the latest run for a project sample."""
 
     await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         await _require_project_sample(session, project_id, sample_id)
         latest = await _latest_sample_run(session, project_id, sample_id)
     if latest is None:
@@ -1140,8 +1136,7 @@ async def list_project_sample_run_files(
     """Return files for a specific project sample/run pairing."""
 
     await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         await _get_sample_run_link(session, project_id, sample_id, run_id)
 
     return await _list_run_files(run_id, request, project_id=project_id)
@@ -1160,8 +1155,7 @@ async def list_project_sample_run_analytics_metrics(
     """Return scalar metrics for a specific project sample/run pairing."""
 
     await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         run, run_sample = await _get_sample_run_link(
             session, project_id, sample_id, run_id
         )
@@ -1178,10 +1172,8 @@ async def patch_project(
     project_id: str, payload: ProjectPatch, request: Request
 ) -> ProjectRead:
     """Patch project metadata and validate default-report ownership."""
-
-    await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, project_id
         )
@@ -1265,8 +1257,6 @@ async def search_samples(
     limit: int = Query(default=12, ge=1, le=50),
 ) -> list[SearchResultRead]:
     """Search samples first, then fill remaining slots with matching runs."""
-
-    await _ensure_schema(request)
     project_pk: int | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)
@@ -1275,7 +1265,7 @@ async def search_samples(
     if not term:
         return []
     pattern = f"%{term}%"
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         visible = await authorized_project_pks(
             session,
             cast(Principal, request.state.principal),
@@ -1388,11 +1378,13 @@ async def list_runs(
 async def create_run(payload: RunCreate, request: Request) -> Run:
     """Create a run through the storage abstraction used by ingest code."""
 
-    project = await request.app.state.store.ensure_project(
-        payload.project_id or payload.project
+    project = await request.app.state.store.ensure_project_with_session(
+        _session(request), payload.project_id or payload.project
     )
     project_row = await _require_project(request, project.project_id)
-    await require_project_permission(request, project_row, "data.ingest")
+    await require_project_permission(
+        request, _session(request), project_row, "data.ingest"
+    )
 
     run = Run(
         run_id=payload.run_id or _new_id("run"),
@@ -1427,6 +1419,7 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
             )
             for sample in run.samples
         ],
+        session=_session(request),
     )
     return run
 
@@ -1435,7 +1428,7 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
 async def get_run(run_id: str, request: Request) -> Run:
     """Return a run by public run ID."""
 
-    run = await request.app.state.store.get_run(run_id)
+    run = await request.app.state.store.get_run(run_id, session=_session(request))
 
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -1449,11 +1442,9 @@ async def get_run(run_id: str, request: Request) -> Run:
 @router.patch("/runs/{run_id}", response_model=Run)
 async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
     """Patch editable run fields in the SQL catalog."""
-
-    await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
     if values:
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             row = await get_record_by_field(
                 session, RunRecord, RunRecord.run_id, run_id
             )
@@ -1514,9 +1505,7 @@ async def _list_run_files(
     run_id: str, request: Request, *, project_id: str | None = None
 ) -> list[FileRead]:
     """Resolve files linked to a run and its originating data import."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         run = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -1626,8 +1615,7 @@ async def list_data_contracts(
     project: ProjectRecord | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         project_pk = project.id if project is not None else None
         statement = select(DataContractRecord)
         if project_pk is not None:
@@ -1668,8 +1656,7 @@ async def get_data_contract(
     project: ProjectRecord | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         project_pk = project.id if project is not None else None
         statement = select(DataContractRecord).where(
             DataContractRecord.data_contract_id == data_contract_id
@@ -1712,7 +1699,7 @@ async def get_contract_result_options(
     """Return compatible methods, versions, runs, and statuses for a contract."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         contract = (
             await session.exec(
                 select(DataContractRecord).where(
@@ -1801,9 +1788,7 @@ async def _file_content_response(
     project_id: str | None = None,
 ) -> Response:
     """Validate file visibility and return a FastAPI file response."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_by_field(
             session, FileRecord, FileRecord.file_id, file_id
         )
@@ -1882,12 +1867,10 @@ async def list_insights(
 ) -> list[SavedInsightRead]:
     """List saved insights globally or for one project."""
 
-    await _ensure_schema(request)
-
     if project_id is not None:
         await _require_project(request, project_id)
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         statement = select(InsightRecord)
         if project_id is not None:
             statement = statement.where(InsightRecord.project_id == project_id)
@@ -1925,13 +1908,11 @@ async def create_insight(
     payload: SavedInsightCreate, request: Request
 ) -> SavedInsightRead:
     """Create a saved insight and its initial revision."""
-
-    await _ensure_schema(request)
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
     insight_id = payload.insight_id or _new_id("insight")
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         insight = InsightRecord(
             insight_id=insight_id,
             project_id=payload.project_id,
@@ -1958,9 +1939,7 @@ async def create_insight(
 async def get_insight(insight_ref: str, request: Request) -> SavedInsightRead:
     """Return a saved insight by ID or stable URL slug."""
 
-    await _ensure_schema(request)
-
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _get_insight_by_ref(session, insight_ref)
 
     if row is None:
@@ -1968,7 +1947,9 @@ async def get_insight(insight_ref: str, request: Request) -> SavedInsightRead:
 
     if row.project_id is not None:
         project = await _require_project(request, row.project_id)
-        await require_project_permission(request, project, "insight.read")
+        await require_project_permission(
+            request, _session(request), project, "insight.read"
+        )
 
     return _saved_insight_read(row)
 
@@ -1978,12 +1959,10 @@ async def patch_insight(
     insight_ref: str, payload: SavedInsightPatch, request: Request
 ) -> SavedInsightRead:
     """Patch a saved insight and record a revision when config changes."""
-
-    await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
 
     if values:
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             insight = await _get_insight_by_ref(session, insight_ref)
 
             if insight is None:
@@ -1991,7 +1970,9 @@ async def patch_insight(
 
             if insight.project_id is not None:
                 project = await _require_project(request, insight.project_id)
-                await require_project_permission(request, project, "insight.edit")
+                await require_project_permission(
+                    request, _session(request), project, "insight.edit"
+                )
 
             insight_id = insight.insight_id
             updated_at = datetime.now(UTC)
@@ -2019,9 +2000,7 @@ async def patch_insight(
 async def delete_insight(insight_ref: str, request: Request) -> Response:
     """Delete a saved insight, its revisions, and cached results."""
 
-    await _ensure_schema(request)
-
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         insight = await _get_insight_by_ref(session, insight_ref)
 
         if insight is None:
@@ -2029,7 +2008,9 @@ async def delete_insight(insight_ref: str, request: Request) -> Response:
 
         if insight.project_id is not None:
             project = await _require_project(request, insight.project_id)
-            await require_project_permission(request, project, "insight.delete")
+            await require_project_permission(
+                request, _session(request), project, "insight.delete"
+            )
 
         insight_id = insight.insight_id
         insight_revision_id = cast(Any, InsightRevisionRecord.insight_id)
@@ -2068,13 +2049,11 @@ async def execute_adhoc_insight(
     payload: InsightExecuteRequest, request: Request
 ) -> InsightResultRead:
     """Execute an insight config that has not been saved."""
-
-    await _ensure_schema(request)
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     analytics_store = _analytics_store_for_project(request, payload.project_id)
     try:
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             result = await execute_insight(
                 session=session,
                 analytics_store=analytics_store,
@@ -2095,9 +2074,7 @@ async def execute_saved_insight(
     request: Request,
 ) -> InsightResultRead:
     """Execute a saved insight, optionally overriding its config."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         insight = await _get_insight_by_ref(session, insight_ref)
         if insight is None:
             raise HTTPException(status_code=404, detail="Insight not found")
@@ -2126,12 +2103,10 @@ async def list_reports(
     project_id: str | None = Query(default=None),
 ) -> list[SavedReportRead]:
     """List saved reports globally or for one project."""
-
-    await _ensure_schema(request)
     if project_id is not None:
         await _require_project(request, project_id)
 
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         statement = select(ReportRecord)
 
         if project_id is not None:
@@ -2152,13 +2127,11 @@ async def create_report(
     payload: SavedReportCreate, request: Request
 ) -> SavedReportRead:
     """Create a saved report and its initial revision."""
-
-    await _ensure_schema(request)
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
     report_id = payload.report_id or _new_id("report")
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         report = ReportRecord(
             report_id=report_id,
             project_id=payload.project_id,
@@ -2186,8 +2159,6 @@ async def render_standalone_report(
     payload: ReportRenderRequest, request: Request
 ) -> RenderedReportRead:
     """Render and persist either a saved report or filesystem report output."""
-
-    await _ensure_schema(request)
     rendered_report_id = payload.rendered_report_id or _new_id("rendered_report")
     created_at = datetime.now(UTC)
 
@@ -2197,7 +2168,7 @@ async def render_standalone_report(
     if payload.report_id is not None:
         # Saved-report rendering executes the report model and stores the final
         # offline HTML so it can be viewed/exported later.
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             report = await session.get(ReportRecord, payload.report_id)
             if report is None:
                 raise HTTPException(status_code=404, detail="Report not found")
@@ -2233,7 +2204,7 @@ async def render_standalone_report(
     )
 
     if await _may_persist_results(request, project_id):
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             existing = await session.get(RenderedReportRecord, rendered_report_id)
             if existing is not None:
                 await session.delete(existing)
@@ -2254,9 +2225,7 @@ async def render_standalone_report(
 @router.get("/reports/{report_ref}", response_model=SavedReportRead)
 async def get_saved_report(report_ref: str, request: Request) -> SavedReportRead:
     """Return a saved report by ID or stable URL slug."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _get_report_by_ref(session, report_ref)
 
     if row is None:
@@ -2264,7 +2233,9 @@ async def get_saved_report(report_ref: str, request: Request) -> SavedReportRead
 
     if row.project_id is not None:
         project = await _require_project(request, row.project_id)
-        await require_project_permission(request, project, "report.read")
+        await require_project_permission(
+            request, _session(request), project, "report.read"
+        )
 
     return _saved_report_read(row)
 
@@ -2274,12 +2245,10 @@ async def patch_report(
     report_ref: str, payload: SavedReportPatch, request: Request
 ) -> SavedReportRead:
     """Patch a saved report and record a revision when config changes."""
-
-    await _ensure_schema(request)
     values = payload.model_dump(exclude_unset=True)
 
     if values:
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             report = await _get_report_by_ref(session, report_ref)
 
             if report is None:
@@ -2287,7 +2256,9 @@ async def patch_report(
 
             if report.project_id is not None:
                 project = await _require_project(request, report.project_id)
-                await require_project_permission(request, project, "report.edit")
+                await require_project_permission(
+                    request, _session(request), project, "report.edit"
+                )
 
             report_id = report.report_id
             updated_at = datetime.now(UTC)
@@ -2315,9 +2286,7 @@ async def patch_report(
 @router.delete("/reports/{report_ref}", status_code=204)
 async def delete_report(report_ref: str, request: Request) -> Response:
     """Delete a saved report, its revisions, cached results, and default pointer."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         report = await _get_report_by_ref(session, report_ref)
 
         if report is None:
@@ -2325,7 +2294,9 @@ async def delete_report(report_ref: str, request: Request) -> Response:
 
         if report.project_id is not None:
             project = await _require_project(request, report.project_id)
-            await require_project_permission(request, project, "report.delete")
+            await require_project_permission(
+                request, _session(request), project, "report.delete"
+            )
 
         report_id = report.report_id
         default_project_rows = (
@@ -2379,9 +2350,7 @@ async def execute_saved_report(
     request: Request,
 ) -> ReportResultRead:
     """Execute a saved report and return its structured result payload."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         report = await _get_report_by_ref(session, report_ref)
         if report is None:
             raise HTTPException(status_code=404, detail="Report not found")
@@ -2410,9 +2379,7 @@ async def get_rendered_report(
     rendered_report_id: str, request: Request
 ) -> RenderedReportRead:
     """Return a persisted rendered report."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await session.get(RenderedReportRecord, rendered_report_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Rendered report not found")
@@ -2471,7 +2438,7 @@ async def create_project_sample_group(
         raise HTTPException(status_code=400, detail="Sample group name is required")
     kind = payload.kind.strip() or "cohort"
     now = datetime.now(UTC)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = SampleSetRecord(
             sample_set_id=_new_id("sample-set"),
             project_id=project.id,
@@ -2508,7 +2475,7 @@ async def get_project_sample_group(
     """Return one project-scoped sample group with its member count."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         return await _sample_set_read(session, row, project_id=project.project_id)
 
@@ -2526,7 +2493,7 @@ async def patch_project_sample_group(
     """Patch a project-scoped sample group."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         if payload.name is not None:
             name = payload.name.strip()
@@ -2561,7 +2528,7 @@ async def delete_project_sample_group(
     """Delete a project-scoped sample group and its members."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         if row.id is not None:
             sample_set_member_id = cast(Any, SampleSetMemberRecord.sample_set_id)
@@ -2588,7 +2555,7 @@ async def list_project_sample_group_members(
     """List sample/run link members for one sample group."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         return await _sample_group_members_page(
             session,
@@ -2613,7 +2580,7 @@ async def add_project_sample_group_members(
     """Add samples to a sample group by resolving their latest sample/run link."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         await _add_sample_group_members_by_sample_id(
             session,
@@ -2639,7 +2606,7 @@ async def remove_project_sample_group_members(
     """Remove sample/run link members from a sample group."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _require_project_sample_group(session, project, sample_set_id)
         await _remove_sample_group_members_by_run_sample_id(
             session,
@@ -2659,13 +2626,11 @@ async def list_sample_sets(
     kind: str | None = Query(default=None),
 ) -> list[SampleSetRead]:
     """List canonical sample sets used as cohort/reference contexts."""
-
-    await _ensure_schema(request)
     project_pk: int | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)
         project_pk = project.id
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         statement = select(SampleSetRecord)
         if project_pk is not None:
             statement = statement.where(SampleSetRecord.project_id == project_pk)
@@ -2703,7 +2668,7 @@ async def list_qc_policies(project_id: str, request: Request) -> list[QCPolicyRe
     """List project-owned QC policy definitions."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         rows = (
             await session.exec(
                 select(QCPolicyRecord)
@@ -2732,7 +2697,7 @@ async def create_qc_policy(
         thresholds=json.loads(json.dumps(payload.thresholds)),
         updated_at=datetime.now(UTC),
     )
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         session.add(row)
         await session.commit()
         await session.refresh(row)
@@ -2749,7 +2714,7 @@ async def patch_qc_policy(
     """Patch a project-owned QC policy definition."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = (
             await session.exec(
                 select(QCPolicyRecord).where(
@@ -2937,12 +2902,6 @@ async def patch_database_row(
     return _jsonable_row(row)
 
 
-async def _ensure_schema(request: Request) -> None:
-    """Create SQL catalog tables before route code touches the database."""
-
-    await request.app.state.store.ensure_schema()
-
-
 async def _may_persist_results(request: Request, project_id: str | None) -> bool:
     """
     Return whether execution may write cache or rendered-report rows.
@@ -2956,30 +2915,33 @@ async def _may_persist_results(request: Request, project_id: str | None) -> bool
     if project_id is None:
         return False
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         permissions = await project_permissions(
             session, principal, project, request.app.state.settings
         )
     return "result.persist" in permissions
 
 
-def _engine(request: Request):
-    """Return the async SQLAlchemy engine owned by the app store."""
-
-    return request.app.state.store._get_engine()
-
-
 def _session(request: Request) -> AsyncSession:
-    """Create an AsyncSession bound to the app store's engine."""
+    """Return the request-scoped SQL session created by FastAPI."""
 
-    return AsyncSession(_engine(request))
+    return cast(AsyncSession, request.state.db_session)
+
+
+@asynccontextmanager
+async def _session_context(request: Request) -> AsyncIterator[AsyncSession]:
+    """Yield the request session without closing it before the response completes."""
+
+    yield _session(request)
 
 
 async def _ensure_default_project(request: Request) -> ProjectRead:
     """Create and return the default project used by first-run dashboards."""
 
-    project = await request.app.state.store.ensure_default_project()
-    async with _session(request) as session:
+    project = await request.app.state.store.ensure_project_with_session(
+        _session(request), DEFAULT_PROJECT_ID
+    )
+    async with _session_context(request) as session:
         row = (
             await session.exec(
                 select(ProjectRecord).where(
@@ -2995,9 +2957,7 @@ async def _ensure_default_project(request: Request) -> ProjectRead:
 
 async def _require_project(request: Request, project_id: str) -> ProjectRecord:
     """Return a project row or raise a 404 HTTP error."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, project_id
         )
@@ -3008,7 +2968,7 @@ async def _require_project(request: Request, project_id: str) -> ProjectRecord:
 
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    await require_project_permission(request, row, "project.read")
+    await require_project_permission(request, _session(request), row, "project.read")
 
     return row
 
@@ -3038,9 +2998,7 @@ async def _authorized_project_labels(
 
 async def _get_project_read(request: Request, project_id: str) -> ProjectRead:
     """Return an enriched project response by public project ID."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, project_id
         )
@@ -3061,7 +3019,7 @@ async def _list_project_sample_groups(
     """List project sample groups with member counts."""
 
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         filters: list[Any] = [SampleSetRecord.project_id == project.id]
         if kind:
             filters.append(SampleSetRecord.kind == kind)
@@ -3554,7 +3512,7 @@ async def _get_project_run(request: Request, project_id: str, run_id: str) -> Ru
     """Return a public run model after checking project ownership."""
 
     await _require_project(request, project_id)
-    run = await request.app.state.store.get_run(run_id)
+    run = await request.app.state.store.get_run(run_id, session=_session(request))
     if run is None or run.project_id != project_id:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
@@ -3562,17 +3520,17 @@ async def _get_project_run(request: Request, project_id: str, run_id: str) -> Ru
 
 async def _get_run_record(request: Request, run_id: str) -> RunRecord:
     """Return the SQL catalog row for a run."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
     if row.project_id is not None:
-        async with _session(request) as session:
+        async with _session_context(request) as session:
             project = await session.get(ProjectRecord, row.project_id)
         if project is not None:
-            await require_project_permission(request, project, "data.read")
+            await require_project_permission(
+                request, _session(request), project, "data.read"
+            )
     return row
 
 
@@ -3663,8 +3621,6 @@ async def _list_samples(
     search: str = "",
 ) -> SamplePageRead:
     """List samples with latest-run and run-count summary columns."""
-
-    await _ensure_schema(request)
     project = await _require_project(request, project_id)
     project_pk = project.id
     # These subqueries avoid returning every run_sample link just to show summary
@@ -3691,7 +3647,7 @@ async def _list_samples(
         .group_by(cast(Any, RunSampleRecord.sample_id))
         .subquery()
     )
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         sample_filters: list[Any] = [SampleRecord.project_id == project_pk]
         term = search.strip().lower()
         if term:
@@ -3763,10 +3719,8 @@ async def _list_project_run_sample_links(
     search: str = "",
 ) -> RunSamplePageRead:
     """List project-scoped run/sample links with picker-friendly labels."""
-
-    await _ensure_schema(request)
     project = await _require_project(request, project_id)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         filters: list[Any] = [RunRecord.project_id == project.id]
         term = search.strip().lower()
         if term:
@@ -3947,13 +3901,11 @@ async def _list_runs(
     search: str = "",
 ) -> RunPageRead:
     """List runs with optional project scoping and pagination."""
-
-    await _ensure_schema(request)
     project_pk: int | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)
         project_pk = project.id
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         count_statement = select(func.count()).select_from(RunRecord)
         rows_statement = select(RunRecord).order_by(
             cast(Any, RunRecord.created_at).desc(), RunRecord.run_id
@@ -4181,8 +4133,8 @@ def _analytics_store_for_project(
 
     settings = request.app.state.settings
     if settings.analytics_path:
-        return DuckDBAnalyticsStore(settings.analytics_path)
-    return DuckDBAnalyticsStore(
+        return request.app.state.analytics_stores.get(settings.analytics_path)
+    return request.app.state.analytics_stores.get(
         analytics_path_for_project(
             settings.analytics_root, project_id or DEFAULT_PROJECT_ID
         )
@@ -4263,9 +4215,7 @@ async def _report_insights(
 
 async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]:
     """Return all rows from a registered SQLModel table."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         return list((await session.exec(select(model))).all())
 
 
@@ -4317,8 +4267,7 @@ async def _catalog_table_page(
     if sort_direction == "desc":
         order_column = order_column.desc()
     row_statement = row_statement.order_by(order_column).offset(offset).limit(limit)
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         total = int((await session.exec(count_statement)).one())
         rows = list((await session.exec(row_statement)).all())
     return DatabaseTablePageRead(
@@ -4338,9 +4287,7 @@ async def _control_table_counts(
     request: Request, project_id: str | None = None
 ) -> dict[str, int]:
     """Count rows in each registered catalog table."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         counts: dict[str, int] = {}
         project_pk = await _project_pk(request, project_id, session=session)
         project_run_ids = await _project_run_ids(request, project_id, session=session)
@@ -4380,7 +4327,6 @@ async def _project_run_ids(
         return None
     own_session = False
     if session is None:
-        await _ensure_schema(request)
         session = _session(request)
         own_session = True
     try:
@@ -4410,7 +4356,6 @@ async def _project_pk(
         return None
     own_session = False
     if session is None:
-        await _ensure_schema(request)
         session = _session(request)
         own_session = True
     try:
@@ -4431,8 +4376,7 @@ async def _project_public_id_for_pk(
 
     if project_pk is None:
         return None
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         project = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.id, project_pk
         )
@@ -4443,9 +4387,7 @@ async def _insert_values(
     request: Request, model: type[SQLModel], values: dict[str, Any]
 ) -> None:
     """Insert one SQLModel row after schema initialization."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         session.add(model.model_validate(values))
         await session.commit()
 
@@ -4458,9 +4400,7 @@ async def _patch_values(
     values: dict[str, Any],
 ) -> None:
     """Patch one SQLModel row addressed by a registered primary key field."""
-
-    await _ensure_schema(request)
-    async with _session(request) as session:
+    async with _session_context(request) as session:
         row = await _get_row(request, model, primary_key, row_id, session=session)
         for key, value in values.items():
             setattr(row, key, value)
@@ -4477,8 +4417,6 @@ async def _get_row(
     session: AsyncSession | None = None,
 ) -> SQLModel:
     """Return a SQLModel row by public row ID, opening a session if needed."""
-
-    await _ensure_schema(request)
     own_session = False
     if session is None:
         session = _session(request)

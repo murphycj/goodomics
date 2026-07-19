@@ -36,7 +36,6 @@ from goodomics.storage.sqlalchemy import (
     SubjectRecord,
     get_record_by_field,
 )
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 DEFAULT_GOODOMICS_ROOT = Path(".goodomics")
 DEFAULT_ANALYTICS_PATH = analytics_path_for_project(
@@ -215,7 +214,7 @@ async def _write_catalog_database(runs: int, samples: int) -> None:
     await store.ensure_schema()
     await store.ensure_default_project()
     now = datetime.now(UTC)
-    async with AsyncSession(store._get_engine()) as session:
+    async with store.session() as session:
         project = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, DEFAULT_PROJECT_ID
         )

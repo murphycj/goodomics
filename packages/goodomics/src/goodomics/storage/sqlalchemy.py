@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, TypeVar, cast
 
 from sqlalchemy import JSON, UniqueConstraint
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -405,26 +406,67 @@ class QCDecisionRecord(SQLModel, table=True):
 
 
 class SQLModelGoodomicsStore:
-    def __init__(self, database_url: str, *, engine: AsyncEngine | None = None) -> None:
-        self.database_url = database_url
-        self.engine = engine
+    """Application-owned SQL catalog engine and session factory."""
 
-    def _get_engine(self) -> AsyncEngine:
-        # Engine creation is centralized so every caller gets the same SQLite
-        # parent-directory handling and future connection options.
-        if self.engine is None:
-            self.engine = create_async_database_engine(self.database_url)
-        return self.engine
+    def __init__(self, database_url: str, *, engine: AsyncEngine | None = None) -> None:
+        """Create one engine and typed session factory for this store."""
+
+        self.database_url = database_url
+        self._engine = engine or create_async_database_engine(database_url)
+        self._sessionmaker = async_sessionmaker(
+            self._engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+
+    def session(self) -> AsyncSession:
+        """Return a new session bound to the application-owned engine."""
+
+        return self._sessionmaker()
+
+    @asynccontextmanager
+    async def _session_scope(
+        self, session: AsyncSession | None = None
+    ) -> AsyncIterator[AsyncSession]:
+        """Reuse a caller session or own a standalone session boundary."""
+
+        if session is not None:
+            yield session
+            return
+        async with self.session() as owned_session:
+            yield owned_session
+
+    async def dispose(self) -> None:
+        """Dispose the application-owned engine and its pooled connections."""
+
+        await self._engine.dispose()
 
     async def ensure_schema(self) -> None:
-        async with self._get_engine().begin() as connection:
+        """Create any missing SQL catalog tables."""
+
+        async with self._engine.begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
 
     async def ensure_default_project(self) -> Project:
+        """Return the lazily created default project."""
+
         return await self.ensure_project(DEFAULT_PROJECT_SLUG)
 
     async def ensure_project(self, reference: str | None = None) -> Project:
-        await self.ensure_schema()
+        """Resolve or lazily create a project in a standalone transaction."""
+
+        async with self.session() as session:
+            project = await self.ensure_project_with_session(session, reference)
+            await session.commit()
+            return project
+
+    async def ensure_project_with_session(
+        self,
+        session: AsyncSession,
+        reference: str | None = None,
+    ) -> Project:
+        """Resolve or lazily create a project using the caller's session."""
+
         raw_reference = (reference or DEFAULT_PROJECT_SLUG).strip()
         # Project callers may pass a project id, slug, display-ish name, or no
         # value. Resolve existing ids/slugs first, then create by normalized slug.
@@ -433,34 +475,32 @@ class SQLModelGoodomicsStore:
             if raw_reference in {"", DEFAULT_PROJECT_ID, DEFAULT_PROJECT_SLUG}
             else validate_project_slug(raw_reference)
         )
-        async with AsyncSession(self._get_engine()) as session:
-            row = await _resolve_project_row(session, raw_reference)
-            if row is None and slug != raw_reference:
-                row = await _resolve_project_row(session, slug)
-            if row is None:
-                project_id = (
-                    DEFAULT_PROJECT_ID
+        row = await _resolve_project_row(session, raw_reference)
+        if row is None and slug != raw_reference:
+            row = await _resolve_project_row(session, slug)
+        if row is None:
+            project_id = (
+                DEFAULT_PROJECT_ID if slug == DEFAULT_PROJECT_SLUG else new_project_id()
+            )
+            row = ProjectRecord(
+                project_id=project_id,
+                slug=slug,
+                name=(
+                    DEFAULT_PROJECT_NAME
                     if slug == DEFAULT_PROJECT_SLUG
-                    else new_project_id()
-                )
-                row = ProjectRecord(
-                    project_id=project_id,
-                    slug=slug,
-                    name=(
-                        DEFAULT_PROJECT_NAME
-                        if slug == DEFAULT_PROJECT_SLUG
-                        else display_name_from_slug(slug)
-                    ),
-                    created_at=datetime.now(UTC),
-                )
-                session.add(row)
-                await session.commit()
-                await session.refresh(row)
+                    else display_name_from_slug(slug)
+                ),
+                created_at=datetime.now(UTC),
+            )
+            session.add(row)
+            await session.flush()
+            await session.refresh(row)
         return _project_from_row(row)
 
     async def get_project(self, project_id: str) -> Project | None:
-        await self.ensure_schema()
-        async with AsyncSession(self._get_engine()) as session:
+        """Return a project by public ID using a short-lived session."""
+
+        async with self.session() as session:
             row = await get_record_by_field(
                 session, ProjectRecord, ProjectRecord.project_id, project_id
             )
@@ -473,8 +513,7 @@ class SQLModelGoodomicsStore:
     ) -> str:
         """Set an existing project's visibility and return its stable ID."""
 
-        await self.ensure_schema()
-        async with AsyncSession(self._get_engine()) as session:
+        async with self.session() as session:
             row = await _resolve_project_row(session, reference.strip())
             if row is None:
                 raise ValueError(f"Project not found: {reference}")
@@ -520,6 +559,7 @@ class SQLModelGoodomicsStore:
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
         sample_set_members: list[SampleSetMember] | None = None,
+        session: AsyncSession | None = None,
     ) -> CatalogWriteResult:
         # Replace the SQL catalog rows for one run. Analytical metric
         # observations are intentionally not stored here; they live in DuckDB.
@@ -545,6 +585,7 @@ class SQLModelGoodomicsStore:
             file_links=normalized_links,
             sample_sets=sample_sets,
             sample_set_members=sample_set_members,
+            session=session,
         )
 
     async def replace_runs_catalog(
@@ -567,6 +608,7 @@ class SQLModelGoodomicsStore:
         file_links: list[FileLink] | None = None,
         sample_sets: list[SampleSet] | None = None,
         sample_set_members: list[SampleSetMember] | None = None,
+        session: AsyncSession | None = None,
     ) -> CatalogWriteResult:
         # Bulk variant used by imports that produce multiple logical runs from
         # one parsed dataset, such as sample-scoped cBioPortal ingests.
@@ -585,8 +627,12 @@ class SQLModelGoodomicsStore:
                 )
                 for method_id in sorted({run.method_id for run in runs})
             ]
-        await self.ensure_schema()
-        project = await self.ensure_project(runs[0].project_id or runs[0].project)
+        project_reference = runs[0].project_id or runs[0].project
+        project = (
+            await self.ensure_project_with_session(session, project_reference)
+            if session is not None
+            else await self.ensure_project(project_reference)
+        )
         resolved_runs = [
             run.model_copy(
                 update={
@@ -598,7 +644,7 @@ class SQLModelGoodomicsStore:
         ]
         run_ids = {run.run_id for run in resolved_runs}
 
-        async with AsyncSession(self._get_engine()) as session:
+        async with self._session_scope(session) as session:
             project_row = await _require_project_record(session, project.project_id)
             project_pk = _record_id(project_row)
             if data_import is not None:
@@ -845,9 +891,12 @@ class SQLModelGoodomicsStore:
             await session.commit()
         return result
 
-    async def get_run(self, run_id: str) -> Run | None:
-        await self.ensure_schema()
-        async with AsyncSession(self._get_engine()) as session:
+    async def get_run(
+        self, run_id: str, *, session: AsyncSession | None = None
+    ) -> Run | None:
+        """Return one run using a caller session or short-lived boundary."""
+
+        async with self._session_scope(session) as session:
             run_row = await get_record_by_field(
                 session, RunRecord, RunRecord.run_id, run_id
             )

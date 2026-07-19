@@ -211,10 +211,12 @@ def _configured_project_analytics_path(
         """Ensure the project and derive its analytics path asynchronously."""
 
         store = SQLModelGoodomicsStore(database_url)
-        project_record = await store.ensure_project(project)
-        path = analytics_path_for_project(analytics_root, project_record.project_id)
-        await store._get_engine().dispose()
-        return path
+        try:
+            await store.ensure_schema()
+            project_record = await store.ensure_project(project)
+            return analytics_path_for_project(analytics_root, project_record.project_id)
+        finally:
+            await store.dispose()
 
     return asyncio.run(resolve())
 
@@ -278,20 +280,18 @@ def report(
     console.print(f"Writing report to [bold]{out}[/bold]")
 
 
-async def _write_saved_report(
+async def _write_saved_report_operation(
     *,
+    store: SQLModelGoodomicsStore,
     report_name: str,
     out: Path,
     project: str | None,
-    database_url: str | None,
     analytics_path: Path | None,
 ) -> None:
     """Execute a saved report with its ordered insights and write rendered HTML."""
 
     settings = load_settings()
-    store = SQLModelGoodomicsStore(resolve_database_url(database_url))
-    await store.ensure_schema()
-    async with AsyncSession(store._get_engine()) as session:
+    async with store.session() as session:
         saved_report = await session.get(ReportRecord, report_name)
         if saved_report is None:
             rows = (
@@ -333,6 +333,30 @@ async def _write_saved_report(
             refresh=True,
         )
     out.write_text(render_report_result(result), encoding="utf-8")
+
+
+async def _write_saved_report(
+    *,
+    report_name: str,
+    out: Path,
+    project: str | None,
+    database_url: str | None,
+    analytics_path: Path | None,
+) -> None:
+    """Render a saved report within one initialized SQL-store lifecycle."""
+
+    store = SQLModelGoodomicsStore(resolve_database_url(database_url))
+    try:
+        await store.ensure_schema()
+        await _write_saved_report_operation(
+            store=store,
+            report_name=report_name,
+            out=out,
+            project=project,
+            analytics_path=analytics_path,
+        )
+    finally:
+        await store.dispose()
 
 
 @app.command()
@@ -387,10 +411,18 @@ def init(
             "distribution or `goodomics-core[sqlite]` for local SQLite support."
         ) from exc
 
-    try:
+    async def initialize() -> None:
+        """Create SQL tables and default application data in one lifecycle."""
+
         store = SQLModelGoodomicsStore(resolved_url)
-        asyncio.run(store.ensure_schema())
-        asyncio.run(store.ensure_default_project())
+        try:
+            await store.ensure_schema()
+            await store.ensure_default_project()
+        finally:
+            await store.dispose()
+
+    try:
+        asyncio.run(initialize())
     except ModuleNotFoundError as exc:
         raise typer.BadParameter(
             f"Missing database driver `{exc.name}`. Install `goodomics` for the full "
@@ -460,13 +492,13 @@ def projects_set_visibility(
         """Authorize the operation and persist project visibility."""
 
         try:
+            await store.ensure_schema()
             if settings.auth.enabled:
-                await store.ensure_schema()
-                async with AsyncSession(store._get_engine()) as session:
+                async with store.session() as session:
                     await _require_cli_admin(session, settings, admin_email)
             return await store.set_project_visibility(project, visibility.value)
         finally:
-            await store._get_engine().dispose()
+            await store.dispose()
 
     try:
         project_id = asyncio.run(update_visibility())
@@ -570,11 +602,11 @@ def _users_create(
     settings = _load_user_management_settings(config)
     store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
-    async def create() -> None:
+    async def create_user_operation() -> None:
         """Persist the user and update installation setup state asynchronously."""
 
         await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             try:
                 setup_required = await installation_setup_required(session)
                 if not is_admin or not setup_required:
@@ -595,6 +627,14 @@ def _users_create(
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         console.print(f"Created user [bold]{created_email}[/bold]")
+
+    async def create() -> None:
+        """Run user creation and always dispose its catalog engine."""
+
+        try:
+            await create_user_operation()
+        finally:
+            await store.dispose()
 
     asyncio.run(create())
 
@@ -682,11 +722,11 @@ def users_reset_password(
     settings = _load_user_management_settings(config)
     store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
-    async def reset() -> None:
+    async def reset_operation() -> None:
         """Persist a temporary password and invalidate existing sessions."""
 
         await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             await _require_cli_admin(session, settings, admin_email)
             user = await _find_cli_user(session, email)
             if user is None:
@@ -698,6 +738,14 @@ def users_reset_password(
             session.add(user)
             await session.commit()
         console.print(f"Reset password for [bold]{email}[/bold]")
+
+    async def reset() -> None:
+        """Run password reset and always dispose its catalog engine."""
+
+        try:
+            await reset_operation()
+        finally:
+            await store.dispose()
 
     asyncio.run(reset())
 
@@ -716,11 +764,11 @@ def users_disable(
     settings = _load_user_management_settings(config)
     store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
-    async def disable() -> None:
+    async def disable_operation() -> None:
         """Disable the selected user and invalidate existing sessions."""
 
         await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
+        async with store.session() as session:
             from goodomics.server.db.models import UserRecord
 
             await _require_cli_admin(session, settings, admin_email)
@@ -747,6 +795,14 @@ def users_disable(
             session.add(user)
             await session.commit()
         console.print(f"Disabled user [bold]{email}[/bold]")
+
+    async def disable() -> None:
+        """Run user disablement and always dispose its catalog engine."""
+
+        try:
+            await disable_operation()
+        finally:
+            await store.dispose()
 
     asyncio.run(disable())
 

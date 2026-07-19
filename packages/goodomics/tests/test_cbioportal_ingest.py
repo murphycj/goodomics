@@ -43,7 +43,6 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def _scalar(row: tuple[Any, ...] | None) -> Any:
@@ -54,7 +53,7 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -67,7 +66,7 @@ def _run_pk(database_url: str, run_id: str) -> int:
 def _sample_pk(database_url: str, sample_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)
@@ -82,7 +81,7 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
 def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         catalog_store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractRecord).where(
@@ -315,7 +314,7 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     async def load_catalog_counts() -> tuple[
         int, int, int, int, int, int, list[str], set[int | None]
     ]:
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             imports = (await session.exec(select(DataImportRecord))).all()
             runs = (
                 await session.exec(select(RunRecord).order_by(RunRecord.run_id))
@@ -484,7 +483,7 @@ def test_cbioportal_run_files_include_inherited_import_files(
     catalog_store = SQLModelGoodomicsStore(database_url)
 
     async def load_direct_run_links() -> list[FileLinkRecord]:
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             return list(
                 (
                     await session.exec(
@@ -544,7 +543,7 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
     catalog_store = SQLModelGoodomicsStore(database_url)
 
     async def load_runs() -> list[str]:
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with catalog_store.session() as session:
             return [
                 row.run_id
                 for row in (

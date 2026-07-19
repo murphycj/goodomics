@@ -19,6 +19,7 @@ from goodomics.server.mcp.server import create_mcp_server
 from goodomics.server.query_tools import QueryToolContext
 from goodomics.server.rate_limits import AsyncRateLimiter
 from goodomics.server.settings import Settings, load_settings
+from goodomics.storage.duckdb import AnalyticsStoreRegistry
 from goodomics.storage.files import FileStoreRegistry
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -66,18 +67,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     settings = settings or load_settings()
     store = create_store(settings.database_url)
-    query_context = QueryToolContext(settings=settings, store=store)
+    analytics_stores = AnalyticsStoreRegistry()
+    query_context = QueryToolContext(
+        settings=settings,
+        store=store,
+        analytics_stores=analytics_stores,
+    )
     ai_chat = GoodomicsChatService(query_context)
     mcp = create_mcp_server(query_context)
     mcp_app = mcp.streamable_http_app()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with mcp.session_manager.run():
-            yield
-        engine = store.engine
-        if engine is not None:
-            await engine.dispose()
+        try:
+            await store.ensure_schema()
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            await store.dispose()
 
     app = FastAPI(
         title="Goodomics API",
@@ -91,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.store = store
     app.state.query_context = query_context
+    app.state.analytics_stores = analytics_stores
     app.state.ai_chat = ai_chat
     app.state.file_stores = FileStoreRegistry.from_settings(settings)
     app.state.rate_limiter = AsyncRateLimiter(settings.rate_limits)
@@ -101,7 +109,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # the same request-scoped principal so shared query tools enforce
         # project visibility and current SQL role permissions.
         if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
-            await resolve_principal(request)
+            async with store.session() as session:
+                await resolve_principal(request, session)
         return await call_next(request)
 
     app.include_router(router)

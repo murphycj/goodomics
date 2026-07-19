@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlmodel.ext.asyncio.session import AsyncSession
-
 from goodomics.analysis import QUALITY_CONTROL, analysis_method, resolve_analysis_type
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
@@ -40,7 +38,6 @@ from goodomics.storage.analytics_resolution import (
 )
 from goodomics.storage.database import (
     DEFAULT_DATABASE_URL,
-    create_async_database_engine,
     ensure_sqlite_parent,
 )
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
@@ -197,6 +194,7 @@ def _save_multiqc_parse_result(
     file_root.mkdir(parents=True, exist_ok=True)
 
     catalog_store = SQLModelGoodomicsStore(database_url)
+    asyncio.run(catalog_store.ensure_schema())
     project_record = asyncio.run(catalog_store.ensure_project(project))
     resolved_analytics_path = analytics_path or analytics_path_for_project(
         Path(".goodomics"), project_record.project_id
@@ -323,36 +321,39 @@ def _save_multiqc_parse_result(
         )
         for file in files
     ]
-    catalog_result = asyncio.run(
-        catalog_store.replace_runs_catalog(
-            [report_run, *upstream_runs],
-            data_import=data_import,
-            analysis_types=[analysis_type],
-            analysis_methods=[report_method, upstream_method],
-            subjects=subjects,
-            samples=samples,
-            run_samples=run_samples,
-            run_relationships=run_relationships,
-            data_contracts=[
-                data_contract.model_copy(
-                    update={"project_id": project_record.project_id}
-                )
-                for data_contract in parsed.contracts
-            ],
-            data_contract_analysis_types=[
-                DataContractAnalysisType(
-                    data_contract_id=contract.data_contract_id,
-                    analysis_type_id=analysis_type.analysis_type_id,
-                )
-                for contract in parsed.contracts
-            ],
-            run_contracts=run_contracts,
-            run_contract_samples=run_contract_samples,
-            data_contract_fields=parsed.contract_fields,
-            files=files,
-            file_links=file_links,
+    try:
+        catalog_result = asyncio.run(
+            catalog_store.replace_runs_catalog(
+                [report_run, *upstream_runs],
+                data_import=data_import,
+                analysis_types=[analysis_type],
+                analysis_methods=[report_method, upstream_method],
+                subjects=subjects,
+                samples=samples,
+                run_samples=run_samples,
+                run_relationships=run_relationships,
+                data_contracts=[
+                    data_contract.model_copy(
+                        update={"project_id": project_record.project_id}
+                    )
+                    for data_contract in parsed.contracts
+                ],
+                data_contract_analysis_types=[
+                    DataContractAnalysisType(
+                        data_contract_id=contract.data_contract_id,
+                        analysis_type_id=analysis_type.analysis_type_id,
+                    )
+                    for contract in parsed.contracts
+                ],
+                run_contracts=run_contracts,
+                run_contract_samples=run_contract_samples,
+                data_contract_fields=parsed.contract_fields,
+                files=files,
+                file_links=file_links,
+            )
         )
-    )
+    finally:
+        asyncio.run(catalog_store.dispose())
     catalog_id_maps = catalog_id_maps_from_records(catalog_result)
     resolved_batch = resolve_analytics_batch_catalog_ids(
         parsed.to_batch(run_id=run_id),
@@ -561,11 +562,10 @@ async def _replace_files(
     *,
     project_id: str,
 ) -> None:
-    engine = create_async_database_engine(database_url)
+    store = SQLModelGoodomicsStore(database_url)
     try:
-        store = SQLModelGoodomicsStore(database_url, engine=engine)
         await store.ensure_schema()
-        async with AsyncSession(engine) as session:
+        async with store.session() as session:
             await store.replace_run_file_catalog(
                 session,
                 run_id,
@@ -574,4 +574,4 @@ async def _replace_files(
                 project_id,
             )
     finally:
-        await engine.dispose()
+        await store.dispose()

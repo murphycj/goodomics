@@ -67,6 +67,7 @@ def ingest_cbioportal_study(
 
     progress = _new_progress(console) if show_progress else None
     task_id: TaskID | None = None
+    catalog_store: SQLModelGoodomicsStore | None = None
     if progress is not None:
         progress.start()
         task_id = progress.add_task("Preparing cBioPortal import", total=None)
@@ -78,6 +79,7 @@ def ingest_cbioportal_study(
     try:
         update_progress("Resolving project")
         catalog_store = SQLModelGoodomicsStore(database_url)
+        asyncio.run(catalog_store.ensure_schema())
         project_record = asyncio.run(catalog_store.ensure_project(project))
         resolved_data_import_id = (
             f"{_study_identifier(root)}:{uuid4().hex[:12]}"
@@ -175,6 +177,8 @@ def ingest_cbioportal_study(
             analytics_path=resolved_analytics_path,
         )
     finally:
+        if catalog_store is not None:
+            asyncio.run(catalog_store.dispose())
         if progress is not None:
             progress.stop()
 
