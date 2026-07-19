@@ -24,7 +24,7 @@ from goodomics.server.settings import (
     load_settings,
 )
 from goodomics.storage.files import FilesystemFileStore, S3FileStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import initialized_store
 from sqlmodel import delete
 
 
@@ -47,9 +47,10 @@ def _secured_settings(tmp_path: Path) -> Settings:
 
 def _create_user(settings: Settings, *, admin: bool = False) -> None:
     async def create() -> None:
-        store = SQLModelGoodomicsStore(settings.database_url)
-        await store.ensure_schema()
-        async with store.session() as session:
+        async with (
+            initialized_store(settings.database_url) as store,
+            store.session() as session,
+        ):
             await create_user(
                 session,
                 email="ADMIN@Example.org" if admin else "user@example.org",
@@ -57,7 +58,6 @@ def _create_user(settings: Settings, *, admin: bool = False) -> None:
                 is_admin=admin,
             )
             await session.commit()
-        await store.dispose()
 
     asyncio.run(create())
 
@@ -126,11 +126,9 @@ def test_anonymous_session_exposes_public_permissions_and_disabled_signup(
     async def expose_default_project() -> None:
         """Create the default project and make it visible to anonymous callers."""
 
-        store = SQLModelGoodomicsStore(settings.database_url)
-        await store.ensure_schema()
-        await store.ensure_default_project()
-        await store.set_project_visibility(DEFAULT_PROJECT_ID, "public")
-        await store.dispose()
+        async with initialized_store(settings.database_url) as store:
+            await store.ensure_default_project()
+            await store.set_project_visibility(DEFAULT_PROJECT_ID, "public")
 
     asyncio.run(expose_default_project())
 
@@ -299,11 +297,12 @@ def test_first_run_setup_creates_and_signs_in_installation_admin(
         )
 
     async def delete_all_users() -> None:
-        store = SQLModelGoodomicsStore(settings.database_url)
-        async with store.session() as session:
+        async with (
+            initialized_store(settings.database_url) as store,
+            store.session() as session,
+        ):
             await session.exec(delete(UserRecord))
             await session.commit()
-        await store.dispose()
 
     asyncio.run(delete_all_users())
     with TestClient(create_app(settings)) as client:

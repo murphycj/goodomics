@@ -29,8 +29,8 @@ from goodomics.storage.sqlalchemy import (
     RunRelationshipRecord,
     RunSampleRecord,
     SampleRecord,
-    SQLModelGoodomicsStore,
     SubjectRecord,
+    initialized_store,
 )
 from sqlmodel import select
 
@@ -88,8 +88,10 @@ def _resolved_multiqc_batch(parsed: Any, *, run_id: str) -> Any:
 
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -329,8 +331,11 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     assert analytics_path.exists()
     assert (file_root / "run-1" / "multiqc").exists()
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(catalog_store.get_run("run-1"))
+    async def load_run():
+        async with initialized_store(database_url) as store:
+            return await store.get_run("run-1")
+
+    run = asyncio.run(load_run())
     assert run is not None
     assert run.project == "demo"
 
@@ -342,7 +347,10 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
         list[RunSampleRecord],
         list[RunRelationshipRecord],
     ]:
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             imports = (await session.exec(select(DataImportRecord))).all()
             files = (await session.exec(select(FileRecord))).all()
             runs = (await session.exec(select(RunRecord))).all()
@@ -410,8 +418,10 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
         list[RunSampleRecord],
         list[RunRelationshipRecord],
     ]:
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             return (
                 list((await session.exec(select(SubjectRecord))).all()),
                 list((await session.exec(select(SampleRecord))).all()),
@@ -494,8 +504,11 @@ def test_ingest_multiqc_project_slug_uses_generated_project_ref(
         file_root=file_root,
     )
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(catalog_store.get_run("run-project-slug"))
+    async def load_run():
+        async with initialized_store(database_url) as store:
+            return await store.get_run("run-project-slug")
+
+    run = asyncio.run(load_run())
     assert run is not None
     assert run.project_id is not None
     assert run.project_id.startswith("prj_")
@@ -534,13 +547,16 @@ def test_ingest_multiqc_runs_splits_parent_results_directory(tmp_path: Path) -> 
     assert run_ids == {"RAP1_IAA_30M_REP1", "WT_REP1"}
     assert all(result.outputs_found == 1 for result in results)
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-    wt_run = asyncio.run(catalog_store.get_run("WT_REP1"))
-    rap1_run = asyncio.run(catalog_store.get_run("RAP1_IAA_30M_REP1"))
-    wt_upstream = asyncio.run(catalog_store.get_run("WT_REP1:WT_REP1:analysis"))
-    rap1_upstream = asyncio.run(
-        catalog_store.get_run("RAP1_IAA_30M_REP1:RAP1_IAA_30M_REP1:analysis")
-    )
+    async def load_runs():
+        async with initialized_store(database_url) as store:
+            return (
+                await store.get_run("WT_REP1"),
+                await store.get_run("RAP1_IAA_30M_REP1"),
+                await store.get_run("WT_REP1:WT_REP1:analysis"),
+                await store.get_run("RAP1_IAA_30M_REP1:RAP1_IAA_30M_REP1:analysis"),
+            )
+
+    wt_run, rap1_run, wt_upstream, rap1_upstream = asyncio.run(load_runs())
     assert wt_run is not None
     assert rap1_run is not None
     assert wt_upstream is not None

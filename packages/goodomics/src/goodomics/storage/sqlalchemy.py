@@ -405,6 +405,22 @@ class QCDecisionRecord(SQLModel, table=True):
     policy_version: str | None = Field(default=None, max_length=255)
 
 
+@asynccontextmanager
+async def initialized_store(
+    database_url: str,
+    *,
+    engine: AsyncEngine | None = None,
+) -> AsyncIterator[SQLModelGoodomicsStore]:
+    """Yield an initialized store and always dispose its engine afterward."""
+
+    store = SQLModelGoodomicsStore(database_url, engine=engine)
+    try:
+        await store.ensure_schema()
+        yield store
+    finally:
+        await store.dispose()
+
+
 class SQLModelGoodomicsStore:
     """Application-owned SQL catalog engine and session factory."""
 

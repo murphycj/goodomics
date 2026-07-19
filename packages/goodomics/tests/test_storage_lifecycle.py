@@ -14,7 +14,11 @@ from goodomics.server.auth import authorize_api_request
 from goodomics.server.db.session import SessionDep
 from goodomics.server.settings import DatabaseSettings, Settings
 from goodomics.storage.duckdb import AnalyticsStoreRegistry
-from goodomics.storage.sqlalchemy import ProjectRecord, SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import (
+    ProjectRecord,
+    SQLModelGoodomicsStore,
+    initialized_store,
+)
 from sqlmodel import select
 
 
@@ -92,6 +96,33 @@ def test_startup_failure_prevents_serving_and_still_disposes(
 
     with pytest.raises(RuntimeError, match="schema failed"), TestClient(app):
         pass
+    assert disposed
+
+
+def test_initialized_store_disposes_after_initialization_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Release the context-owned engine when schema initialization fails."""
+
+    disposed = False
+
+    async def fail_schema(self: SQLModelGoodomicsStore) -> None:
+        raise RuntimeError("schema failed")
+
+    async def dispose(self: SQLModelGoodomicsStore) -> None:
+        nonlocal disposed
+        disposed = True
+
+    monkeypatch.setattr(SQLModelGoodomicsStore, "ensure_schema", fail_schema)
+    monkeypatch.setattr(SQLModelGoodomicsStore, "dispose", dispose)
+
+    async def open_store() -> None:
+        async with initialized_store(f"sqlite+aiosqlite:///{tmp_path / 'context.db'}"):
+            pytest.fail("store should not be yielded after initialization fails")
+
+    with pytest.raises(RuntimeError, match="schema failed"):
+        asyncio.run(open_store())
+
     assert disposed
 
 

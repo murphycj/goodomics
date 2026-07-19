@@ -271,27 +271,32 @@ class GoodomicsRun:
         # call manually, and __exit__ will no-op afterward because of _flushed.
         if self._flushed:
             return
+        asyncio.run(self._flush_async())
+
+    async def _flush_async(self) -> None:
+        """Persist buffered SDK data within one initialized SQL lifecycle."""
+
+        from goodomics.storage.sqlalchemy import initialized_store
+
+        database_url = resolve_database_url(self.database_url)
+        ensure_sqlite_parent(database_url)
+        async with initialized_store(database_url) as store:
+            await self._flush_with_store(store)
+
+    async def _flush_with_store(self, store: Any) -> None:
+        """Write buffered catalog and analytics data using an initialized store."""
+
         # These imports are intentionally local so importing goodomics.sdk.run
         # does not eagerly import DuckDB/SQLModel storage machinery for users who
         # only construct a run object or inspect SDK helpers.
         from goodomics.storage.duckdb import DuckDBAnalyticsStore
         from goodomics.storage.sqlalchemy import (
-            SQLModelGoodomicsStore,
             catalog_id_maps_from_records,
         )
 
-        # SQL owns the catalog shape: project, run, samples, run-samples, and
-        # the data contract that says where queryable observations live.
-        # resolve_database_url() honors the explicit SDK argument, environment
-        # variables, and Goodomics defaults.
-        database_url = resolve_database_url(self.database_url)
-        # SQLite URLs may point at a file in a not-yet-created directory.
-        ensure_sqlite_parent(database_url)
-        store = SQLModelGoodomicsStore(database_url)
-        asyncio.run(store.ensure_schema())
         # ensure_project() returns the default project when self.project is None,
         # or creates/resolves the requested project otherwise.
-        project = asyncio.run(store.ensure_project(self.project))
+        project = await store.ensure_project(self.project)
         run_id = self.name
         # Derive sample catalog rows from logged sample-scoped metrics. Run-level
         # metrics have sample_id=None and therefore do not create run_samples.
@@ -349,51 +354,46 @@ class GoodomicsRun:
         )
         # Replace the catalog slice for this run so repeated SDK writes update
         # the run, samples/run_samples, contract, and field definitions together.
-        try:
-            catalog_result = asyncio.run(
-                store.replace_run_catalog(
-                    catalog_run,
-                    analysis_types=[analysis_type],
-                    analysis_methods=[method],
-                    samples=samples,
-                    run_samples=run_samples,
-                    data_contracts=data_contracts,
-                    data_contract_analysis_types=[
-                        DataContractAnalysisType(
-                            data_contract_id=data_contract_id,
-                            analysis_type_id=analysis_type.analysis_type_id,
-                        )
-                    ]
-                    if self.metrics
-                    else [],
-                    run_contracts=[
-                        RunContract(
-                            run_contract_id=f"{run_id}:{data_contract_id}",
-                            run_id=run_id,
-                            data_contract_id=data_contract_id,
-                            producer_method_id=method.method_id,
-                            producer_version=self.method_version,
-                            status="available",
-                        )
-                    ]
-                    if self.metrics
-                    else [],
-                    run_contract_samples=[
-                        RunContractSample(
-                            run_contract_id=f"{run_id}:{data_contract_id}",
-                            run_sample_id=run_sample.run_sample_id,
-                            availability="observed",
-                        )
-                        for run_sample in run_samples
-                    ],
-                    data_contract_fields=_metric_contract_fields(
-                        self.metrics,
-                        data_contract_id=data_contract_id,
-                    ),
+        catalog_result = await store.replace_run_catalog(
+            catalog_run,
+            analysis_types=[analysis_type],
+            analysis_methods=[method],
+            samples=samples,
+            run_samples=run_samples,
+            data_contracts=data_contracts,
+            data_contract_analysis_types=[
+                DataContractAnalysisType(
+                    data_contract_id=data_contract_id,
+                    analysis_type_id=analysis_type.analysis_type_id,
                 )
-            )
-        finally:
-            asyncio.run(store.dispose())
+            ]
+            if self.metrics
+            else [],
+            run_contracts=[
+                RunContract(
+                    run_contract_id=f"{run_id}:{data_contract_id}",
+                    run_id=run_id,
+                    data_contract_id=data_contract_id,
+                    producer_method_id=method.method_id,
+                    producer_version=self.method_version,
+                    status="available",
+                )
+            ]
+            if self.metrics
+            else [],
+            run_contract_samples=[
+                RunContractSample(
+                    run_contract_id=f"{run_id}:{data_contract_id}",
+                    run_sample_id=run_sample.run_sample_id,
+                    availability="observed",
+                )
+                for run_sample in run_samples
+            ],
+            data_contract_fields=_metric_contract_fields(
+                self.metrics,
+                data_contract_id=data_contract_id,
+            ),
+        )
         if self.metrics:
             # DuckDB owns the observation values themselves, keeping SDK metrics
             # on the same analytical path as parser and ingest metrics.

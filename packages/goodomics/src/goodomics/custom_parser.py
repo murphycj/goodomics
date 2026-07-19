@@ -590,9 +590,56 @@ class CustomParser:
         # describe how to read values into ParserOutput.
         resolved_database_url = resolve_database_url(database_url)
         ensure_sqlite_parent(resolved_database_url)
-        store = SQLModelGoodomicsStore(resolved_database_url)
-        asyncio.run(store.ensure_schema())
-        project_record = asyncio.run(store.ensure_project(project))
+        return asyncio.run(
+            self._ingest_async(
+                value,
+                project=project,
+                analysis_type_id=analysis_type_id,
+                run_id=run_id,
+                database_url=resolved_database_url,
+                analytics_path=analytics_path,
+            )
+        )
+
+    async def _ingest_async(
+        self,
+        value: Any,
+        *,
+        project: str | None,
+        analysis_type_id: str,
+        run_id: str | None,
+        database_url: str,
+        analytics_path: Path | None,
+    ) -> CustomParserResult:
+        """Persist custom-parser output within one initialized SQL lifecycle."""
+
+        from goodomics.storage.sqlalchemy import initialized_store
+
+        async with initialized_store(database_url) as store:
+            return await self._ingest_with_store(
+                store,
+                value,
+                project=project,
+                analysis_type_id=analysis_type_id,
+                run_id=run_id,
+                database_url=database_url,
+                analytics_path=analytics_path,
+            )
+
+    async def _ingest_with_store(
+        self,
+        store: SQLModelGoodomicsStore,
+        value: Any,
+        *,
+        project: str | None,
+        analysis_type_id: str,
+        run_id: str | None,
+        database_url: str,
+        analytics_path: Path | None,
+    ) -> CustomParserResult:
+        """Build and persist custom-parser records using an initialized store."""
+
+        project_record = await store.ensure_project(project)
         resolved_run_id = run_id or _default_run_id(value, self.key)
         data_import_id = resolved_run_id
         out = ParserOutput(
@@ -609,26 +656,21 @@ class CustomParser:
             source_path=str(value) if isinstance(value, str | Path) else None,
             project_slug=project_record.slug,
         )
-        try:
-            catalog_result = asyncio.run(
-                store.replace_run_catalog(
-                    normalized.run,
-                    data_import=normalized.data_import,
-                    analysis_types=normalized.analysis_types,
-                    analysis_methods=normalized.analysis_methods,
-                    samples=normalized.samples,
-                    run_samples=normalized.run_samples,
-                    data_contracts=normalized.data_contracts,
-                    data_contract_analysis_types=normalized.data_contract_analysis_types,
-                    run_contracts=normalized.run_contracts,
-                    run_contract_samples=normalized.run_contract_samples,
-                    data_contract_fields=normalized.data_contract_fields,
-                    files=normalized.files,
-                    file_links=normalized.file_links,
-                )
-            )
-        finally:
-            asyncio.run(store.dispose())
+        catalog_result = await store.replace_run_catalog(
+            normalized.run,
+            data_import=normalized.data_import,
+            analysis_types=normalized.analysis_types,
+            analysis_methods=normalized.analysis_methods,
+            samples=normalized.samples,
+            run_samples=normalized.run_samples,
+            data_contracts=normalized.data_contracts,
+            data_contract_analysis_types=normalized.data_contract_analysis_types,
+            run_contracts=normalized.run_contracts,
+            run_contract_samples=normalized.run_contract_samples,
+            data_contract_fields=normalized.data_contract_fields,
+            files=normalized.files,
+            file_links=normalized.file_links,
+        )
         catalog_id_maps = catalog_id_maps_from_records(catalog_result)
         resolved_batch = resolve_analytics_batch_catalog_ids(
             normalized.analytics_batch,
@@ -656,7 +698,7 @@ class CustomParser:
             feature_calls_ingested=len(normalized.analytics_batch.feature_call),
             payloads_ingested=len(normalized.analytics_batch.result_payloads),
             files_registered=len(normalized.files),
-            database_url=resolved_database_url,
+            database_url=database_url,
             analytics_path=resolved_analytics_path,
         )
 

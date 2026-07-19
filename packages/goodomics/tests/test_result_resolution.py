@@ -22,7 +22,7 @@ from goodomics.schemas.models import (
 from goodomics.server.result_resolution import resolve_contract_results
 from goodomics.storage.sqlalchemy import (
     DataContractRecord,
-    SQLModelGoodomicsStore,
+    initialized_store,
 )
 from sqlmodel import select
 
@@ -31,9 +31,12 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
     tmp_path: Path,
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'catalog.db'}"
-    store = SQLModelGoodomicsStore(database_url)
-    asyncio.run(store.ensure_schema())
-    project = asyncio.run(store.ensure_project("resolver"))
+
+    async def initialize_catalog():
+        async with initialized_store(database_url) as store:
+            return await store.ensure_project("resolver")
+
+    project = asyncio.run(initialize_catalog())
     now = datetime.now(UTC)
     runs = [
         _run("rna-old", project.project_id, "rna/workflow", "1", now),
@@ -106,33 +109,36 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
             availability="observed",
         ),
     ]
-    asyncio.run(
-        store.replace_runs_catalog(
-            runs,
-            analysis_types=[
-                resolve_analysis_type(RNA_SEQUENCING),
-                resolve_analysis_type(WHOLE_GENOME_SEQUENCING),
-            ],
-            analysis_methods=[
-                analysis_method("rna/workflow", method_kind="workflow"),
-                analysis_method("wgs/workflow", method_kind="workflow"),
-            ],
-            samples=samples,
-            run_samples=run_samples,
-            data_contracts=[contract],
-            data_contract_analysis_types=[
-                DataContractAnalysisType(
-                    data_contract_id=contract.data_contract_id,
-                    analysis_type_id=RNA_SEQUENCING,
-                )
-            ],
-            run_contracts=occurrences,
-            run_contract_samples=availability,
-        )
-    )
+
+    async def persist_catalog() -> None:
+        async with initialized_store(database_url) as store:
+            await store.replace_runs_catalog(
+                runs,
+                analysis_types=[
+                    resolve_analysis_type(RNA_SEQUENCING),
+                    resolve_analysis_type(WHOLE_GENOME_SEQUENCING),
+                ],
+                analysis_methods=[
+                    analysis_method("rna/workflow", method_kind="workflow"),
+                    analysis_method("wgs/workflow", method_kind="workflow"),
+                ],
+                samples=samples,
+                run_samples=run_samples,
+                data_contracts=[contract],
+                data_contract_analysis_types=[
+                    DataContractAnalysisType(
+                        data_contract_id=contract.data_contract_id,
+                        analysis_type_id=RNA_SEQUENCING,
+                    )
+                ],
+                run_contracts=occurrences,
+                run_contract_samples=availability,
+            )
+
+    asyncio.run(persist_catalog())
 
     async def resolve(scope: dict[str, object] | None = None):
-        async with store.session() as session:
+        async with initialized_store(database_url) as store, store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractRecord).where(

@@ -40,7 +40,7 @@ from goodomics.storage.sqlalchemy import (
     SampleRecord,
     SampleSetMemberRecord,
     SampleSetRecord,
-    SQLModelGoodomicsStore,
+    initialized_store,
 )
 from sqlmodel import select
 
@@ -52,8 +52,10 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -65,8 +67,10 @@ def _run_pk(database_url: str, run_id: str) -> int:
 
 def _sample_pk(database_url: str, sample_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)
@@ -80,8 +84,10 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
 
 def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(
                     select(DataContractRecord).where(
@@ -305,8 +311,11 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert result.files_registered > 0
     assert result.bulk_loads == 6
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-    run = asyncio.run(catalog_store.get_run("run-cbio:S1"))
+    async def load_run():
+        async with initialized_store(database_url) as store:
+            return await store.get_run("run-cbio:S1")
+
+    run = asyncio.run(load_run())
     assert run is not None
     assert run.run_kind == "imported_result"
     assert run.data_import_id == "run-cbio"
@@ -314,7 +323,10 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     async def load_catalog_counts() -> tuple[
         int, int, int, int, int, int, list[str], set[int | None]
     ]:
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             imports = (await session.exec(select(DataImportRecord))).all()
             runs = (
                 await session.exec(select(RunRecord).order_by(RunRecord.run_id))
@@ -480,10 +492,11 @@ def test_cbioportal_run_files_include_inherited_import_files(
         analytics_path=analytics_path,
     )
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-
     async def load_direct_run_links() -> list[FileLinkRecord]:
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             return list(
                 (
                     await session.exec(
@@ -540,10 +553,11 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
     assert result.runs_ingested == 3
     assert result.data_import_id.startswith("demo_cbio:")
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-
     async def load_runs() -> list[str]:
-        async with catalog_store.session() as session:
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             return [
                 row.run_id
                 for row in (
