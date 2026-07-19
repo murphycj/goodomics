@@ -32,6 +32,7 @@ from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
     catalog_id_maps_from_records,
+    initialized_store,
 )
 
 
@@ -65,6 +66,61 @@ def ingest_cbioportal_study(
 ) -> CbioPortalIngestResult:
     """Parse a cBioPortal study and persist catalog plus analytical records."""
 
+    return asyncio.run(
+        _ingest_cbioportal_study_async(
+            root,
+            data_import_id=data_import_id,
+            project=project,
+            analysis_type_id=analysis_type_id,
+            database_url=database_url,
+            analytics_path=analytics_path,
+            show_progress=show_progress,
+            console=console,
+        )
+    )
+
+
+async def _ingest_cbioportal_study_async(
+    root: Path,
+    *,
+    data_import_id: str | None,
+    project: str | None,
+    analysis_type_id: str,
+    database_url: str,
+    analytics_path: Path | None,
+    show_progress: bool,
+    console: Console | None,
+) -> CbioPortalIngestResult:
+    """Own the initialized catalog lifecycle for a cBioPortal ingest."""
+
+    async with initialized_store(database_url) as catalog_store:
+        return await _ingest_cbioportal_with_store(
+            catalog_store,
+            root,
+            data_import_id=data_import_id,
+            project=project,
+            analysis_type_id=analysis_type_id,
+            database_url=database_url,
+            analytics_path=analytics_path,
+            show_progress=show_progress,
+            console=console,
+        )
+
+
+async def _ingest_cbioportal_with_store(
+    catalog_store: SQLModelGoodomicsStore,
+    root: Path,
+    *,
+    data_import_id: str | None,
+    project: str | None,
+    analysis_type_id: str,
+    database_url: str,
+    analytics_path: Path | None,
+    show_progress: bool,
+    console: Console | None,
+) -> CbioPortalIngestResult:
+    """Persist cBioPortal catalog and analytics data with an initialized store."""
+
     progress = _new_progress(console) if show_progress else None
     task_id: TaskID | None = None
     if progress is not None:
@@ -77,8 +133,7 @@ def ingest_cbioportal_study(
 
     try:
         update_progress("Resolving project")
-        catalog_store = SQLModelGoodomicsStore(database_url)
-        project_record = asyncio.run(catalog_store.ensure_project(project))
+        project_record = await catalog_store.ensure_project(project)
         resolved_data_import_id = (
             f"{_study_identifier(root)}:{uuid4().hex[:12]}"
             if data_import_id is None
@@ -97,25 +152,23 @@ def ingest_cbioportal_study(
             progress.update(task_id, total=total_steps, completed=2)
 
         update_progress("Writing SQL catalog metadata", completed=2)
-        catalog_result = asyncio.run(
-            catalog_store.replace_runs_catalog(
-                parsed.all_runs,
-                data_import=parsed.data_import,
-                analysis_types=parsed.analysis_types,
-                analysis_methods=parsed.analysis_methods,
-                subjects=parsed.subjects,
-                samples=parsed.samples,
-                run_samples=parsed.run_samples,
-                data_contracts=parsed.data_contracts,
-                data_contract_analysis_types=parsed.data_contract_analysis_types,
-                run_contracts=parsed.run_contracts,
-                run_contract_samples=parsed.run_contract_samples,
-                data_contract_fields=parsed.data_contract_fields,
-                files=parsed.files,
-                file_links=parsed.file_links,
-                sample_sets=parsed.sample_sets,
-                sample_set_members=parsed.sample_set_members,
-            )
+        catalog_result = await catalog_store.replace_runs_catalog(
+            parsed.all_runs,
+            data_import=parsed.data_import,
+            analysis_types=parsed.analysis_types,
+            analysis_methods=parsed.analysis_methods,
+            subjects=parsed.subjects,
+            samples=parsed.samples,
+            run_samples=parsed.run_samples,
+            data_contracts=parsed.data_contracts,
+            data_contract_analysis_types=parsed.data_contract_analysis_types,
+            run_contracts=parsed.run_contracts,
+            run_contract_samples=parsed.run_contract_samples,
+            data_contract_fields=parsed.data_contract_fields,
+            files=parsed.files,
+            file_links=parsed.file_links,
+            sample_sets=parsed.sample_sets,
+            sample_set_members=parsed.sample_set_members,
         )
         update_progress("Writing DuckDB analytical batch", completed=3)
 

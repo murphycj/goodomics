@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from threading import Lock
 from types import UnionType
 from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
@@ -754,6 +755,27 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
 }
 
 
+class AnalyticsStoreRegistry:
+    """Application-owned registry of reusable project analytics stores."""
+
+    def __init__(self) -> None:
+        """Create an empty thread-safe analytics-store registry."""
+
+        self._stores: dict[Path, DuckDBAnalyticsStore] = {}
+        self._lock = Lock()
+
+    def get(self, path: Path | str) -> DuckDBAnalyticsStore:
+        """Return the single store instance for a normalized absolute path."""
+
+        normalized = Path(path).expanduser().resolve()
+        with self._lock:
+            store = self._stores.get(normalized)
+            if store is None:
+                store = DuckDBAnalyticsStore(normalized)
+                self._stores[normalized] = store
+            return store
+
+
 class DuckDBAnalyticsStore:
     """DuckDB-backed analytical store with replace-oriented ingest operations."""
 
@@ -761,7 +783,11 @@ class DuckDBAnalyticsStore:
     """Path to the project analytics DuckDB file."""
 
     def __init__(self, path: Path | str) -> None:
-        self.path = Path(path)
+        """Create a lazily initialized store for one normalized database path."""
+
+        self.path = Path(path).expanduser().resolve()
+        self._schema_ready = False
+        self._schema_lock = Lock()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -770,7 +796,18 @@ class DuckDBAnalyticsStore:
         return connection
 
     def ensure_schema(self) -> None:
-        """Create/refresh analytical tables, dimensions, and sorted views."""
+        """Initialize analytical tables and views once for this store instance."""
+
+        if self._schema_ready:
+            return
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            self._initialize_schema()
+            self._schema_ready = True
+
+    def _initialize_schema(self) -> None:
+        """Create analytical tables, dimensions, and views in DuckDB."""
 
         with self._connect() as connection:
             for serializer in SERIALIZERS:

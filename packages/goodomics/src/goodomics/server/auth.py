@@ -23,6 +23,7 @@ from goodomics.server.db.models import (
     ProjectRoleRecord,
     UserRecord,
 )
+from goodomics.server.db.session import SessionDep
 from goodomics.server.settings import PasswordSettings, Settings
 from goodomics.storage.sqlalchemy import ProjectRecord
 
@@ -351,7 +352,7 @@ async def authenticate_user(
     return user
 
 
-async def resolve_principal(request: Request) -> Principal:
+async def resolve_principal(request: Request, session: SessionDep) -> Principal:
     """Resolve local, anonymous, or bearer-authenticated request identity."""
 
     settings: Settings = request.app.state.settings
@@ -377,14 +378,11 @@ async def resolve_principal(request: Request) -> Principal:
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
     payload = decode_access_token(token, settings)
-    store = request.app.state.store
-    await store.ensure_schema()
-    async with AsyncSession(store._get_engine()) as session:
-        user = (
-            await session.exec(
-                select(UserRecord).where(UserRecord.user_id == str(payload["sub"]))
-            )
-        ).first()
+    user = (
+        await session.exec(
+            select(UserRecord).where(UserRecord.user_id == str(payload["sub"]))
+        )
+    ).first()
 
     if (
         user is None
@@ -410,10 +408,10 @@ async def resolve_principal(request: Request) -> Principal:
     return principal
 
 
-async def authorize_api_request(request: Request) -> Principal:
+async def authorize_api_request(request: Request, session: SessionDep) -> Principal:
     """Resolve identity and centrally gate project-scoped API operations."""
 
-    principal = await resolve_principal(request)
+    principal = await resolve_principal(request, session)
 
     if principal.kind == "local":
         return principal
@@ -450,20 +448,17 @@ async def authorize_api_request(request: Request) -> Principal:
         # their handlers. Direct legacy-ID endpoints resolve ownership there.
         return principal
 
-    # Ensure the database schema is up-to-date before querying the project.
-    await request.app.state.store.ensure_schema()
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
-        project = (
-            await session.exec(
-                select(ProjectRecord).where(ProjectRecord.project_id == project_id)
-            )
-        ).first()
+    project = (
+        await session.exec(
+            select(ProjectRecord).where(ProjectRecord.project_id == project_id)
+        )
+    ).first()
 
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
     permission = _request_permission(request.method, path)
-    await require_project_permission(request, project, permission)
+    await require_project_permission(request, session, project, permission)
 
     return principal
 
@@ -596,19 +591,21 @@ async def authorized_project_pks(
 
 
 async def require_project_permission(
-    request: Request, project: ProjectRecord, permission: str
+    request: Request,
+    session: AsyncSession,
+    project: ProjectRecord,
+    permission: str,
 ) -> None:
     """Raise 403 unless the effective principal has a project capability."""
 
     principal = getattr(request.state, "principal", None)
 
     if principal is None:
-        principal = await resolve_principal(request)
+        principal = await resolve_principal(request, session)
 
-    async with AsyncSession(request.app.state.store._get_engine()) as session:
-        permissions = await project_permissions(
-            session, principal, project, request.app.state.settings
-        )
+    permissions = await project_permissions(
+        session, principal, project, request.app.state.settings
+    )
 
     if permission not in permissions:
         if principal.kind == "anonymous" and project.visibility != "public":

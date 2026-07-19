@@ -26,7 +26,7 @@ from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.server.settings import Settings, ensure_config_file, load_settings
 from goodomics.storage.database import resolve_database_url
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore, initialized_store
 
 
 class LogLevel(StrEnum):
@@ -210,11 +210,9 @@ def _configured_project_analytics_path(
     async def resolve() -> Path:
         """Ensure the project and derive its analytics path asynchronously."""
 
-        store = SQLModelGoodomicsStore(database_url)
-        project_record = await store.ensure_project(project)
-        path = analytics_path_for_project(analytics_root, project_record.project_id)
-        await store._get_engine().dispose()
-        return path
+        async with initialized_store(database_url) as store:
+            project_record = await store.ensure_project(project)
+            return analytics_path_for_project(analytics_root, project_record.project_id)
 
     return asyncio.run(resolve())
 
@@ -278,20 +276,18 @@ def report(
     console.print(f"Writing report to [bold]{out}[/bold]")
 
 
-async def _write_saved_report(
+async def _write_saved_report_operation(
     *,
+    store: SQLModelGoodomicsStore,
     report_name: str,
     out: Path,
     project: str | None,
-    database_url: str | None,
     analytics_path: Path | None,
 ) -> None:
     """Execute a saved report with its ordered insights and write rendered HTML."""
 
     settings = load_settings()
-    store = SQLModelGoodomicsStore(resolve_database_url(database_url))
-    await store.ensure_schema()
-    async with AsyncSession(store._get_engine()) as session:
+    async with store.session() as session:
         saved_report = await session.get(ReportRecord, report_name)
         if saved_report is None:
             rows = (
@@ -333,6 +329,26 @@ async def _write_saved_report(
             refresh=True,
         )
     out.write_text(render_report_result(result), encoding="utf-8")
+
+
+async def _write_saved_report(
+    *,
+    report_name: str,
+    out: Path,
+    project: str | None,
+    database_url: str | None,
+    analytics_path: Path | None,
+) -> None:
+    """Render a saved report within one initialized SQL-store lifecycle."""
+
+    async with initialized_store(resolve_database_url(database_url)) as store:
+        await _write_saved_report_operation(
+            store=store,
+            report_name=report_name,
+            out=out,
+            project=project,
+            analytics_path=analytics_path,
+        )
 
 
 @app.command()
@@ -380,17 +396,21 @@ def init(
     settings = _load_setup_settings(config)
     resolved_url = database_url or settings.database_url
     try:
-        from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+        from goodomics.storage.sqlalchemy import initialized_store
     except ImportError as exc:
         raise typer.BadParameter(
             "Database support is not installed. Install `goodomics` for the full "
             "distribution or `goodomics-core[sqlite]` for local SQLite support."
         ) from exc
 
+    async def initialize() -> None:
+        """Create SQL tables and default application data in one lifecycle."""
+
+        async with initialized_store(resolved_url) as store:
+            await store.ensure_default_project()
+
     try:
-        store = SQLModelGoodomicsStore(resolved_url)
-        asyncio.run(store.ensure_schema())
-        asyncio.run(store.ensure_default_project())
+        asyncio.run(initialize())
     except ModuleNotFoundError as exc:
         raise typer.BadParameter(
             f"Missing database driver `{exc.name}`. Install `goodomics` for the full "
@@ -454,19 +474,15 @@ def projects_set_visibility(
     """Set an existing project to public or private visibility."""
 
     settings = _load_setup_settings(config)
-    store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
     async def update_visibility() -> str:
         """Authorize the operation and persist project visibility."""
 
-        try:
+        async with initialized_store(database_url or settings.database_url) as store:
             if settings.auth.enabled:
-                await store.ensure_schema()
-                async with AsyncSession(store._get_engine()) as session:
+                async with store.session() as session:
                     await _require_cli_admin(session, settings, admin_email)
             return await store.set_project_visibility(project, visibility.value)
-        finally:
-            await store._get_engine().dispose()
 
     try:
         project_id = asyncio.run(update_visibility())
@@ -568,33 +584,32 @@ def _users_create(
     )
 
     settings = _load_user_management_settings(config)
-    store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
     async def create() -> None:
-        """Persist the user and update installation setup state asynchronously."""
+        """Persist the user within an initialized catalog lifecycle."""
 
-        await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
-            try:
-                setup_required = await installation_setup_required(session)
-                if not is_admin or not setup_required:
-                    await _require_cli_admin(session, settings, admin_email)
-                user = await create_user(
-                    session,
-                    email=email,
-                    password=password,
-                    display_name=display_name,
-                    is_admin=is_admin,
-                    must_change_password=must_change_password,
-                    password_settings=settings.auth.password,
-                )
-                if is_admin and setup_required:
-                    await complete_installation_setup(session, user)
-                created_email = user.email
-                await session.commit()
-            except ValueError as exc:
-                raise typer.BadParameter(str(exc)) from exc
-        console.print(f"Created user [bold]{created_email}[/bold]")
+        async with initialized_store(database_url or settings.database_url) as store:
+            async with store.session() as session:
+                try:
+                    setup_required = await installation_setup_required(session)
+                    if not is_admin or not setup_required:
+                        await _require_cli_admin(session, settings, admin_email)
+                    user = await create_user(
+                        session,
+                        email=email,
+                        password=password,
+                        display_name=display_name,
+                        is_admin=is_admin,
+                        must_change_password=must_change_password,
+                        password_settings=settings.auth.password,
+                    )
+                    if is_admin and setup_required:
+                        await complete_installation_setup(session, user)
+                    created_email = user.email
+                    await session.commit()
+                except ValueError as exc:
+                    raise typer.BadParameter(str(exc)) from exc
+            console.print(f"Created user [bold]{created_email}[/bold]")
 
     asyncio.run(create())
 
@@ -680,24 +695,23 @@ def users_reset_password(
     from goodomics.server.auth import hash_password
 
     settings = _load_user_management_settings(config)
-    store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
     async def reset() -> None:
-        """Persist a temporary password and invalidate existing sessions."""
+        """Persist a temporary password in an initialized store lifecycle."""
 
-        await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
-            await _require_cli_admin(session, settings, admin_email)
-            user = await _find_cli_user(session, email)
-            if user is None:
-                raise typer.BadParameter("User not found")
-            user.password_hash = hash_password(password, settings.auth.password)
-            user.auth_version += 1
-            user.must_change_password = True
-            user.updated_at = datetime.now(UTC)
-            session.add(user)
-            await session.commit()
-        console.print(f"Reset password for [bold]{email}[/bold]")
+        async with initialized_store(database_url or settings.database_url) as store:
+            async with store.session() as session:
+                await _require_cli_admin(session, settings, admin_email)
+                user = await _find_cli_user(session, email)
+                if user is None:
+                    raise typer.BadParameter("User not found")
+                user.password_hash = hash_password(password, settings.auth.password)
+                user.auth_version += 1
+                user.must_change_password = True
+                user.updated_at = datetime.now(UTC)
+                session.add(user)
+                await session.commit()
+            console.print(f"Reset password for [bold]{email}[/bold]")
 
     asyncio.run(reset())
 
@@ -714,39 +728,39 @@ def users_disable(
     from datetime import UTC, datetime
 
     settings = _load_user_management_settings(config)
-    store = SQLModelGoodomicsStore(database_url or settings.database_url)
 
     async def disable() -> None:
-        """Disable the selected user and invalidate existing sessions."""
+        """Disable the user within an initialized catalog lifecycle."""
 
-        await store.ensure_schema()
-        async with AsyncSession(store._get_engine()) as session:
-            from goodomics.server.db.models import UserRecord
+        async with initialized_store(database_url or settings.database_url) as store:
+            async with store.session() as session:
+                from goodomics.server.db.models import UserRecord
 
-            await _require_cli_admin(session, settings, admin_email)
-            user = await _find_cli_user(session, email)
-            if user is None:
-                raise typer.BadParameter("User not found")
-            if user.is_admin and user.is_active:
-                another_active_admin = (
-                    await session.exec(
-                        select(UserRecord.id).where(
-                            UserRecord.id != user.id,
-                            UserRecord.is_admin,
-                            UserRecord.is_active,
+                await _require_cli_admin(session, settings, admin_email)
+                user = await _find_cli_user(session, email)
+                if user is None:
+                    raise typer.BadParameter("User not found")
+                if user.is_admin and user.is_active:
+                    another_active_admin = (
+                        await session.exec(
+                            select(UserRecord.id).where(
+                                UserRecord.id != user.id,
+                                UserRecord.is_admin,
+                                UserRecord.is_active,
+                            )
                         )
-                    )
-                ).first()
-                if another_active_admin is None:
-                    raise typer.BadParameter(
-                        "The installation must keep at least one active administrator"
-                    )
-            user.is_active = False
-            user.auth_version += 1
-            user.updated_at = datetime.now(UTC)
-            session.add(user)
-            await session.commit()
-        console.print(f"Disabled user [bold]{email}[/bold]")
+                    ).first()
+                    if another_active_admin is None:
+                        raise typer.BadParameter(
+                            "The installation must keep at least one active "
+                            "administrator"
+                        )
+                user.is_active = False
+                user.auth_version += 1
+                user.updated_at = datetime.now(UTC)
+                session.add(user)
+                await session.commit()
+            console.print(f"Disabled user [bold]{email}[/bold]")
 
     asyncio.run(disable())
 

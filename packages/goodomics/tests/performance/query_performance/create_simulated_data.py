@@ -35,8 +35,8 @@ from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
     SubjectRecord,
     get_record_by_field,
+    initialized_store,
 )
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 DEFAULT_GOODOMICS_ROOT = Path(".goodomics")
 DEFAULT_ANALYTICS_PATH = analytics_path_for_project(
@@ -211,11 +211,16 @@ def _load_analytics(connection: duckdb.DuckDBPyConnection) -> None:
 
 async def _write_catalog_database(runs: int, samples: int) -> None:
     print("writing contract-aware catalog...")
-    store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-    await store.ensure_schema()
-    await store.ensure_default_project()
+    async with initialized_store(DEFAULT_DATABASE_URL) as store:
+        await store.ensure_default_project()
+        await _write_catalog_records(store, runs, samples)
+
+
+async def _write_catalog_records(
+    store: SQLModelGoodomicsStore, runs: int, samples: int
+) -> None:
     now = datetime.now(UTC)
-    async with AsyncSession(store._get_engine()) as session:
+    async with store.session() as session:
         project = await get_record_by_field(
             session, ProjectRecord, ProjectRecord.project_id, DEFAULT_PROJECT_ID
         )

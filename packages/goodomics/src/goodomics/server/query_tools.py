@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import wraps
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from urllib.parse import quote
 
 from sqlalchemy import func, or_
@@ -19,7 +23,7 @@ from goodomics.server.auth import (
     current_principal,
 )
 from goodomics.server.settings import Settings
-from goodomics.storage.duckdb import DuckDBAnalyticsStore
+from goodomics.storage.duckdb import AnalyticsStoreRegistry, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     AnalysisMethodRecord,
     AnalysisTypeRecord,
@@ -43,6 +47,33 @@ from goodomics.storage.sqlalchemy import (
 # The public methods intentionally return compact dictionaries with dashboard
 # links and stable public IDs rather than raw SQLModel or DuckDB records.
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
+ToolResultT = TypeVar("ToolResultT")
+_tool_session: ContextVar[AsyncSession | None] = ContextVar(
+    "goodomics_query_tool_session", default=None
+)
+
+
+def _tool_invocation(
+    method: Callable[..., Awaitable[ToolResultT]],
+) -> Callable[..., Awaitable[ToolResultT]]:
+    """Run one public query-tool call within one short-lived SQL session."""
+
+    @wraps(method)
+    async def wrapped(
+        self: GoodomicsQueryTools, *args: Any, **kwargs: Any
+    ) -> ToolResultT:
+        """Reuse one SQL session across nested helpers for this invocation."""
+
+        if _tool_session.get() is not None:
+            return await method(self, *args, **kwargs)
+        async with self.context.store.session() as session:
+            token = _tool_session.set(session)
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                _tool_session.reset(token)
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -53,7 +84,12 @@ class QueryToolContext:
     """Server settings used to locate project analytics databases."""
 
     store: SQLModelGoodomicsStore
-    """SQL catalog store used for schema checks and catalog reads."""
+    """SQL catalog store used for short-lived query sessions."""
+
+    analytics_stores: AnalyticsStoreRegistry = field(
+        default_factory=AnalyticsStoreRegistry
+    )
+    """Shared registry of lazily initialized project analytics stores."""
 
 
 class GoodomicsQueryTools:
@@ -67,6 +103,7 @@ class GoodomicsQueryTools:
     def __init__(self, context: QueryToolContext) -> None:
         self.context = context
 
+    @_tool_invocation
     async def list_projects(
         self, query: str | None = None, limit: int = 20
     ) -> dict[str, Any]:
@@ -89,6 +126,7 @@ class GoodomicsQueryTools:
             "projects": [await self._project_summary(project) for project in projects]
         }
 
+    @_tool_invocation
     async def list_data_contracts(
         self,
         project: str | None = None,
@@ -104,7 +142,6 @@ class GoodomicsQueryTools:
         if project is not None and project_id is None:
             return project_resolution or {"contracts": []}
 
-        await self.context.store.ensure_schema()
         term = _normalize(query or "")
         async with self._session() as session:
             project_pk: int | None = None
@@ -182,6 +219,7 @@ class GoodomicsQueryTools:
                 ]
             }
 
+    @_tool_invocation
     async def resolve_project(self, reference: str, limit: int = 5) -> dict[str, Any]:
         """Resolve a project reference into a match, ambiguity payload, or not-found."""
 
@@ -283,6 +321,7 @@ class GoodomicsQueryTools:
             "candidates": candidate_payloads,
         }
 
+    @_tool_invocation
     async def get_project_summary(self, project: str) -> dict[str, Any]:
         """Return a compact project overview with recent runs and sample examples."""
 
@@ -305,6 +344,7 @@ class GoodomicsQueryTools:
             "sample_examples": samples["samples"],
         }
 
+    @_tool_invocation
     async def list_recent_runs(
         self, project: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
@@ -324,6 +364,7 @@ class GoodomicsQueryTools:
             )
         }
 
+    @_tool_invocation
     async def list_project_runs(
         self,
         project: str,
@@ -349,6 +390,7 @@ class GoodomicsQueryTools:
             ),
         }
 
+    @_tool_invocation
     async def list_project_samples(
         self,
         project: str,
@@ -362,7 +404,6 @@ class GoodomicsQueryTools:
         project_id, resolution = await self._required_project_id(project)
         if project_id is None:
             return {"project_resolution": resolution, "samples": []}
-        await self.context.store.ensure_schema()
         project_row = await self._get_project(project_id)
         project_pk = project_row.id if project_row is not None else None
         statement = select(SampleRecord).where(SampleRecord.project_id == project_pk)
@@ -386,6 +427,7 @@ class GoodomicsQueryTools:
             "samples": samples,
         }
 
+    @_tool_invocation
     async def get_run(self, run_id: str, project: str | None = None) -> dict[str, Any]:
         """Fetch one run payload and optionally enforce project ownership."""
 
@@ -415,6 +457,7 @@ class GoodomicsQueryTools:
             "run": _run_payload(run),
         }
 
+    @_tool_invocation
     async def list_run_samples(
         self, run_id: str, project: str | None = None
     ) -> dict[str, Any]:
@@ -435,6 +478,7 @@ class GoodomicsQueryTools:
             ],
         }
 
+    @_tool_invocation
     async def list_run_metrics(
         self,
         run_id: str,
@@ -482,6 +526,7 @@ class GoodomicsQueryTools:
             "metrics": metrics[:bounded],
         }
 
+    @_tool_invocation
     async def list_run_files(
         self,
         run_id: str,
@@ -497,7 +542,6 @@ class GoodomicsQueryTools:
         run = run_result.get("run")
         if not isinstance(run, dict):
             return run_result | {"files": []}
-        await self.context.store.ensure_schema()
         async with self._session() as session:
             run_row = await get_record_by_field(
                 session, RunRecord, RunRecord.run_id, run_id
@@ -599,7 +643,6 @@ class GoodomicsQueryTools:
     async def _get_project(self, project_id: str) -> ProjectRecord | None:
         # Public methods pass stable project_id labels. Most SQL filters need
         # the integer primary key stored on the ProjectRecord.
-        await self.context.store.ensure_schema()
         async with self._session() as session:
             row = await get_record_by_field(
                 session, ProjectRecord, ProjectRecord.project_id, project_id
@@ -707,7 +750,6 @@ class GoodomicsQueryTools:
         # Shared run-list builder used by both global and project-scoped tools.
         # It accepts public project IDs but filters RunRecord.project_id by SQL
         # primary key.
-        await self.context.store.ensure_schema()
         statement = select(RunRecord)
         if project_id is not None:
             project_row = await self._get_project(project_id)
@@ -758,18 +800,24 @@ class GoodomicsQueryTools:
         resolution = await self.resolve_project(project)
         return _matched_project_id(resolution), resolution
 
-    def _session(self) -> AsyncSession:
-        # Sessions are short-lived and method-local; no query tool method relies
-        # on transaction state leaking into another tool call.
-        return AsyncSession(self.context.store._get_engine())
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[AsyncSession]:
+        """Yield the invocation session, owning one only for internal direct calls."""
+
+        session = _tool_session.get()
+        if session is not None:
+            yield session
+            return
+        async with self.context.store.session() as owned_session:
+            yield owned_session
 
     def _analytics_store(self, project_id: str | None) -> DuckDBAnalyticsStore:
         settings = self.context.settings
         if settings.analytics_path:
-            return DuckDBAnalyticsStore(settings.analytics_path)
+            return self.context.analytics_stores.get(settings.analytics_path)
         # In project mode each workspace has an isolated DuckDB file; callers
         # without a project fall back to the default project analytics store.
-        return DuckDBAnalyticsStore(
+        return self.context.analytics_stores.get(
             analytics_path_for_project(
                 settings.analytics_root, project_id or DEFAULT_PROJECT_ID
             )

@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlmodel.ext.asyncio.session import AsyncSession
-
 from goodomics.analysis import QUALITY_CONTROL, analysis_method, resolve_analysis_type
 from goodomics.parsers.multiqc import (
     MultiQCOutput,
@@ -40,13 +38,13 @@ from goodomics.storage.analytics_resolution import (
 )
 from goodomics.storage.database import (
     DEFAULT_DATABASE_URL,
-    create_async_database_engine,
     ensure_sqlite_parent,
 )
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
     catalog_id_maps_from_records,
+    initialized_store,
 )
 
 
@@ -193,11 +191,62 @@ def _save_multiqc_parse_result(
     analytics_path: Path | None,
     file_root: Path,
 ) -> MultiQCIngestResult:
+    """Persist parsed MultiQC output through one async store lifecycle."""
+
     ensure_sqlite_parent(database_url)
     file_root.mkdir(parents=True, exist_ok=True)
+    return asyncio.run(
+        _save_multiqc_parse_result_async(
+            parsed,
+            run_id=run_id,
+            project=project,
+            analysis_type_id=analysis_type_id,
+            database_url=database_url,
+            analytics_path=analytics_path,
+            file_root=file_root,
+        )
+    )
 
-    catalog_store = SQLModelGoodomicsStore(database_url)
-    project_record = asyncio.run(catalog_store.ensure_project(project))
+
+async def _save_multiqc_parse_result_async(
+    parsed: Any,
+    *,
+    run_id: str,
+    project: str | None,
+    analysis_type_id: str,
+    database_url: str,
+    analytics_path: Path | None,
+    file_root: Path,
+) -> MultiQCIngestResult:
+    """Own initialization and disposal for one MultiQC persistence operation."""
+
+    async with initialized_store(database_url) as catalog_store:
+        return await _save_multiqc_with_store(
+            catalog_store,
+            parsed,
+            run_id=run_id,
+            project=project,
+            analysis_type_id=analysis_type_id,
+            database_url=database_url,
+            analytics_path=analytics_path,
+            file_root=file_root,
+        )
+
+
+async def _save_multiqc_with_store(
+    catalog_store: SQLModelGoodomicsStore,
+    parsed: Any,
+    *,
+    run_id: str,
+    project: str | None,
+    analysis_type_id: str,
+    database_url: str,
+    analytics_path: Path | None,
+    file_root: Path,
+) -> MultiQCIngestResult:
+    """Persist MultiQC catalog and analytics data using an initialized store."""
+
+    project_record = await catalog_store.ensure_project(project)
     resolved_analytics_path = analytics_path or analytics_path_for_project(
         Path(".goodomics"), project_record.project_id
     )
@@ -323,35 +372,31 @@ def _save_multiqc_parse_result(
         )
         for file in files
     ]
-    catalog_result = asyncio.run(
-        catalog_store.replace_runs_catalog(
-            [report_run, *upstream_runs],
-            data_import=data_import,
-            analysis_types=[analysis_type],
-            analysis_methods=[report_method, upstream_method],
-            subjects=subjects,
-            samples=samples,
-            run_samples=run_samples,
-            run_relationships=run_relationships,
-            data_contracts=[
-                data_contract.model_copy(
-                    update={"project_id": project_record.project_id}
-                )
-                for data_contract in parsed.contracts
-            ],
-            data_contract_analysis_types=[
-                DataContractAnalysisType(
-                    data_contract_id=contract.data_contract_id,
-                    analysis_type_id=analysis_type.analysis_type_id,
-                )
-                for contract in parsed.contracts
-            ],
-            run_contracts=run_contracts,
-            run_contract_samples=run_contract_samples,
-            data_contract_fields=parsed.contract_fields,
-            files=files,
-            file_links=file_links,
-        )
+    catalog_result = await catalog_store.replace_runs_catalog(
+        [report_run, *upstream_runs],
+        data_import=data_import,
+        analysis_types=[analysis_type],
+        analysis_methods=[report_method, upstream_method],
+        subjects=subjects,
+        samples=samples,
+        run_samples=run_samples,
+        run_relationships=run_relationships,
+        data_contracts=[
+            data_contract.model_copy(update={"project_id": project_record.project_id})
+            for data_contract in parsed.contracts
+        ],
+        data_contract_analysis_types=[
+            DataContractAnalysisType(
+                data_contract_id=contract.data_contract_id,
+                analysis_type_id=analysis_type.analysis_type_id,
+            )
+            for contract in parsed.contracts
+        ],
+        run_contracts=run_contracts,
+        run_contract_samples=run_contract_samples,
+        data_contract_fields=parsed.contract_fields,
+        files=files,
+        file_links=file_links,
     )
     catalog_id_maps = catalog_id_maps_from_records(catalog_result)
     resolved_batch = resolve_analytics_batch_catalog_ids(
@@ -561,17 +606,11 @@ async def _replace_files(
     *,
     project_id: str,
 ) -> None:
-    engine = create_async_database_engine(database_url)
-    try:
-        store = SQLModelGoodomicsStore(database_url, engine=engine)
-        await store.ensure_schema()
-        async with AsyncSession(engine) as session:
-            await store.replace_run_file_catalog(
-                session,
-                run_id,
-                files,
-                file_links,
-                project_id,
-            )
-    finally:
-        await engine.dispose()
+    async with initialized_store(database_url) as store, store.session() as session:
+        await store.replace_run_file_catalog(
+            session,
+            run_id,
+            files,
+            file_links,
+            project_id,
+        )

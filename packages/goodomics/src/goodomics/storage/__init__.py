@@ -14,12 +14,13 @@ from goodomics.storage.files import (
     FilesystemFileStore,
     S3FileStore,
 )
-from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
+from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore, initialized_store
 
 __all__ = [
     "DuckDBAnalyticsStore",
     "GoodomicsStore",
     "SQLModelGoodomicsStore",
+    "initialized_store",
     "FileMetadata",
     "FileStore",
     "FileStoreRegistry",

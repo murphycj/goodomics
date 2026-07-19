@@ -34,11 +34,10 @@ from goodomics.storage.sqlalchemy import (
     DataContractFieldRecord,
     RunRecord,
     SampleRecord,
-    SQLModelGoodomicsStore,
+    initialized_store,
 )
 from pytest import MonkeyPatch
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 def _scalar(row: tuple[Any, ...] | None) -> Any:
@@ -48,8 +47,10 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 
 def _run_pk(run_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with (
+            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -61,8 +62,10 @@ def _run_pk(run_id: str) -> int:
 
 def _field_pk(field_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with (
+            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(
                     select(DataContractFieldRecord).where(
@@ -78,8 +81,10 @@ def _field_pk(field_id: str) -> int:
 
 def _sample_pk(sample_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        async with (
+            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)
@@ -115,8 +120,11 @@ def test_sdk_context_persists_metrics_to_project_duckdb(
         ctx.log_metric("S1", "pct_mapped", 91.2, unit="percent")
         ctx.log_metric("S1", "status", "pass")
 
-    store = SQLModelGoodomicsStore(DEFAULT_DATABASE_URL)
-    saved_run = asyncio.run(store.get_run("rnaseq-batch-042"))
+    async def load_run():
+        async with initialized_store(DEFAULT_DATABASE_URL) as store:
+            return await store.get_run("rnaseq-batch-042")
+
+    saved_run = asyncio.run(load_run())
 
     assert saved_run is not None
     assert saved_run.project == "rnaseq-core"

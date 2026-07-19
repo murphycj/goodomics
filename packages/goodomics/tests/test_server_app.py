@@ -40,10 +40,9 @@ from goodomics.storage.sqlalchemy import (
     ProjectRecord,
     RunSampleRecord,
     SampleRecord,
-    SQLModelGoodomicsStore,
+    initialized_store,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 @pytest.fixture
@@ -70,8 +69,7 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 
 def _sample_pk(database_url: str, sample_id: str) -> int:
     async def load() -> int:
-        store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with initialized_store(database_url) as store, store.session() as session:
             row = (
                 await session.exec(
                     select(SampleRecord).where(SampleRecord.sample_id == sample_id)
@@ -85,8 +83,7 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
 
 def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
     async def load() -> int:
-        store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with initialized_store(database_url) as store, store.session() as session:
             row = (
                 await session.exec(
                     select(RunSampleRecord).where(
@@ -102,8 +99,7 @@ def _run_sample_pk(database_url: str, run_sample_id: str) -> int:
 
 def _field_pk(database_url: str, field_id: str) -> int:
     async def load() -> int:
-        store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with initialized_store(database_url) as store, store.session() as session:
             row = (
                 await session.exec(
                     select(DataContractFieldRecord).where(
@@ -119,8 +115,7 @@ def _field_pk(database_url: str, field_id: str) -> int:
 
 def _contract_project_ids(database_url: str) -> dict[str, str | None]:
     async def load() -> dict[str, str | None]:
-        store = SQLModelGoodomicsStore(database_url)
-        async with AsyncSession(store._get_engine()) as session:
+        async with initialized_store(database_url) as store, store.session() as session:
             rows = (
                 await session.exec(
                     select(DataContractRecord, ProjectRecord.project_id)
@@ -1224,33 +1219,34 @@ def test_contract_browser_keeps_legacy_default_project_contracts_visible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
-    store = SQLModelGoodomicsStore(database_url)
-    default_project = asyncio.run(store.ensure_default_project())
-    other_project = asyncio.run(store.ensure_project("other"))
 
-    async def seed_legacy_contract() -> None:
-        async with AsyncSession(store._get_engine()) as session:
-            contract = DataContractRecord(
-                data_contract_id="multiqc:legacy",
-                project_id=None,
-                name="Legacy MultiQC",
-                data_type="sample_metrics",
-            )
-            session.add(contract)
-            await session.flush()
-            assert contract.id is not None
-            session.add(
-                DataContractFieldRecord(
-                    data_contract_id=contract.id,
-                    field_id="legacy_metric",
-                    field_role="metric",
-                    display_name="Legacy metric",
-                    value_type="numeric",
+    async def seed_legacy_contract():
+        async with initialized_store(database_url) as store:
+            default_project = await store.ensure_default_project()
+            other_project = await store.ensure_project("other")
+            async with store.session() as session:
+                contract = DataContractRecord(
+                    data_contract_id="multiqc:legacy",
+                    project_id=None,
+                    name="Legacy MultiQC",
+                    data_type="sample_metrics",
                 )
-            )
-            await session.commit()
+                session.add(contract)
+                await session.flush()
+                assert contract.id is not None
+                session.add(
+                    DataContractFieldRecord(
+                        data_contract_id=contract.id,
+                        field_id="legacy_metric",
+                        field_role="metric",
+                        display_name="Legacy metric",
+                        value_type="numeric",
+                    )
+                )
+                await session.commit()
+            return default_project, other_project
 
-    asyncio.run(seed_legacy_contract())
+    default_project, other_project = asyncio.run(seed_legacy_contract())
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
 
     with TestClient(create_app()) as test_client:

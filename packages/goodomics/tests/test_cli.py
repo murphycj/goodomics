@@ -12,10 +12,9 @@ from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     ProjectRecord,
     RunRecord,
-    SQLModelGoodomicsStore,
+    initialized_store,
 )
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -31,8 +30,11 @@ def _run_cli_in_temporary_directory(
 
 def _run_pk(database_path: Path, run_id: str) -> int:
     async def load() -> int:
-        catalog_store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(catalog_store._get_engine()) as session:
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+        async with (
+            initialized_store(database_url) as catalog_store,
+            catalog_store.session() as session,
+        ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
             ).one()
@@ -65,14 +67,13 @@ def _project_visibility(database_path: Path, project_id: str) -> str:
     async def load() -> str:
         """Query project visibility and release the test database engine."""
 
-        store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(store._get_engine()) as session:
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+        async with initialized_store(database_url) as store, store.session() as session:
             row = (
                 await session.exec(
                     select(ProjectRecord).where(ProjectRecord.project_id == project_id)
                 )
             ).one()
-        await store._get_engine().dispose()
         return row.visibility
 
     return asyncio.run(load())
@@ -104,11 +105,13 @@ def test_init_creates_default_project(tmp_path: Path) -> None:
     config_path = tmp_path / "goodomics.toml"
     assert config_path.is_file()
     assert "Created Goodomics configuration" in result.stdout
-    project = asyncio.run(
-        SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}").get_project(
-            DEFAULT_PROJECT_ID
-        )
-    )
+
+    async def load_project():
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+        async with initialized_store(database_url) as store:
+            return await store.get_project(DEFAULT_PROJECT_ID)
+
+    project = asyncio.run(load_project())
     assert project is not None
     assert project.slug == "default"
     assert project.name == "Default Project"
@@ -225,10 +228,9 @@ def test_create_admin_closes_first_run_setup(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
     async def load_setup_state() -> InstallationStateRecord | None:
-        store = SQLModelGoodomicsStore(f"sqlite+aiosqlite:///{database_path}")
-        async with AsyncSession(store._get_engine()) as session:
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+        async with initialized_store(database_url) as store, store.session() as session:
             state = await session.get(InstallationStateRecord, "installation")
-        await store._get_engine().dispose()
         return state
 
     state = asyncio.run(load_setup_state())
@@ -423,9 +425,12 @@ def test_project_visibility_uses_administrator_environment(
     database_path = tmp_path / "state" / "goodomics.db"
     database_url = f"sqlite+aiosqlite:///{database_path}"
     config_path = _write_auth_config(tmp_path, database_path)
-    store = SQLModelGoodomicsStore(database_url)
-    project = asyncio.run(store.ensure_default_project())
-    asyncio.run(store._get_engine().dispose())
+
+    async def initialize_catalog():
+        async with initialized_store(database_url) as store:
+            return await store.ensure_default_project()
+
+    project = asyncio.run(initialize_catalog())
     bootstrap = runner.invoke(
         app,
         [
