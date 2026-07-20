@@ -42,10 +42,10 @@ goodomics ingest ./results --project rnaseq-core
 goodomics ui
 ```
 
-SQLite is the default control store for local metadata. DuckDB is the default
+SQLite is the default metadata store. DuckDB is the default
 local analytical store for project-level tables.
 
-See [Data model and storage](concepts/architecture.md) for how control metadata,
+See [Data model and storage](concepts/architecture.md) for how metadata,
 analytical values, and files relate.
 
 ## Use the SDK

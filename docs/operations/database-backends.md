@@ -1,11 +1,11 @@
 # Database backends
 
 Goodomics defaults to local-first storage, then allows teams to move to a more
-durable catalog database when needed.
+durable metadata database when needed.
 
 ## SQLite
 
-SQLite is the default catalog store for local product and project metadata.
+SQLite is the default metadata store for local product and project metadata.
 
 ```bash
 GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///.goodomics/goodomics.db
@@ -28,5 +28,5 @@ GOODOMICS_DATABASE_URL=mysql+aiomysql://localhost/goodomics
 ```
 
 !!! note "Analytical storage"
-    The catalog database stores product metadata. DuckDB remains the default
+    The metadata database stores product metadata. DuckDB remains the default
     local analytical store for project-level metrics and omics-shaped tables.

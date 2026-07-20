@@ -37,9 +37,9 @@ with run(
 ```
 
 Logged SDK metrics are written to the DuckDB analytical store as generic metric
-records, not to the SQL catalog database. The context manager records the run
-and sample catalog metadata in SQLite, then flushes metric observations to the
-project DuckDB store when the block exits successfully.
+records, not to the SQL metadata store. The context manager records the run and
+sample metadata in SQLite, then flushes metric observations to the project
+DuckDB store when the block exits successfully.
 
 The metrics are exposed through the `goodomics:sdk_metrics` data contract.
 Each logged metric becomes a queryable contract field, so insight code can

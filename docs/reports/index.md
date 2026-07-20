@@ -30,7 +30,7 @@ An ad hoc insight is a config sent directly to
 that does not need a durable builder object.
 
 A saved insight stores a stable ID, project, name, description, and config in
-the SQL control store. Creating or updating its config records an immutable
+the SQL metadata store. Creating or updating its config records an immutable
 revision. Saved insights can be exported as YAML or JSON and referenced by
 reports.
 

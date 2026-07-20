@@ -3,7 +3,7 @@
 Goodomics preserves two kinds of information that have different storage and
 query needs:
 
-- **Control metadata** describes what exists, how it is related, and where it
+- **Metadata** describes what exists, how it is related, and where it
   came from.
 - **Analytical data** contains the measurements, calls, matrices, and payloads
   produced by computational work.
@@ -15,13 +15,13 @@ relationship into one database.
 
 | Layer | Default | Stores | Typical access |
 | --- | --- | --- | --- |
-| Control store | SQLite | Projects, runs, samples, subjects, imports, contracts, fields, files, cohorts, saved insights, reports, revisions, and cache records | CRUD, relationships, permissions, and result selection |
+| Metadata store | SQLite | Projects, runs, samples, subjects, imports, contracts, fields, files, cohorts, saved insights, reports, revisions, and cache records | CRUD, relationships, permissions, and result selection |
 | Analytical store | One DuckDB database per project | Scalar metrics, attributes, feature values and calls, variants, segments, and logical payloads | Filtering, aggregation, comparison, and plotting |
 | File store | Local filesystem | Original evidence and generated artifacts such as reports, logs, VCFs, BAMs, and exported insight data | Download, archival, and provenance |
 
-SQLite is the default control store. A server installation can use another
-supported SQL database for the control plane, while DuckDB remains the default
-local analytical engine. File catalog rows stay in the control store; the file
+SQLite is the default metadata store. A server installation can use another
+supported SQL database for metadata, while DuckDB remains the default local
+analytical engine. File records stay in the metadata store; the file
 bytes stay on the filesystem or a configured object store.
 
 ## How the core entities fit together
@@ -60,7 +60,7 @@ result.
 
 ## Metadata versus analytical values
 
-Use control metadata for identity and provenance. Examples include a run's
+Use the metadata store for identity and provenance. Examples include a run's
 status, its method version, a sample's stable name, the contract catalog, and a
 saved report layout. These records are small, relational, and frequently
 created or edited individually.
@@ -72,13 +72,13 @@ plot payloads. These records are larger and benefit from columnar queries.
 A query usually crosses both layers:
 
 1. Resolve readable labels such as `sample_id`, `data_contract_id`, and
-   `run_contract_id` in the control store.
+   `run_contract_id` in the metadata store.
 2. Select the eligible result occurrences using run status, analysis type,
    method, version, and per-sample availability.
 3. Query the corresponding integer IDs in DuckDB.
 4. Replace internal identity keys with readable labels in the response.
 
-SQL control tables use integer primary and foreign keys internally. DuckDB fact
+SQL metadata tables use integer primary and foreign keys internally. DuckDB fact
 tables also use those compact integer IDs. Public APIs and configuration use
 stable readable IDs; Goodomics resolves them at the boundary.
 
@@ -107,11 +107,11 @@ query layouts rather than new sources of truth.
 An ingest or SDK run normally produces the following chain:
 
 1. Goodomics creates or finds the project, samples, analysis type, and method.
-2. It records the run and its sample/run links in the control store.
+2. It records the run and its sample/run links in the metadata store.
 3. It registers the stable data contracts and fields emitted by the source.
 4. It records a run-contract occurrence and per-sample availability.
 5. It writes measurements or payloads to the appropriate DuckDB tables.
-6. The insight builder lists contracts and fields from the control catalog.
+6. The insight builder lists contracts and fields from the metadata catalog.
 7. At execution time, the result resolver selects exact occurrences and the
    insight compiler queries DuckDB.
 

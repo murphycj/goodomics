@@ -15,7 +15,7 @@ dashboard, API, reports, MCP tools, and AI drafting use the same rules.
 4. Compute a canonical config hash and source fingerprint.
 5. Reuse a matching cached result unless `refresh` is true.
 6. Resolve eligible run-contract occurrences for each contract series/column.
-7. Compile and execute safe queries against DuckDB or the SQL catalog.
+7. Compile and execute safe queries against DuckDB or the SQL metadata store.
 8. Convert internal sample/run identities to readable labels.
 9. Apply the result-size policy.
 10. Compile rows into a table, metric, or ECharts option payload.
@@ -42,7 +42,7 @@ query independently, and aligns the rows afterward.
 
 Two escape hatches also exist:
 
-- a physical `catalog` or `analytics` table source;
+- a physical `catalog` (metadata store) or `analytics` table source;
 - a read-only `SELECT`/`WITH` SQL statement.
 
 Raw SQL is rejected unless it starts with `SELECT` or `WITH`, and statements
@@ -53,7 +53,7 @@ coupled to implementation tables than contract-first configs.
 
 ## Result resolution
 
-The shared result resolver begins in the SQL control store. For a selected data
+The shared result resolver begins in the SQL metadata store. For a selected data
 contract it joins:
 
 - `run_contracts` for produced-result occurrences;
@@ -168,7 +168,7 @@ Insight caches are keyed by:
 For contract sources, the fingerprint includes the contract fingerprint,
 profiling timestamp, field count, run-contract count, per-sample availability
 count, and latest occurrence time. Raw analytical tables use row counts and the
-DuckDB file size as a lightweight freshness signal. Catalog tables use scoped
+DuckDB file size as a lightweight freshness signal. Metadata tables use scoped
 row counts.
 
 An unchanged config can therefore reuse a result until either its semantic
@@ -194,7 +194,7 @@ separate so API clients can consume data without parsing HTML.
 
 ## Persistence tables
 
-The SQL control store keeps the builder lifecycle auditable:
+The SQL metadata store keeps the builder lifecycle auditable:
 
 | Table | Purpose |
 | --- | --- |

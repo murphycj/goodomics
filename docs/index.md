@@ -25,7 +25,7 @@ Goodomics is useful in a few modes:
 - [Getting started](getting-started.md): install Goodomics and generate the
   first standalone report.
 - [Data model and storage](concepts/architecture.md): understand projects,
-  runs, samples, contracts, control metadata, DuckDB analytics, and files.
+  runs, samples, contracts, SQL metadata, DuckDB analytics, and files.
 - [Data contracts and fields](concepts/data-contracts.md): understand the
   semantic catalog and physical query routing.
 - [CLI](interfaces/cli.md): run reports and ingest outputs from the command
