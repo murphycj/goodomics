@@ -39,7 +39,7 @@ from goodomics.schemas.models import (
     Subject,
     UnresolvedAnalyticalRecord,
 )
-from goodomics.storage.analytics_resolution import resolve_catalog_id
+from goodomics.storage.analytics_resolution import resolve_metadata_id
 from goodomics.storage.duckdb import (
     delete_public_parquet,
     delete_public_rows,
@@ -524,14 +524,14 @@ class ClinicalAttributeStagedLoad:
     entity_scope: str
     header: tuple[str, ...]
     value_types: dict[str, str]
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> ClinicalAttributeStagedLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     def load(self, connection: Any) -> None:
         attribute_columns = [
@@ -599,10 +599,10 @@ class ClinicalAttributeStagedLoad:
                 entity_id,
                 {self._attribute_id_sql()} AS field_id,
                 {
-            resolve_catalog_id(
+            resolve_metadata_id(
                 "data_contract_id",
                 self.contract.data_contract_id,
-                self.catalog_id_maps,
+                self.metadata_id_maps,
             )
         } AS data_contract_id,
                 {_sql_nullable_literal(self.source_file_id)} AS source_file_id,
@@ -822,14 +822,14 @@ class FeatureMatrixBulkLoad:
     contract: DataContract
     path: Path
     source_file_id: str | None
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> FeatureMatrixBulkLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     @property
     def requires_autocommit(self) -> bool:
@@ -878,12 +878,12 @@ class FeatureMatrixBulkLoad:
                 feature_type=feature_type,
                 include_values=True,
             )
-            _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+            _ensure_sample_metadata_map(connection, self.run_id, self.metadata_id_maps)
             mapped = _mapped_sample_source_sql(
                 source,
                 base_run_id=self.run_id,
                 base_contract_id=self.contract.data_contract_id,
-                catalog_id_maps=self.catalog_id_maps,
+                metadata_id_maps=self.metadata_id_maps,
             )
             insert_public_select(
                 connection,
@@ -922,7 +922,7 @@ class FeatureMatrixBulkLoad:
                     self.contract.data_contract_id,
                     feature_type=feature_type,
                     source_file_id=self.source_file_id,
-                    catalog_id_maps=self.catalog_id_maps,
+                    metadata_id_maps=self.metadata_id_maps,
                 )
             ),
             upsert_dimensions=False,
@@ -935,14 +935,14 @@ class CnaMatrixBulkLoad:
     contract: DataContract
     path: Path
     source_file_id: str | None
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> CnaMatrixBulkLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     @property
     def requires_autocommit(self) -> bool:
@@ -978,12 +978,12 @@ class CnaMatrixBulkLoad:
 
         if _use_duckdb_matrix_unpivot(self.path):
             source = _cna_source_sql(self.path, include_values=True)
-            _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+            _ensure_sample_metadata_map(connection, self.run_id, self.metadata_id_maps)
             mapped = _mapped_sample_source_sql(
                 source,
                 base_run_id=self.run_id,
                 base_contract_id=self.contract.data_contract_id,
-                catalog_id_maps=self.catalog_id_maps,
+                metadata_id_maps=self.metadata_id_maps,
             )
             insert_public_select(
                 connection,
@@ -1040,7 +1040,7 @@ class CnaMatrixBulkLoad:
                     self.run_id,
                     self.contract.data_contract_id,
                     source_file_id=self.source_file_id,
-                    catalog_id_maps=self.catalog_id_maps,
+                    metadata_id_maps=self.metadata_id_maps,
                 )
             ),
             upsert_dimensions=False,
@@ -1054,21 +1054,21 @@ class SegmentBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> SegmentBulkLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     def load(self, connection: Any) -> None:
         data_contract_id = _mapped_data_contract_id_sql(
             base_contract_id=self.contract.data_contract_id,
-            catalog_id_maps=self.catalog_id_maps,
+            metadata_id_maps=self.metadata_id_maps,
         )
-        _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+        _ensure_sample_metadata_map(connection, self.run_id, self.metadata_id_maps)
         mapped = _mapped_sample_source_sql(
             """
             SELECT
@@ -1088,7 +1088,7 @@ class SegmentBulkLoad:
             """,
             base_run_id=self.run_id,
             base_contract_id=self.contract.data_contract_id,
-            catalog_id_maps=self.catalog_id_maps,
+            metadata_id_maps=self.metadata_id_maps,
         )
         insert_public_select(
             connection,
@@ -1130,14 +1130,14 @@ class MutationBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> MutationBulkLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     def load(self, connection: Any) -> None:
         source = _mutation_source_sql(
@@ -1169,10 +1169,10 @@ class MutationBulkLoad:
                 FROM ({source})
             """,
             [
-                resolve_catalog_id(
+                resolve_metadata_id(
                     "data_contract_id",
                     self.contract.data_contract_id,
-                    self.catalog_id_maps,
+                    self.metadata_id_maps,
                 ),
                 *params,
             ],
@@ -1228,20 +1228,20 @@ class MutationBulkLoad:
             FROM ({source})
             """,
             [
-                resolve_catalog_id(
+                resolve_metadata_id(
                     "data_contract_id",
                     self.contract.data_contract_id,
-                    self.catalog_id_maps,
+                    self.metadata_id_maps,
                 ),
                 *params,
             ],
         )
-        _ensure_sample_catalog_map(connection, self.run_id, self.catalog_id_maps)
+        _ensure_sample_metadata_map(connection, self.run_id, self.metadata_id_maps)
         mapped = _mapped_sample_source_sql(
             source,
             base_run_id=self.run_id,
             base_contract_id=self.contract.data_contract_id,
-            catalog_id_maps=self.catalog_id_maps,
+            metadata_id_maps=self.metadata_id_maps,
         )
         insert_public_select(
             connection,
@@ -1284,14 +1284,14 @@ class StructuralVariantBulkLoad:
     path: Path
     source_file_id: str | None
     genome_build: str | None = None
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] = field(
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] = field(
         default_factory=dict, repr=False
     )
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> StructuralVariantBulkLoad:
-        return replace(self, catalog_id_maps=catalog_id_maps)
+        return replace(self, metadata_id_maps=metadata_id_maps)
 
     def load(self, connection: Any) -> None:
         features: list[tuple[Any, ...]] = []
@@ -1344,31 +1344,31 @@ class StructuralVariantBulkLoad:
                 )
             calls.append(
                 (
-                    resolve_catalog_id(
+                    resolve_metadata_id(
                         "data_contract_id",
                         self.contract.data_contract_id,
-                        self.catalog_id_maps,
+                        self.metadata_id_maps,
                     ),
-                    resolve_catalog_id(
+                    resolve_metadata_id(
                         "run_contract_id",
                         f"{_run_id_for_sample(self.run_id, sample_id)}:"
                         f"{self.contract.data_contract_id}",
-                        self.catalog_id_maps,
+                        self.metadata_id_maps,
                     ),
-                    resolve_catalog_id(
+                    resolve_metadata_id(
                         "run_id",
                         _run_id_for_sample(self.run_id, sample_id),
-                        self.catalog_id_maps,
+                        self.metadata_id_maps,
                     ),
-                    resolve_catalog_id(
+                    resolve_metadata_id(
                         "run_sample_id",
                         _run_sample_id(
                             _run_id_for_sample(self.run_id, sample_id),
                             sample_id,
                         ),
-                        self.catalog_id_maps,
+                        self.metadata_id_maps,
                     ),
-                    resolve_catalog_id("sample_id", sample_id, self.catalog_id_maps),
+                    resolve_metadata_id("sample_id", sample_id, self.metadata_id_maps),
                     event_id,
                     _clean(row.get("SV_Status")) or "called",
                     None,
@@ -1413,12 +1413,12 @@ def _iter_feature_matrix_batches(
     *,
     feature_type: str,
     source_file_id: str | None,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
-    resolved_contract_id = _catalog_value_or_label(
+    resolved_contract_id = _metadata_value_or_label(
         "data_contract_id",
         contract_id,
-        catalog_id_maps,
+        metadata_id_maps,
     )
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -1447,11 +1447,11 @@ def _iter_feature_matrix_batches(
                 value = _to_float(row.get(sample_id))
                 if value is None:
                     continue
-                sample_ids = _sample_catalog_values(
+                sample_ids = _sample_metadata_values(
                     run_id,
                     contract_id,
                     sample_id,
-                    catalog_id_maps,
+                    metadata_id_maps,
                 )
                 values.append(
                     (
@@ -1478,12 +1478,12 @@ def _iter_cna_batches(
     contract_id: str,
     *,
     source_file_id: str | None,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> Iterator[tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]]:
-    resolved_contract_id = _catalog_value_or_label(
+    resolved_contract_id = _metadata_value_or_label(
         "data_contract_id",
         contract_id,
-        catalog_id_maps,
+        metadata_id_maps,
     )
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -1505,11 +1505,11 @@ def _iter_cna_batches(
                 rank = _to_int(row.get(sample_id))
                 if rank is None:
                     continue
-                sample_ids = _sample_catalog_values(
+                sample_ids = _sample_metadata_values(
                     run_id,
                     contract_id,
                     sample_id,
-                    catalog_id_maps,
+                    metadata_id_maps,
                 )
                 code, label = _cna_call(rank)
                 calls.append(
@@ -2316,7 +2316,7 @@ def _subject_id_from_sample(sample_id: str) -> str:
 
 
 def _runs_from_context(context: CbioPortalParseContext, base_run: Run) -> list[Run]:
-    # cBioPortal source-level provenance lives on DataImport. The catalog runs
+    # cBioPortal source-level provenance lives on DataImport. The metadata runs
     # here are only per-sample imported analytical results.
     runs: list[Run] = []
     for sample in sorted(context.samples.values(), key=lambda item: item.sample_id):
@@ -2349,25 +2349,25 @@ def _file_links_from_context(context: CbioPortalParseContext) -> list[FileLink]:
     return context.file_links
 
 
-def _catalog_value_or_label(
+def _metadata_value_or_label(
     column: str,
     value: Any,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None,
 ) -> Any:
-    if not catalog_id_maps:
+    if not metadata_id_maps:
         return value
-    return resolve_catalog_id(column, value, catalog_id_maps)
+    return resolve_metadata_id(column, value, metadata_id_maps)
 
 
-def _sample_catalog_values(
+def _sample_metadata_values(
     base_run_id: str,
     contract_id: str,
     sample_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None,
 ) -> tuple[Any, Any, Any, Any]:
     sample_run_id = _run_id_for_sample(base_run_id, sample_id)
     run_sample_id = _run_sample_id(sample_run_id, sample_id)
-    if not catalog_id_maps:
+    if not metadata_id_maps:
         return (
             f"{sample_run_id}:{contract_id}",
             sample_run_id,
@@ -2375,14 +2375,14 @@ def _sample_catalog_values(
             sample_id,
         )
     return (
-        resolve_catalog_id(
+        resolve_metadata_id(
             "run_contract_id",
             f"{sample_run_id}:{contract_id}",
-            catalog_id_maps,
+            metadata_id_maps,
         ),
-        resolve_catalog_id("run_id", sample_run_id, catalog_id_maps),
-        resolve_catalog_id("run_sample_id", run_sample_id, catalog_id_maps),
-        resolve_catalog_id("sample_id", sample_id, catalog_id_maps),
+        resolve_metadata_id("run_id", sample_run_id, metadata_id_maps),
+        resolve_metadata_id("run_sample_id", run_sample_id, metadata_id_maps),
+        resolve_metadata_id("sample_id", sample_id, metadata_id_maps),
     )
 
 
@@ -2398,21 +2398,21 @@ def _mapped_run_id_sql(
     sample_column: str,
     *,
     base_run_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     # Keep SQL bulk-load run IDs consistent with `run_id_for_sample`.
     normalized_sample = (
         f"trim(BOTH '_' FROM regexp_replace(trim(CAST({sample_column} AS VARCHAR)), "
         "'[^A-Za-z0-9_.:-]+', '_', 'g'))"
     )
-    if catalog_id_maps:
-        return _catalog_case_sql(
+    if metadata_id_maps:
+        return _metadata_case_sql(
             normalized_sample,
             {
                 _normalize_id(sample_id): run_id
-                for sample_id in catalog_id_maps.get("sample_id", {})
+                for sample_id in metadata_id_maps.get("sample_id", {})
                 if (
-                    run_id := catalog_id_maps.get("run_id", {}).get(
+                    run_id := metadata_id_maps.get("run_id", {}).get(
                         _run_id_for_sample(base_run_id, str(sample_id))
                     )
                 )
@@ -2426,17 +2426,17 @@ def _mapped_run_sample_id_sql(
     sample_column: str,
     *,
     base_run_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
-    if catalog_id_maps:
-        return _catalog_case_sql(
+    if metadata_id_maps:
+        return _metadata_case_sql(
             sample_value,
             {
                 str(sample_id): run_sample_id
-                for sample_id in catalog_id_maps.get("sample_id", {})
+                for sample_id in metadata_id_maps.get("sample_id", {})
                 if (
-                    run_sample_id := catalog_id_maps.get("run_sample_id", {}).get(
+                    run_sample_id := metadata_id_maps.get("run_sample_id", {}).get(
                         _run_sample_id(
                             _run_id_for_sample(base_run_id, str(sample_id)),
                             str(sample_id),
@@ -2453,22 +2453,22 @@ def _mapped_run_sample_id_sql(
 def _mapped_sample_id_sql(
     sample_column: str,
     *,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
-    if catalog_id_maps:
-        return _catalog_case_sql(sample_value, catalog_id_maps.get("sample_id", {}))
+    if metadata_id_maps:
+        return _metadata_case_sql(sample_value, metadata_id_maps.get("sample_id", {}))
     return sample_column
 
 
 def _mapped_data_contract_id_sql(
     *,
     base_contract_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
-    if catalog_id_maps:
+    if metadata_id_maps:
         return str(
-            resolve_catalog_id("data_contract_id", base_contract_id, catalog_id_maps)
+            resolve_metadata_id("data_contract_id", base_contract_id, metadata_id_maps)
         )
     return _sql_string(base_contract_id)
 
@@ -2478,16 +2478,16 @@ def _mapped_run_contract_id_sql(
     *,
     base_run_id: str,
     base_contract_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
     sample_value = f"trim(CAST({sample_column} AS VARCHAR))"
-    if catalog_id_maps:
-        occurrence_map = catalog_id_maps.get("run_contract_id", {})
-        return _catalog_case_sql(
+    if metadata_id_maps:
+        occurrence_map = metadata_id_maps.get("run_contract_id", {})
+        return _metadata_case_sql(
             sample_value,
             {
                 str(sample_id): occurrence_id
-                for sample_id in catalog_id_maps.get("sample_id", {})
+                for sample_id in metadata_id_maps.get("sample_id", {})
                 if (
                     occurrence_id := occurrence_map.get(
                         f"{_run_id_for_sample(base_run_id, str(sample_id))}:"
@@ -2506,18 +2506,18 @@ def _mapped_sample_source_sql(
     *,
     base_run_id: str,
     base_contract_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> str:
-    if catalog_id_maps:
+    if metadata_id_maps:
         data_contract_id = _mapped_data_contract_id_sql(
             base_contract_id=base_contract_id,
-            catalog_id_maps=catalog_id_maps,
+            metadata_id_maps=metadata_id_maps,
         )
         run_contract_id = _mapped_run_contract_id_sql(
             "source.sample_id",
             base_run_id=base_run_id,
             base_contract_id=base_contract_id,
-            catalog_id_maps=catalog_id_maps,
+            metadata_id_maps=metadata_id_maps,
         )
         return f"""
             SELECT
@@ -2528,32 +2528,32 @@ def _mapped_sample_source_sql(
                 {run_contract_id} AS mapped_run_contract_id,
                 {data_contract_id} AS data_contract_id
             FROM ({source_sql}) source
-            LEFT JOIN {_CATALOG_SAMPLE_MAP_TABLE} sample_map
+            LEFT JOIN {_METADATA_SAMPLE_MAP_TABLE} sample_map
             ON trim(CAST(source.sample_id AS VARCHAR)) = sample_map.sample_label
         """
     mapped_run_id = _mapped_run_id_sql(
         "sample_id",
         base_run_id=base_run_id,
-        catalog_id_maps=catalog_id_maps,
+        metadata_id_maps=metadata_id_maps,
     )
     data_contract_id = _mapped_data_contract_id_sql(
         base_contract_id=base_contract_id,
-        catalog_id_maps=catalog_id_maps,
+        metadata_id_maps=metadata_id_maps,
     )
     mapped_run_sample_id = _mapped_run_sample_id_sql(
         "sample_id",
         base_run_id=base_run_id,
-        catalog_id_maps=catalog_id_maps,
+        metadata_id_maps=metadata_id_maps,
     )
     mapped_sample_id = _mapped_sample_id_sql(
         "sample_id",
-        catalog_id_maps=catalog_id_maps,
+        metadata_id_maps=metadata_id_maps,
     )
     mapped_run_contract_id = _mapped_run_contract_id_sql(
         "sample_id",
         base_run_id=base_run_id,
         base_contract_id=base_contract_id,
-        catalog_id_maps=catalog_id_maps,
+        metadata_id_maps=metadata_id_maps,
     )
     return f"""
         SELECT
@@ -2567,17 +2567,17 @@ def _mapped_sample_source_sql(
     """
 
 
-_CATALOG_SAMPLE_MAP_TABLE = "_goodomics_cbioportal_sample_map"
+_METADATA_SAMPLE_MAP_TABLE = "_goodomics_cbioportal_sample_map"
 
 
-def _ensure_sample_catalog_map(
+def _ensure_sample_metadata_map(
     connection: Any,
     base_run_id: str,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]] | None,
+    metadata_id_maps: Mapping[str, Mapping[Any, int]] | None,
 ) -> None:
-    if not catalog_id_maps:
+    if not metadata_id_maps:
         return
-    marker_table = f"{_CATALOG_SAMPLE_MAP_TABLE}_marker"
+    marker_table = f"{_METADATA_SAMPLE_MAP_TABLE}_marker"
     connection.execute(f"""
         CREATE TEMP TABLE IF NOT EXISTS {marker_table} (
             base_run_id TEXT PRIMARY KEY
@@ -2590,7 +2590,7 @@ def _ensure_sample_catalog_map(
     if exists is not None:
         return
     connection.execute(f"""
-        CREATE TEMP TABLE IF NOT EXISTS {_CATALOG_SAMPLE_MAP_TABLE} (
+        CREATE TEMP TABLE IF NOT EXISTS {_METADATA_SAMPLE_MAP_TABLE} (
             sample_label TEXT,
             normalized_sample_label TEXT,
             run_id BIGINT,
@@ -2599,9 +2599,9 @@ def _ensure_sample_catalog_map(
         )
         """)
     rows = []
-    run_map = catalog_id_maps.get("run_id", {})
-    run_sample_map = catalog_id_maps.get("run_sample_id", {})
-    for sample_label, sample_id in catalog_id_maps.get("sample_id", {}).items():
+    run_map = metadata_id_maps.get("run_id", {})
+    run_sample_map = metadata_id_maps.get("run_sample_id", {})
+    for sample_label, sample_id in metadata_id_maps.get("sample_id", {}).items():
         public_sample = str(sample_label)
         run_label = _run_id_for_sample(base_run_id, public_sample)
         run_identifier = run_map.get(run_label)
@@ -2622,7 +2622,7 @@ def _ensure_sample_catalog_map(
     if rows:
         connection.executemany(
             f"""
-            INSERT INTO {_CATALOG_SAMPLE_MAP_TABLE}
+            INSERT INTO {_METADATA_SAMPLE_MAP_TABLE}
                 (sample_label, normalized_sample_label, run_id,
                  run_sample_id, sample_id)
             VALUES (?, ?, ?, ?, ?)
@@ -2635,7 +2635,7 @@ def _ensure_sample_catalog_map(
     )
 
 
-def _catalog_case_sql(
+def _metadata_case_sql(
     value_sql: str,
     label_to_id: Mapping[Any, int],
 ) -> str:

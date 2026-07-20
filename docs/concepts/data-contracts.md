@@ -40,8 +40,8 @@ Common contract properties include:
 | `intrinsic_producer_families` | Tool or pipeline families that can emit the contract |
 
 Contracts may be global built-ins or project-owned definitions. When a project
-has its own definition for the same readable ID, the project-scoped catalog
-entry is preferred.
+has its own definition for the same readable ID, the project-scoped definition
+is preferred.
 
 ## Field properties
 
@@ -145,7 +145,7 @@ result from being mistaken for missing data.
 
 ## Browse contracts through the API
 
-List the catalog for a project:
+List the data contracts available to a project:
 
 ```http
 GET /api/v1/contracts?project_id=rnaseq-core
@@ -189,4 +189,4 @@ This query remains tied to semantic IDs while Goodomics resolves the physical
 table, field discriminator, value column, eligible result occurrences, and
 internal integer IDs. Raw table and read-only SQL sources exist as advanced
 escape hatches, but they couple a config to storage details and bypass much of
-the semantic catalog.
+the data contract and field abstractions.

@@ -162,7 +162,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
           onClick={() => {
             window.location.href = `/project/${encodeURIComponent(
               projectId,
-            )}/database?store=catalog&table=subjects`;
+            )}/database?store=metadata&table=subjects`;
           }}
         />
       </section>

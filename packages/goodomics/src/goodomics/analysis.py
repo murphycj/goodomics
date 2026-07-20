@@ -63,7 +63,7 @@ def analysis_method(
     method_kind: str,
     description: str | None = None,
 ) -> AnalysisMethod:
-    """Build a method catalog entry after validating its stable identifier."""
+    """Build a method metadata entry after validating its stable identifier."""
 
     value = method_id.strip()
     if not _STABLE_ID.fullmatch(value):

@@ -32,14 +32,14 @@ from goodomics.schemas.models import (
 )
 from goodomics.sources import SourceSpec, register_source
 from goodomics.storage.analytics_resolution import (
-    resolve_analytics_batch_catalog_ids,
-    resolve_catalog_id,
+    resolve_analytics_batch_metadata_ids,
+    resolve_metadata_id,
 )
 from goodomics.storage.database import ensure_sqlite_parent, resolve_database_url
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
-    catalog_id_maps_from_records,
+    metadata_id_maps_from_records,
 )
 
 ParserFunction = Callable[[Any, "ParserOutput"], None]
@@ -79,7 +79,7 @@ class ParserOutput:
     """Collect normalized records emitted by a user-authored parser.
 
     Parser functions receive one of these as `out`. Each helper method appends
-    catalog records, analytical records, or both, while hiding the lower-level
+    metadata records, analytical records, or both, while hiding the lower-level
     `Run`, `RunSample`, `DataImport`, and DuckDB batch objects from notebook
     code.
     """
@@ -461,7 +461,7 @@ class ParserOutput:
         )
 
     def _contract_id(self, value: DataContract | str | None) -> str:
-        """Resolve a user-facing contract argument to a cataloged contract ID."""
+        """Resolve a user-facing contract argument to a metadataed contract ID."""
         if value is None:
             # Metric-only parsers should work without forcing users to learn
             # contract modeling before they can persist a useful first result.
@@ -656,7 +656,7 @@ class CustomParser:
             source_path=str(value) if isinstance(value, str | Path) else None,
             project_slug=project_record.slug,
         )
-        catalog_result = await store.replace_run_catalog(
+        metadata_result = await store.replace_run_metadata(
             normalized.run,
             data_import=normalized.data_import,
             analysis_types=normalized.analysis_types,
@@ -671,13 +671,13 @@ class CustomParser:
             files=normalized.files,
             file_links=normalized.file_links,
         )
-        catalog_id_maps = catalog_id_maps_from_records(catalog_result)
-        resolved_batch = resolve_analytics_batch_catalog_ids(
+        metadata_id_maps = metadata_id_maps_from_records(metadata_result)
+        resolved_batch = resolve_analytics_batch_metadata_ids(
             normalized.analytics_batch,
-            catalog_id_maps,
+            metadata_id_maps,
         )
-        resolved_duckdb_run_id = resolve_catalog_id(
-            "run_id", resolved_run_id, catalog_id_maps
+        resolved_duckdb_run_id = resolve_metadata_id(
+            "run_id", resolved_run_id, metadata_id_maps
         )
         resolved_analytics_path = analytics_path or analytics_path_for_project(
             Path(".goodomics"), project_record.project_id

@@ -1,4 +1,4 @@
-"""Ingest orchestration for cBioPortal studies into catalog and analytics stores."""
+"""Ingest orchestration for cBioPortal studies into metadata and analytics stores."""
 
 from __future__ import annotations
 
@@ -24,15 +24,15 @@ from goodomics.analysis import EXTERNAL_ONCOLOGY
 from goodomics.parsers.cbioportal import parse_cbioportal_study
 from goodomics.projects import analytics_path_for_project
 from goodomics.storage.analytics_resolution import (
-    resolve_analytics_batch_catalog_ids,
-    resolve_catalog_id,
+    resolve_analytics_batch_metadata_ids,
+    resolve_metadata_id,
 )
 from goodomics.storage.database import DEFAULT_DATABASE_URL
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
-    catalog_id_maps_from_records,
     initialized_store,
+    metadata_id_maps_from_records,
 )
 
 
@@ -64,7 +64,7 @@ def ingest_cbioportal_study(
     show_progress: bool = False,
     console: Console | None = None,
 ) -> CbioPortalIngestResult:
-    """Parse a cBioPortal study and persist catalog plus analytical records."""
+    """Parse a cBioPortal study and persist metadata plus analytical records."""
 
     return asyncio.run(
         _ingest_cbioportal_study_async(
@@ -91,11 +91,11 @@ async def _ingest_cbioportal_study_async(
     show_progress: bool,
     console: Console | None,
 ) -> CbioPortalIngestResult:
-    """Own the initialized catalog lifecycle for a cBioPortal ingest."""
+    """Own the initialized metadata store for a cBioPortal ingest."""
 
-    async with initialized_store(database_url) as catalog_store:
+    async with initialized_store(database_url) as metadata_store:
         return await _ingest_cbioportal_with_store(
-            catalog_store,
+            metadata_store,
             root,
             data_import_id=data_import_id,
             project=project,
@@ -108,7 +108,7 @@ async def _ingest_cbioportal_study_async(
 
 
 async def _ingest_cbioportal_with_store(
-    catalog_store: SQLModelGoodomicsStore,
+    metadata_store: SQLModelGoodomicsStore,
     root: Path,
     *,
     data_import_id: str | None,
@@ -119,7 +119,7 @@ async def _ingest_cbioportal_with_store(
     show_progress: bool,
     console: Console | None,
 ) -> CbioPortalIngestResult:
-    """Persist cBioPortal catalog and analytics data with an initialized store."""
+    """Persist cBioPortal metadata and analytics data with an initialized store."""
 
     progress = _new_progress(console) if show_progress else None
     task_id: TaskID | None = None
@@ -133,7 +133,7 @@ async def _ingest_cbioportal_with_store(
 
     try:
         update_progress("Resolving project")
-        project_record = await catalog_store.ensure_project(project)
+        project_record = await metadata_store.ensure_project(project)
         resolved_data_import_id = (
             f"{_study_identifier(root)}:{uuid4().hex[:12]}"
             if data_import_id is None
@@ -152,7 +152,7 @@ async def _ingest_cbioportal_with_store(
             progress.update(task_id, total=total_steps, completed=2)
 
         update_progress("Writing SQL metadata", completed=2)
-        catalog_result = await catalog_store.replace_runs_catalog(
+        metadata_result = await metadata_store.replace_runs_metadata(
             parsed.all_runs,
             data_import=parsed.data_import,
             analysis_types=parsed.analysis_types,
@@ -175,21 +175,21 @@ async def _ingest_cbioportal_with_store(
         resolved_analytics_path = analytics_path or analytics_path_for_project(
             Path(".goodomics"), project_record.project_id
         )
-        catalog_id_maps = catalog_id_maps_from_records(catalog_result)
-        resolved_batch = resolve_analytics_batch_catalog_ids(
+        metadata_id_maps = metadata_id_maps_from_records(metadata_result)
+        resolved_batch = resolve_analytics_batch_metadata_ids(
             parsed.analytics_batch,
-            catalog_id_maps,
+            metadata_id_maps,
         )
         resolved_bulk_loads = [
-            bulk_load.resolve_catalog_ids(catalog_id_maps)
+            bulk_load.resolve_metadata_ids(metadata_id_maps)
             for bulk_load in parsed.bulk_loads
         ]
         resolved_staged_loads = [
-            staged_load.resolve_catalog_ids(catalog_id_maps)
+            staged_load.resolve_metadata_ids(metadata_id_maps)
             for staged_load in parsed.staged_loads
         ]
         resolved_replace_run_ids = [
-            resolve_catalog_id("run_id", run_id, catalog_id_maps)
+            resolve_metadata_id("run_id", run_id, metadata_id_maps)
             for run_id in [
                 resolved_data_import_id,
                 *[run.run_id for run in parsed.all_runs],

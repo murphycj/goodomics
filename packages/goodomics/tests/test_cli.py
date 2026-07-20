@@ -32,8 +32,8 @@ def _run_pk(database_path: Path, run_id: str) -> int:
     async def load() -> int:
         database_url = f"sqlite+aiosqlite:///{database_path}"
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
@@ -426,11 +426,11 @@ def test_project_visibility_uses_administrator_environment(
     database_url = f"sqlite+aiosqlite:///{database_path}"
     config_path = _write_auth_config(tmp_path, database_path)
 
-    async def initialize_catalog():
+    async def initialize_metadata():
         async with initialized_store(database_url) as store:
             return await store.ensure_default_project()
 
-    project = asyncio.run(initialize_catalog())
+    project = asyncio.run(initialize_metadata())
     bootstrap = runner.invoke(
         app,
         [

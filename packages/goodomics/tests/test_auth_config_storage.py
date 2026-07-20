@@ -356,7 +356,7 @@ def test_toml_environment_and_cli_precedence_and_relative_paths(
     config.write_text(
         """
 [database]
-url = "sqlite+aiosqlite:///catalog.db"
+url = "sqlite+aiosqlite:///metadata.db"
 [analytics]
 root = "analytics"
 [auth.password]

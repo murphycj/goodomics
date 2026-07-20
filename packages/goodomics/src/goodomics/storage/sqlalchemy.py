@@ -48,7 +48,7 @@ RecordT = TypeVar("RecordT", bound=SQLModel)
 
 
 @dataclass(frozen=True)
-class CatalogWriteResult:
+class MetadataWriteResult:
     project: ProjectRecord
     analysis_types: list[AnalysisTypeRecord]
     analysis_methods: list[AnalysisMethodRecord]
@@ -541,8 +541,8 @@ class SQLModelGoodomicsStore:
 
     async def save_run(self, run: Run) -> None:
         # Lightweight save path for callers that provide a Run with embedded
-        # samples. Rich ingest paths use replace_run_catalog().
-        await self.replace_run_catalog(
+        # samples. Rich ingest paths use replace_run_metadata().
+        await self.replace_run_metadata(
             run,
             samples=run.samples,
             run_samples=[
@@ -555,7 +555,7 @@ class SQLModelGoodomicsStore:
             ],
         )
 
-    async def replace_run_catalog(
+    async def replace_run_metadata(
         self,
         run: Run,
         *,
@@ -576,14 +576,14 @@ class SQLModelGoodomicsStore:
         sample_groups: list[SampleGroup] | None = None,
         sample_group_members: list[SampleGroupMember] | None = None,
         session: AsyncSession | None = None,
-    ) -> CatalogWriteResult:
+    ) -> MetadataWriteResult:
         # Replace the SQL metadata rows for one run. Analytical metric
         # observations are intentionally not stored here; they live in DuckDB.
         normalized_links = [
             link.model_copy(update={"run_id": link.run_id or run.run_id})
             for link in file_links or []
         ]
-        return await self.replace_runs_catalog(
+        return await self.replace_runs_metadata(
             [run],
             data_import=data_import,
             analysis_types=analysis_types,
@@ -604,7 +604,7 @@ class SQLModelGoodomicsStore:
             session=session,
         )
 
-    async def replace_runs_catalog(
+    async def replace_runs_metadata(
         self,
         runs: list[Run],
         *,
@@ -625,11 +625,11 @@ class SQLModelGoodomicsStore:
         sample_groups: list[SampleGroup] | None = None,
         sample_group_members: list[SampleGroupMember] | None = None,
         session: AsyncSession | None = None,
-    ) -> CatalogWriteResult:
+    ) -> MetadataWriteResult:
         # Bulk variant used by imports that produce multiple logical runs from
         # one parsed dataset, such as sample-scoped cBioPortal ingests.
         if not runs:
-            raise ValueError("replace_runs_catalog requires at least one run")
+            raise ValueError("replace_runs_metadata requires at least one run")
         if analysis_types is None:
             analysis_types = [
                 resolve_analysis_type(value)
@@ -664,11 +664,11 @@ class SQLModelGoodomicsStore:
             project_row = await _require_project_record(session, project.project_id)
             project_pk = _record_id(project_row)
             if data_import is not None:
-                await _delete_data_import_scoped_catalog(
+                await _delete_data_import_scoped_metadata(
                     session, data_import.data_import_id
                 )
             for run_id in sorted(run_ids):
-                await _delete_run_scoped_catalog(session, run_id)
+                await _delete_run_scoped_metadata(session, run_id)
                 existing = await get_record_by_field(
                     session, RunRecord, RunRecord.run_id, run_id
                 )
@@ -882,7 +882,7 @@ class SQLModelGoodomicsStore:
             session.add_all(sample_group_member_rows)
             await session.flush()
 
-            result = CatalogWriteResult(
+            result = MetadataWriteResult(
                 project=_snapshot_record(project_row),
                 analysis_types=_snapshot_records(analysis_type_rows),
                 analysis_methods=_snapshot_records(analysis_method_rows),
@@ -962,7 +962,7 @@ class SQLModelGoodomicsStore:
             samples=samples,
         )
 
-    async def replace_run_file_catalog(
+    async def replace_run_file_metadata(
         self,
         session: AsyncSession,
         run_id: str,
@@ -1067,10 +1067,10 @@ async def get_record_by_field(
     return await get_record_where(session, model, field == value)
 
 
-def catalog_id_maps_from_records(
-    result: CatalogWriteResult,
+def metadata_id_maps_from_records(
+    result: MetadataWriteResult,
 ) -> dict[str, dict[str, int]]:
-    """Build DuckDB integer-id lookup maps from persisted catalog records."""
+    """Build DuckDB integer-id lookup maps from persisted metadata records."""
 
     return {
         "project_id": _id_map([result.project], "project_id"),
@@ -1580,7 +1580,7 @@ async def _analysis_type_public_id(session: AsyncSession, value: int) -> str:
         session, AnalysisTypeRecord, AnalysisTypeRecord.id, value
     )
     if row is None:
-        raise RuntimeError(f"Analysis type catalog row {value} was not found")
+        raise RuntimeError(f"Analysis type metadata row {value} was not found")
     return row.analysis_type_id
 
 
@@ -1589,7 +1589,7 @@ async def _analysis_method_public_id(session: AsyncSession, value: int) -> str:
         session, AnalysisMethodRecord, AnalysisMethodRecord.id, value
     )
     if row is None:
-        raise RuntimeError(f"Analysis method catalog row {value} was not found")
+        raise RuntimeError(f"Analysis method metadata row {value} was not found")
     return row.method_id
 
 
@@ -1632,7 +1632,7 @@ def _method_kind_from_runs(runs: list[Run], method_id: str) -> str:
     return "workflow"
 
 
-async def _delete_data_import_scoped_catalog(
+async def _delete_data_import_scoped_metadata(
     session: AsyncSession,
     data_import_id: str,
 ) -> None:
@@ -1704,7 +1704,7 @@ async def _delete_data_import_scoped_catalog(
     await session.delete(data_import_row)
 
 
-async def _delete_run_scoped_catalog(
+async def _delete_run_scoped_metadata(
     session: AsyncSession,
     run_id: str,
 ) -> None:

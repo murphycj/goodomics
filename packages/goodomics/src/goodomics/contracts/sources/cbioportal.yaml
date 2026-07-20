@@ -40,22 +40,46 @@ contracts:
     description: Gene-level discrete copy-number calls imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:continuous
-    name: cBioPortal continuous copy-number values
+    name: cBioPortal continuous copy number
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Gene-level continuous copy-number values imported from cBioPortal.
+    description: Gene-level continuous copy-number measurements imported from cBioPortal.
+    fields:
+      - field_id: copy_number
+        field_role: measure
+        entity_scope: feature
+        display_name: Copy number
+        value_type: numeric
+        description: Continuous gene-level copy-number measurement.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:log2
-    name: cBioPortal log2 copy-number values
+    name: cBioPortal log2 copy number
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Gene-level log2 copy-number values imported from cBioPortal.
+    description: Gene-level log2 copy-number measurements imported from cBioPortal.
+    fields:
+      - field_id: log2_copy_number
+        field_role: measure
+        entity_scope: feature
+        display_name: Log2 copy number
+        value_type: numeric
+        description: Gene-level copy number on a log2 scale.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mutations:maf
     name: cBioPortal mutation calls
@@ -67,13 +91,25 @@ contracts:
     description: Small-variant calls imported from cBioPortal MAF files.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mrna_expression:continuous
-    name: cBioPortal mRNA expression values
+    name: cBioPortal mRNA expression
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Continuous mRNA expression values imported from cBioPortal.
+    description: Continuous mRNA expression measurements imported from cBioPortal.
+    fields:
+      - field_id: expression
+        field_role: measure
+        entity_scope: feature
+        display_name: Expression
+        value_type: numeric
+        description: Continuous mRNA expression measurement for a gene.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mrna_expression:z_score
     name: cBioPortal mRNA expression z-scores
@@ -83,24 +119,62 @@ contracts:
     value_type: numeric
     query_modes: [sample, feature, cohort]
     description: mRNA expression z-scores imported from cBioPortal.
+    fields:
+      - field_id: expression_z_score
+        field_role: measure
+        entity_scope: feature
+        display_name: Expression z-score
+        value_type: numeric
+        unit: z-score
+        description: Standardized mRNA expression score for a gene.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:methylation:continuous_beta
-    name: cBioPortal methylation beta values
+    name: cBioPortal methylation beta
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Continuous methylation beta values imported from cBioPortal.
+    description: Continuous methylation beta measurements imported from cBioPortal.
+    fields:
+      - field_id: methylation_beta
+        field_role: measure
+        entity_scope: feature
+        display_name: Methylation beta
+        value_type: numeric
+        unit: beta
+        description: Continuous methylation beta measurement for a feature.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:log2
-    name: cBioPortal protein abundance values
+    name: cBioPortal protein abundance
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: protein
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Continuous protein abundance values imported from cBioPortal.
+    description: Continuous protein abundance measurements imported from cBioPortal.
+    fields:
+      - field_id: protein_abundance
+        field_role: measure
+        entity_scope: feature
+        display_name: Protein abundance
+        value_type: numeric
+        description: Continuous abundance measurement for a protein feature.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:z_score
     name: cBioPortal protein abundance z-scores
@@ -110,6 +184,19 @@ contracts:
     value_type: numeric
     query_modes: [sample, feature, cohort]
     description: Protein abundance z-scores imported from cBioPortal.
+    fields:
+      - field_id: protein_abundance_z_score
+        field_role: measure
+        entity_scope: feature
+        display_name: Protein abundance z-score
+        value_type: numeric
+        unit: z-score
+        description: Standardized abundance score for a protein feature.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:structural_variants
     name: cBioPortal structural variants
@@ -129,13 +216,25 @@ contracts:
     description: cBioPortal gene panel coverage matrix payload.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:limit_value
-    name: cBioPortal generic assay limit values
+    name: cBioPortal generic assay measurements
     data_type: feature_matrix
     producer_tool: cbioportal
     feature_type: generic_entity
     value_type: numeric
     query_modes: [sample, feature, cohort]
-    description: Numeric limit-value generic assay data imported from cBioPortal.
+    description: Numeric limit-type generic assay measurements imported from cBioPortal.
+    fields:
+      - field_id: assay_measurement
+        field_role: measure
+        entity_scope: feature
+        display_name: Assay measurement
+        value_type: numeric
+        description: Numeric measurement from a cBioPortal generic assay.
+        primary_table: feature_value_numeric
+        physical_tables: [feature_value_numeric]
+        query_ref_json:
+          table: feature_value_numeric
+          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:generic_assay:categorical
     name: cBioPortal generic assay categorical values

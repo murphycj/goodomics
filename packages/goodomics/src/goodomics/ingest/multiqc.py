@@ -1,4 +1,4 @@
-"""Ingest orchestration for MultiQC outputs into catalog and analytics stores."""
+"""Ingest orchestration for MultiQC outputs into metadata and analytics stores."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ from goodomics.schemas.models import (
     Subject,
 )
 from goodomics.storage.analytics_resolution import (
-    resolve_analytics_batch_catalog_ids,
-    resolve_catalog_id,
+    resolve_analytics_batch_metadata_ids,
+    resolve_metadata_id,
 )
 from goodomics.storage.database import (
     DEFAULT_DATABASE_URL,
@@ -43,8 +43,8 @@ from goodomics.storage.database import (
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     SQLModelGoodomicsStore,
-    catalog_id_maps_from_records,
     initialized_store,
+    metadata_id_maps_from_records,
 )
 
 
@@ -220,9 +220,9 @@ async def _save_multiqc_parse_result_async(
 ) -> MultiQCIngestResult:
     """Own initialization and disposal for one MultiQC persistence operation."""
 
-    async with initialized_store(database_url) as catalog_store:
+    async with initialized_store(database_url) as metadata_store:
         return await _save_multiqc_with_store(
-            catalog_store,
+            metadata_store,
             parsed,
             run_id=run_id,
             project=project,
@@ -234,7 +234,7 @@ async def _save_multiqc_parse_result_async(
 
 
 async def _save_multiqc_with_store(
-    catalog_store: SQLModelGoodomicsStore,
+    metadata_store: SQLModelGoodomicsStore,
     parsed: Any,
     *,
     run_id: str,
@@ -244,9 +244,9 @@ async def _save_multiqc_with_store(
     analytics_path: Path | None,
     file_root: Path,
 ) -> MultiQCIngestResult:
-    """Persist MultiQC catalog and analytics data using an initialized store."""
+    """Persist MultiQC metadata and analytics data using an initialized store."""
 
-    project_record = await catalog_store.ensure_project(project)
+    project_record = await metadata_store.ensure_project(project)
     resolved_analytics_path = analytics_path or analytics_path_for_project(
         Path(".goodomics"), project_record.project_id
     )
@@ -372,7 +372,7 @@ async def _save_multiqc_with_store(
         )
         for file in files
     ]
-    catalog_result = await catalog_store.replace_runs_catalog(
+    metadata_result = await metadata_store.replace_runs_metadata(
         [report_run, *upstream_runs],
         data_import=data_import,
         analysis_types=[analysis_type],
@@ -398,14 +398,14 @@ async def _save_multiqc_with_store(
         files=files,
         file_links=file_links,
     )
-    catalog_id_maps = catalog_id_maps_from_records(catalog_result)
-    resolved_batch = resolve_analytics_batch_catalog_ids(
+    metadata_id_maps = metadata_id_maps_from_records(metadata_result)
+    resolved_batch = resolve_analytics_batch_metadata_ids(
         parsed.to_batch(run_id=run_id),
-        catalog_id_maps,
+        metadata_id_maps,
     )
     resolved_run_ids = [
-        resolve_catalog_id("run_id", row.run_id, catalog_id_maps)
-        for row in catalog_result.runs
+        resolve_metadata_id("run_id", row.run_id, metadata_id_maps)
+        for row in metadata_result.runs
     ]
 
     DuckDBAnalyticsStore(resolved_analytics_path).write_batch(
@@ -607,7 +607,7 @@ async def _replace_files(
     project_id: str,
 ) -> None:
     async with initialized_store(database_url) as store, store.session() as session:
-        await store.replace_run_file_catalog(
+        await store.replace_run_file_metadata(
             session,
             run_id,
             files,

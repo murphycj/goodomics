@@ -57,11 +57,11 @@ run-contract/run-sample IDs and visible diagnostics for:
 Rendered report snapshots pin exact resolved occurrence IDs. Dynamic saved
 insights continue to update as new compatible runs arrive.
 
-## Server catalog and config
+## Server capabilities and config
 
 The server owns grains, templates, charts, linkers, result-size policies,
 validation, and explanations. Dashboard, API, report rendering, MCP, and AI
-consume this catalog rather than duplicating rules.
+consume these capabilities rather than duplicating rules.
 
 Saved configs include `analysis_grain`, `visualization`, `context`, `series`,
 `table_columns`, `linker`, `filters`, `result_policy`, and `display`. Each series

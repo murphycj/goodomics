@@ -38,7 +38,7 @@ import {
 import {
   createInsight,
   executeInsight,
-  getInsightCatalog,
+  getInsightCapabilities,
   listInsights,
   listProjectDatabaseTables,
   listProjectDataContracts,
@@ -50,7 +50,7 @@ import {
   type DataContract,
   type DataContractField,
   type DatabaseTable,
-  type InsightCatalog,
+  type InsightCapabilities,
   type InsightValidation,
   type SampleGroup,
   type SampleListItem,
@@ -166,9 +166,9 @@ export function InsightsPage({
     queryKey: ["reports", projectId],
     queryFn: () => listReports(projectId),
   });
-  const catalog = useQuery({
-    queryKey: ["insight-catalog"],
-    queryFn: getInsightCatalog,
+  const capabilities = useQuery({
+    queryKey: ["insight-capabilities"],
+    queryFn: getInsightCapabilities,
   });
   const [mode, setMode] = useState<InsightMode>(
     target.mode === "list" ? "list" : "detail",
@@ -246,7 +246,7 @@ export function InsightsPage({
     setLinkerKind(defaultLinkerForGrain(next));
   };
   const applyTemplate = (templateId: string) => {
-    const template = templateDefinition(templateId, catalog.data);
+    const template = templateDefinition(templateId, capabilities.data);
     const nextGrain = parseAnalysisGrain(template?.analysis_grain);
     const nextVisualization = stringConfig(template?.visualization) || "table";
     const linker = isRecord(template?.linker) ? template.linker : {};
@@ -476,7 +476,7 @@ export function InsightsPage({
 
   useEffect(() => {
     // Contracts can arrive after the series state is initialized. Fill any
-    // contract-only series with its default field once metadata is available.
+    // contract-only series with its default field once definitions are available.
     if (queryMode !== "contract" || availableContracts.length === 0) return;
     setSeries((current) =>
       current.map((item) =>
@@ -755,7 +755,7 @@ export function InsightsPage({
       ) : null}
       <InsightBuilderControls
         analysisGrain={analysisGrain}
-        catalog={catalog.data}
+        capabilities={capabilities.data}
         description={description}
         settings={
           <InsightChartControls
@@ -815,7 +815,7 @@ export function InsightsPage({
                 />
                 {needsLinkerStrip(visualization, series) ? (
                   <LinkerStrip
-                    catalog={catalog.data}
+                    capabilities={capabilities.data}
                     linkerKind={linkerKind}
                     series={series}
                     onLinkerKindChange={setLinkerKind}
@@ -1580,7 +1580,7 @@ function highlightSearchMatch(text: string, search: string) {
 
 function InsightBuilderControls({
   analysisGrain,
-  catalog,
+  capabilities,
   description,
   resetLabel,
   settings,
@@ -1592,7 +1592,7 @@ function InsightBuilderControls({
   onVisualizationChange,
 }: {
   analysisGrain: AnalysisGrain;
-  catalog: InsightCatalog | undefined;
+  capabilities: InsightCapabilities | undefined;
   description: string;
   resetLabel: string;
   settings?: ReactNode;
@@ -1603,8 +1603,8 @@ function InsightBuilderControls({
   onTemplateSelect: (value: string) => void;
   onVisualizationChange: (value: string) => void;
 }) {
-  const templates = templatesFromCatalog(catalog);
-  const charts = chartOptionsFromCatalog(catalog);
+  const templates = templatesFromCapabilities(capabilities);
+  const charts = chartOptionsFromCapabilities(capabilities);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const hasDescription = Boolean(description.trim());
   const handleTemplateSelect = (value: string) => {
@@ -1624,13 +1624,13 @@ function InsightBuilderControls({
           >
             <SelectTrigger>
               <AnalyzeByValue
-                option={analysisGrainsFromCatalog(catalog).find(
+                option={analysisGrainsFromCapabilities(capabilities).find(
                   (grain) => grain.value === analysisGrain,
                 )}
               />
             </SelectTrigger>
             <SelectContent>
-              {analysisGrainsFromCatalog(catalog).map((grain) => (
+              {analysisGrainsFromCapabilities(capabilities).map((grain) => (
                 <SelectItem key={grain.value} value={grain.value}>
                   <span className="flex items-center gap-2">
                     <grain.Icon className="h-4 w-4 shrink-0 text-[#657082]" />
@@ -1692,9 +1692,11 @@ function InsightBuilderControls({
   );
 }
 
-type ChartOption = ReturnType<typeof chartOptionsFromCatalog>[number];
-type AnalysisGrainOption = ReturnType<typeof analysisGrainsFromCatalog>[number];
-type TemplateOption = ReturnType<typeof templatesFromCatalog>[number];
+type ChartOption = ReturnType<typeof chartOptionsFromCapabilities>[number];
+type AnalysisGrainOption = ReturnType<
+  typeof analysisGrainsFromCapabilities
+>[number];
+type TemplateOption = ReturnType<typeof templatesFromCapabilities>[number];
 
 function AnalyzeByValue({
   option,
@@ -1915,12 +1917,12 @@ function executionConfig(config: Record<string, unknown>) {
 }
 
 function LinkerStrip({
-  catalog,
+  capabilities,
   linkerKind,
   series,
   onLinkerKindChange,
 }: {
-  catalog: InsightCatalog | undefined;
+  capabilities: InsightCapabilities | undefined;
   linkerKind: LinkerKind;
   series: BuilderSeries[];
   onLinkerKindChange: (value: LinkerKind) => void;
@@ -1940,7 +1942,7 @@ function LinkerStrip({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {linkersFromCatalog(catalog).map((item) => (
+            {linkersFromCapabilities(capabilities).map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
@@ -1953,7 +1955,9 @@ function LinkerStrip({
   );
 }
 
-function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
+function analysisGrainsFromCapabilities(
+  capabilities: InsightCapabilities | undefined,
+) {
   const icons: Record<AnalysisGrain, ComponentType<{ className?: string }>> = {
     file: File,
     feature: Braces,
@@ -1970,8 +1974,8 @@ function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
     ["variant", "Variants"],
     ["file", "Files"],
   ] as const;
-  const items = catalog?.analysis_grains.length
-    ? catalog.analysis_grains.map(
+  const items = capabilities?.analysis_grains.length
+    ? capabilities.analysis_grains.map(
         (grain) => [stringConfig(grain.id), stringConfig(grain.label)] as const,
       )
     : fallback;
@@ -1986,9 +1990,9 @@ function analysisGrainsFromCatalog(catalog: InsightCatalog | undefined) {
     }));
 }
 
-function templatesFromCatalog(catalog: InsightCatalog | undefined) {
-  const items = catalog?.templates.length
-    ? catalog.templates.map(
+function templatesFromCapabilities(capabilities: InsightCapabilities | undefined) {
+  const items = capabilities?.templates.length
+    ? capabilities.templates.map(
         (template) =>
           [stringConfig(template.id), stringConfig(template.label)] as const,
       )
@@ -2053,15 +2057,19 @@ const FALLBACK_TEMPLATES = [
 
 function templateDefinition(
   templateId: string,
-  catalog: InsightCatalog | undefined,
+  capabilities: InsightCapabilities | undefined,
 ) {
   return (
-    catalog?.templates.find((item) => stringConfig(item.id) === templateId) ??
+    capabilities?.templates.find(
+      (item) => stringConfig(item.id) === templateId,
+    ) ??
     FALLBACK_TEMPLATES.find((item) => item.id === templateId)
   );
 }
 
-function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
+function chartOptionsFromCapabilities(
+  capabilities: InsightCapabilities | undefined,
+) {
   const icons: Record<string, ComponentType<{ className?: string }>> = {
     area: AreaChart,
     bar: BarChart3,
@@ -2088,8 +2096,8 @@ function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
     ["boxplot", "Box plot"],
     ["metric", "Metric"],
   ] as const;
-  const items = catalog?.charts.length
-    ? catalog.charts.map(
+  const items = capabilities?.charts.length
+    ? capabilities.charts.map(
         (chart) => [stringConfig(chart.id), stringConfig(chart.label)] as const,
       )
     : fallback;
@@ -2102,7 +2110,7 @@ function chartOptionsFromCatalog(catalog: InsightCatalog | undefined) {
     }));
 }
 
-function linkersFromCatalog(catalog: InsightCatalog | undefined) {
+function linkersFromCapabilities(capabilities: InsightCapabilities | undefined) {
   const fallback = [
     ["auto", "Auto"],
     ["sample", "Sample"],
@@ -2110,8 +2118,8 @@ function linkersFromCatalog(catalog: InsightCatalog | undefined) {
     ["feature", "Feature"],
     ["entity", "Entity"],
   ] as const;
-  const items = catalog?.linkers.length
-    ? catalog.linkers.map(
+  const items = capabilities?.linkers.length
+    ? capabilities.linkers.map(
         (linker) =>
           [stringConfig(linker.id), stringConfig(linker.label)] as const,
       )
@@ -2427,7 +2435,7 @@ function buildConfig({
     };
   }
   const query: Record<string, unknown> = {
-    // Table mode is the escape hatch: it targets a physical catalog/analytics
+    // Table mode is the escape hatch: it targets a physical metadata/analytics
     // table and uses the generic builder query compiler on the server.
     source: { store, table },
     dimensions: xField ? [xField] : [],
@@ -2649,7 +2657,7 @@ function parseSource(
     }
     return {
       kind: "table",
-      store: value.store === "catalog" ? "catalog" : "analytics",
+      store: value.store === "metadata" ? "metadata" : "analytics",
       table: typeof value.table === "string" ? value.table : "",
     };
   }
@@ -2657,7 +2665,7 @@ function parseSource(
     const [store, table] = value.split(".", 2);
     return {
       kind: "table",
-      store: store === "catalog" ? "catalog" : "analytics",
+      store: store === "metadata" ? "metadata" : "analytics",
       table,
     };
   }

@@ -81,7 +81,7 @@ def test_startup_failure_prevents_serving_and_still_disposes(
     disposed = False
 
     async def fail_schema() -> None:
-        """Simulate catalog initialization failure."""
+        """Simulate metadata initialization failure."""
 
         raise RuntimeError("schema failed")
 

@@ -14,7 +14,7 @@ from goodomics.parsers.multiqc import (
 )
 from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.storage.analytics_resolution import (
-    resolve_analytics_batch_catalog_ids,
+    resolve_analytics_batch_metadata_ids,
 )
 from goodomics.storage.duckdb import (
     DuckDBAnalyticsStore,
@@ -44,7 +44,7 @@ def _sql_literal(value: Path | str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int]]:
+def _direct_metadata_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int]]:
     sample_ids = sorted(parsed.sample_ids)
     upstream_run_ids = [
         multiqc_upstream_run_id(run_id, sample_id) for sample_id in sample_ids
@@ -80,17 +80,17 @@ def _direct_catalog_maps(parsed: Any, *, run_id: str) -> dict[str, dict[str, int
 
 
 def _resolved_multiqc_batch(parsed: Any, *, run_id: str) -> Any:
-    return resolve_analytics_batch_catalog_ids(
+    return resolve_analytics_batch_metadata_ids(
         parsed.to_batch(run_id=run_id),
-        _direct_catalog_maps(parsed, run_id=run_id),
+        _direct_metadata_maps(parsed, run_id=run_id),
     )
 
 
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
@@ -171,7 +171,7 @@ def test_duckdb_store_round_trips_metrics_and_payloads(tmp_path: Path) -> None:
 
     store.write_batch(_resolved_multiqc_batch(parsed, run_id="run-1"))
 
-    maps = _direct_catalog_maps(parsed, run_id="run-1")
+    maps = _direct_metadata_maps(parsed, run_id="run-1")
     metrics = store.list_metric_values(maps["run_id"]["run-1:SRR3192396:analysis"])
     payloads = store.list_result_payloads(maps["run_id"]["run-1:SRR3192396:analysis"])
     mapped_percent_field_id = maps["field_id"]["general_stats.salmon_percent_mapped"]
@@ -193,7 +193,7 @@ def test_duckdb_store_keeps_json_looking_string_metrics_as_strings(
     store.write_batch(_resolved_multiqc_batch(parsed, run_id="run-1"))
 
     metrics = store.list_metric_values(2)
-    string_field_id = _direct_catalog_maps(parsed, run_id="run-1")["field_id"][
+    string_field_id = _direct_metadata_maps(parsed, run_id="run-1")["field_id"][
         parsed.sample_metric_string[0].field_id
     ]
 
@@ -307,7 +307,7 @@ def test_duckdb_store_replaces_integer_keyed_rows_from_parquet(
     assert rows == [("new",)]
 
 
-def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> None:
+def test_ingest_multiqc_creates_metadata_analytics_and_files(tmp_path: Path) -> None:
     multiqc_dir = write_multiqc_fixture(tmp_path / "results")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
@@ -339,7 +339,7 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
     assert run is not None
     assert run.project == "demo"
 
-    async def load_catalog() -> tuple[
+    async def load_metadata() -> tuple[
         list[DataImportRecord],
         list[FileRecord],
         list[FileLinkRecord],
@@ -348,8 +348,8 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
         list[RunRelationshipRecord],
     ]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             imports = (await session.exec(select(DataImportRecord))).all()
             files = (await session.exec(select(FileRecord))).all()
@@ -374,7 +374,7 @@ def test_ingest_multiqc_creates_control_analytics_and_files(tmp_path: Path) -> N
         )
 
     imports, files, links, runs, run_samples, relationships = asyncio.run(
-        load_catalog()
+        load_metadata()
     )
     assert [data_import.data_import_id for data_import in imports] == ["run-1"]
     assert {run.run_id for run in runs} == {"run-1", "run-1:S1:analysis"}
@@ -411,7 +411,7 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
     assert result.upstream_runs == 1
     assert result.run_relationships == 1
 
-    async def load_catalog() -> tuple[
+    async def load_metadata() -> tuple[
         list[SubjectRecord],
         list[SampleRecord],
         list[RunRecord],
@@ -419,8 +419,8 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
         list[RunRelationshipRecord],
     ]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             return (
                 list((await session.exec(select(SubjectRecord))).all()),
@@ -430,7 +430,7 @@ def test_ingest_multiqc_rnaseq_parquet_infers_upstream_runs(tmp_path: Path) -> N
                 list((await session.exec(select(RunRelationshipRecord))).all()),
             )
 
-    subjects, samples, runs, run_samples, relationships = asyncio.run(load_catalog())
+    subjects, samples, runs, run_samples, relationships = asyncio.run(load_metadata())
     assert len(subjects) == 1
     assert len(samples) == 1
     assert len(runs) == 2

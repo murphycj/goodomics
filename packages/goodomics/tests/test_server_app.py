@@ -17,6 +17,7 @@ from goodomics.contracts.cbioportal import (
     CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
     CBIOPORTAL_COPY_NUMBER_SEGMENTS,
     CBIOPORTAL_GENE_PANEL_MATRIX,
+    CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
     CBIOPORTAL_MUTATIONS_MAF,
 )
 from goodomics.ingest.cbioportal import ingest_cbioportal_study
@@ -717,7 +718,7 @@ def test_ai_chat_stops_at_tool_round_limit(client: TestClient) -> None:
     assert [call["name"] for call in body["tool_calls"]] == ["list_projects"]
 
 
-def test_control_tables_use_integer_primary_keys(
+def test_metadata_tables_use_integer_primary_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database_path = tmp_path / "state.db"
@@ -740,7 +741,7 @@ def test_control_tables_use_integer_primary_keys(
         "run_samples": "run_sample_id",
         "data_contracts": "data_contract_id",
         "files": "file_id",
-        "sample_sets": "sample_set_id",
+        "sample_groups": "sample_group_id",
     }
     expected_unique_key_columns = {
         table_name: [readable_column]
@@ -836,10 +837,10 @@ def test_run_analytics_and_file_content_endpoints(
         tables = test_client.get("/api/v1/database/tables").json()
         file_rows = test_client.get("/api/v1/database/tables/files/rows").json()
         import_rows = test_client.get(
-            "/api/v1/database/catalog/tables/data_imports/rows"
+            "/api/v1/database/metadata/tables/data_imports/rows"
         ).json()
-        catalog_preview = test_client.get(
-            "/api/v1/database/catalog/tables/files/rows",
+        metadata_preview = test_client.get(
+            "/api/v1/database/metadata/tables/files/rows",
             params={
                 "project_id": DEFAULT_PROJECT_ID,
                 "limit": 1,
@@ -895,13 +896,13 @@ def test_run_analytics_and_file_content_endpoints(
     assert project_files.json() == files
     assert "file_id" in report
     assert any(
-        table["store"] == "catalog"
+        table["store"] == "metadata"
         and table["name"] == "files"
         and "file_id" in table["columns"]
         for table in tables
     )
     assert any(
-        table["store"] == "catalog"
+        table["store"] == "metadata"
         and table["name"] == "data_imports"
         and "data_import_id" in table["columns"]
         for table in tables
@@ -912,9 +913,9 @@ def test_run_analytics_and_file_content_endpoints(
     )
     assert "file_id" in file_rows[0]
     assert import_rows["rows"][0]["data_import_id"] == "run-1"
-    assert catalog_preview.status_code == 200
-    assert catalog_preview.json()["total"] >= 1
-    assert catalog_preview.json()["rows"][0]["file_id"]
+    assert metadata_preview.status_code == 200
+    assert metadata_preview.json()["total"] >= 1
+    assert metadata_preview.json()["rows"][0]["file_id"]
     assert metric_preview.status_code == 200
     assert metric_preview.json()["columns"]
     assert len(metric_preview.json()["rows"]) == 2
@@ -928,7 +929,7 @@ def test_run_analytics_and_file_content_endpoints(
     assert removed_project_metrics.status_code == 404
 
 
-def test_database_summary_reports_control_and_analytics_counts(
+def test_database_summary_reports_metadata_and_analytics_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1027,7 +1028,7 @@ def test_contract_browser_and_contract_first_insight_execution(
     assert result.json()["result"]["columns"] == ["sample_id", "average_mapped"]
 
 
-def test_contract_series_charts_match_catalog_field_ids(
+def test_contract_series_charts_match_metadata_field_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1318,6 +1319,7 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 CBIOPORTAL_COPY_NUMBER_DISCRETE_CALLS,
                 CBIOPORTAL_COPY_NUMBER_SEGMENTS,
                 CBIOPORTAL_GENE_PANEL_MATRIX,
+                CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
                 CBIOPORTAL_MUTATIONS_MAF,
             ]
         }
@@ -1380,6 +1382,115 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 },
             },
         )
+        expression_table = test_client.post(
+            "/api/v1/insights/execute",
+            json={
+                "project_id": project_id,
+                "refresh": True,
+                "config": {
+                    "version": 1,
+                    "title": "Expression by feature",
+                    "analysis_grain": "feature",
+                    "visualization": "table",
+                    "query": {
+                        "source": {
+                            "kind": "data_contract",
+                            "data_contract_id": (CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS),
+                        },
+                        "fields": ["expression"],
+                        "entity": "feature",
+                        "dimensions": ["feature_id", "sample_id"],
+                        "columns": ["feature_id", "sample_id", "expression"],
+                        "measures": [],
+                    },
+                    "series": [],
+                    "table_columns": [
+                        {
+                            "column_id": "feature_id",
+                            "kind": "identity",
+                            "column": "feature_id",
+                            "label": "Feature",
+                        },
+                        {
+                            "column_id": "sample_id",
+                            "kind": "identity",
+                            "column": "sample_id",
+                            "label": "Sample",
+                        },
+                        {
+                            "column_id": "expression",
+                            "kind": "contract_field",
+                            "contract_id": CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
+                            "field_id": "expression",
+                            "label": "Expression",
+                            "value_mode": "raw",
+                        },
+                    ],
+                    "linker": {"kind": "feature"},
+                    "filters": [],
+                    "result_policy": {"mode": "preview", "limit": 1000},
+                },
+            },
+        )
+        expression_histogram = test_client.post(
+            "/api/v1/insights/execute",
+            json={
+                "project_id": project_id,
+                "refresh": False,
+                "config": {
+                    "version": 1,
+                    "analysis_grain": "feature",
+                    "context": {"kind": "cohort"},
+                    "visualization": "histogram",
+                    "query": {
+                        "source": {
+                            "kind": "data_contract",
+                            "data_contract_id": (CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS),
+                        },
+                        "fields": ["expression"],
+                        "entity": "feature",
+                        "measures": [],
+                        "limit": 1000,
+                        "y": "expression",
+                    },
+                    "series": [
+                        {
+                            "series_id": "expression-series",
+                            "contract_id": CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS,
+                            "field_id": "expression",
+                            "name": "Expression",
+                            "aggregation": "raw",
+                            "color": "#38BDF8",
+                            "filters": [],
+                            "result_scope": {
+                                "selection": "latest_successful_per_sample",
+                                "analysis_type_ids": [],
+                                "method_ids": [],
+                                "method_versions": [],
+                                "run_ids": [],
+                                "statuses": [],
+                                "run_contract_ids": [],
+                            },
+                        }
+                    ],
+                    "linker": {"kind": "feature"},
+                    "filters": [],
+                    "result_policy": {"mode": "preview", "limit": 1000},
+                    "display": {
+                        "colors": {
+                            "expression": "#38BDF8",
+                            "Count": "#38BDF8",
+                            "count": "#38BDF8",
+                        },
+                        "show_values": False,
+                        "show_trend_lines": False,
+                        "show_legend": True,
+                        "show_annotations": False,
+                        "y_axis_scale": "linear",
+                    },
+                },
+            },
+        )
 
     assert all(response.status_code == 200 for response in contracts.values())
     assert any(
@@ -1406,6 +1517,29 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
         field["field_id"] == "allele_fraction"
         for field in contracts[CBIOPORTAL_MUTATIONS_MAF].json()["fields"]
     )
+    expression_contract = contracts[CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS].json()
+    assert expression_contract["name"] == "cBioPortal mRNA expression"
+    assert expression_contract["fields"] == [
+        {
+            "field_id": "expression",
+            "field_role": "measure",
+            "entity_scope": "feature",
+            "display_name": "Expression",
+            "value_type": "numeric",
+            "unit": None,
+            "direction": None,
+            "description": "Continuous mRNA expression measurement for a gene.",
+            "priority": None,
+            "primary_table": "feature_value_numeric",
+            "physical_tables": {"tables": ["feature_value_numeric"]},
+            "query_ref": {
+                "table": "feature_value_numeric",
+                "value_column": "value",
+            },
+            "summary": {},
+            "metadata_json": {},
+        }
+    ]
     assert result.status_code == 200
     body = result.json()["result"]
     assert body["columns"] == ["subject_sex", "count"]
@@ -1421,6 +1555,28 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
     genotype_body = genotype_bar.json()["result"]
     assert genotype_body["columns"] == ["genotype", "count"]
     assert genotype_body["rows"] == [{"genotype": "SOMATIC", "count": 1}]
+    assert expression_table.status_code == 200
+    expression_body = expression_table.json()["result"]
+    assert expression_body["columns"] == ["feature_id", "sample_id", "expression"]
+    assert {
+        (row["feature_id"], row["sample_id"], row["expression"])
+        for row in expression_body["rows"]
+    } == {
+        ("gene:EGFR", "S1", 0.0),
+        ("gene:EGFR", "S2", 3.5),
+        ("gene:TP53", "S1", 1.2),
+        ("gene:TP53", "S2", 2.4),
+    }
+    assert expression_histogram.status_code == 200
+    histogram_body = expression_histogram.json()["result"]
+    assert histogram_body["columns"] == ["expression"]
+    assert {row["expression"] for row in histogram_body["rows"]} == {
+        0.0,
+        1.2,
+        2.4,
+        3.5,
+    }
+    assert histogram_body["echarts_options"]["series"][0]["type"] == "bar"
 
 
 def test_missing_file_content_returns_404(client: TestClient) -> None:
@@ -1457,7 +1613,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
         "title": "Runs by kind",
         "visualization": "bar",
         "query": {
-            "source": {"store": "catalog", "table": "runs"},
+            "source": {"store": "metadata", "table": "runs"},
             "dimensions": ["run_kind"],
             "measures": [{"field": "*", "aggregation": "count", "label": "Runs"}],
         },
@@ -1560,7 +1716,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
             "project_id": project_id,
             "config": {
                 "query": {
-                    "source": {"store": "catalog", "table": "runs"},
+                    "source": {"store": "metadata", "table": "runs"},
                     "sql": "DELETE FROM runs",
                 }
             },
@@ -1631,8 +1787,10 @@ def test_histogram_insight_compiles_multiple_numeric_series() -> None:
     assert [item["itemStyle"]["opacity"] for item in series] == [0.48, 0.48]
 
 
-def test_insight_catalog_and_validator_explain_new_config(client: TestClient) -> None:
-    catalog = client.get("/api/v1/insights/catalog")
+def test_insight_capabilities_and_validator_explain_new_config(
+    client: TestClient,
+) -> None:
+    capabilities = client.get("/api/v1/insights/capabilities")
     validation = client.post(
         "/api/v1/insights/validate",
         json={
@@ -1655,8 +1813,8 @@ def test_insight_catalog_and_validator_explain_new_config(client: TestClient) ->
         },
     )
 
-    assert catalog.status_code == 200
-    body = catalog.json()
+    assert capabilities.status_code == 200
+    body = capabilities.json()
     assert {chart["id"] for chart in body["charts"]} >= {"scatter", "table"}
     assert {grain["id"] for grain in body["analysis_grains"]} >= {
         "sample",
@@ -1795,7 +1953,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
             "config": {
                 "visualization": "table",
                 "query": {
-                    "source": {"store": "catalog", "table": "runs"},
+                    "source": {"store": "metadata", "table": "runs"},
                     "columns": ["run_id", "run_kind"],
                 },
                 "result_policy": {"mode": "more_rows", "limit": 3},
@@ -1810,7 +1968,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
             "config": {
                 "visualization": "table",
                 "query": {
-                    "source": {"store": "catalog", "table": "runs"},
+                    "source": {"store": "metadata", "table": "runs"},
                     "columns": ["run_id", "run_kind"],
                 },
                 "result_policy": {
@@ -1829,7 +1987,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
             "config": {
                 "visualization": "table",
                 "query": {
-                    "source": {"store": "catalog", "table": "runs"},
+                    "source": {"store": "metadata", "table": "runs"},
                     "columns": ["run_id", "run_kind"],
                 },
                 "result_policy": {"mode": "export_full_data"},
@@ -1848,7 +2006,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
     assert Path(artifact["path"]).exists()
 
 
-def test_sample_set_context_endpoint_uses_canonical_model(
+def test_sample_group_context_endpoint_uses_canonical_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1882,16 +2040,16 @@ def test_sample_set_context_endpoint_uses_canonical_model(
     with TestClient(create_app()) as test_client:
         project_id = test_client.get("/api/v1/projects").json()[0]["project_id"]
         response = test_client.get(
-            "/api/v1/sample-sets",
+            "/api/v1/sample-groups",
             params={"project_id": project_id, "kind": "cohort"},
         )
 
     assert response.status_code == 200
-    sample_sets = response.json()
-    assert sample_sets
-    assert sample_sets[0]["sample_set_id"].startswith("run-cbio:")
-    assert sample_sets[0]["member_count"] > 0
-    assert sample_sets[0]["updated_at"]
+    sample_groups = response.json()
+    assert sample_groups
+    assert sample_groups[0]["sample_group_id"].startswith("run-cbio:")
+    assert sample_groups[0]["member_count"] > 0
+    assert sample_groups[0]["updated_at"]
 
 
 def test_project_sample_group_lifecycle(client: TestClient) -> None:
@@ -1931,7 +2089,7 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     )
     assert created_group.status_code == 201
     group = created_group.json()
-    assert group["sample_set_id"].startswith("sample-set-")
+    assert group["sample_group_id"].startswith("sample-group-")
     assert re.match(r"^sg_[0-9a-f]{10}-responders$", group["url_slug"])
     assert group["kind"] == "cohort"
     assert group["member_count"] == 2
@@ -1944,11 +2102,11 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     assert listed.status_code == 200
     listed_body = listed.json()
     assert listed_body["total"] == 1
-    assert listed_body["items"][0]["sample_set_id"] == group["sample_set_id"]
+    assert listed_body["items"][0]["sample_group_id"] == group["sample_group_id"]
     assert listed_body["items"][0]["url_slug"] == group["url_slug"]
 
     fetched = client.get(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}"
     )
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "Responders"
@@ -1958,10 +2116,10 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
         f"/api/v1/projects/{project_id}/sample-groups/{group['url_slug']}"
     )
     assert fetched_by_slug.status_code == 200
-    assert fetched_by_slug.json()["sample_set_id"] == group["sample_set_id"]
+    assert fetched_by_slug.json()["sample_group_id"] == group["sample_group_id"]
 
     members = client.get(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members"
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}/members"
     )
     assert members.status_code == 200
     member_body = members.json()
@@ -1972,14 +2130,14 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     assert members_by_sample["S2"]["run_sample_id"] == "run-old:S2"
 
     duplicate_add = client.post(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members",
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}/members",
         json={"sample_ids": ["S1"]},
     )
     assert duplicate_add.status_code == 200
     assert duplicate_add.json()["member_count"] == 2
 
     renamed = client.patch(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}",
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}",
         json={"name": "Clinical responders", "kind": "reference_set"},
     )
     assert renamed.status_code == 200
@@ -1999,28 +2157,28 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
 
     removed = client.request(
         "DELETE",
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members",
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}/members",
         json={"run_sample_ids": ["run-new:S1"]},
     )
     assert removed.status_code == 200
     assert removed.json()["member_count"] == 1
 
     remaining = client.get(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}/members"
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}/members"
     )
     assert remaining.status_code == 200
     assert remaining.json()["total"] == 1
     assert remaining.json()["items"][0]["sample_id"] == "S2"
 
     deleted = client.delete(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}"
     )
     assert deleted.status_code == 204
     empty = client.get(f"/api/v1/projects/{project_id}/sample-groups")
     assert empty.status_code == 200
     assert empty.json()["total"] == 0
     missing = client.get(
-        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_set_id']}"
+        f"/api/v1/projects/{project_id}/sample-groups/{group['sample_group_id']}"
     )
     assert missing.status_code == 404
 

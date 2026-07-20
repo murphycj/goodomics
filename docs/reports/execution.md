@@ -10,7 +10,7 @@ dashboard, API, reports, MCP tools, and AI drafting use the same rules.
 `execute_insight` performs these stages:
 
 1. Normalize defaults in the config.
-2. Validate catalog-level shape and chart constraints.
+2. Validate config shape and chart constraints.
 3. Identify the semantic or physical data source.
 4. Compute a canonical config hash and source fingerprint.
 5. Reuse a matching cached result unless `refresh` is true.
@@ -42,7 +42,7 @@ query independently, and aligns the rows afterward.
 
 Two escape hatches also exist:
 
-- a physical `catalog` (metadata store) or `analytics` table source;
+- a physical `metadata` (metadata store) or `analytics` table source;
 - a read-only `SELECT`/`WITH` SQL statement.
 
 Raw SQL is rejected unless it starts with `SELECT` or `WITH`, and statements
@@ -82,7 +82,7 @@ mixed-version warnings.
 After result resolution, the compiler uses field metadata to choose a table and
 value column:
 
-1. Resolve `data_contract_id` to the project-scoped catalog record.
+1. Resolve `data_contract_id` to the project-scoped contract definition.
 2. Resolve `field_id` under that contract.
 3. Read `query_ref.table` or fall back to `primary_table`.
 4. Read `query_ref.value_column` or derive it from `value_type`.
@@ -95,7 +95,7 @@ Supported contract-series tables include scalar metrics, attributes, numeric
 features, feature calls, copy-number segments, small and structural variants,
 result payloads, and derived gene-alteration state.
 
-Some typed tables expose synthetic fields when a dedicated field catalog row
+Some typed tables expose synthetic fields when a dedicated field definition
 is not present. Examples include `call_code`, `segment_mean`, `genotype`,
 `allele_fraction`, `payload_kind`, and `payload_name`.
 

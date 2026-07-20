@@ -738,7 +738,7 @@ function DataSourcePicker({
   );
   const [activeContractOptionIndex, setActiveContractOptionIndex] = useState(0);
   const stores = useMemo(() => {
-    const unique = new Set<Store>(["analytics", "catalog"]);
+    const unique = new Set<Store>(["analytics", "metadata"]);
     for (const candidate of tables) unique.add(candidate.store);
     return Array.from(unique);
   }, [tables]);

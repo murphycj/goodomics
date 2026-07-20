@@ -19,7 +19,10 @@ from goodomics.contracts.cbioportal import (
 from goodomics.contracts.cbioportal import (
     contract_for_meta as cbioportal_data_contract_for_meta,
 )
-from goodomics.contracts.registry import built_in_contracts
+from goodomics.contracts.registry import (
+    built_in_contracts,
+    built_in_data_contract_fields_by_contract,
+)
 from goodomics.contracts.specs import (
     data_contract_fields_from_specs,
     data_contracts_from_specs,
@@ -48,8 +51,8 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(run_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(DEFAULT_DATABASE_URL) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
@@ -63,8 +66,8 @@ def _run_pk(run_id: str) -> int:
 def _field_pk(field_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(DEFAULT_DATABASE_URL) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(
@@ -82,8 +85,8 @@ def _field_pk(field_id: str) -> int:
 def _sample_pk(sample_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(DEFAULT_DATABASE_URL) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(DEFAULT_DATABASE_URL) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(
@@ -206,6 +209,33 @@ def test_package_data_contract_specs_load_from_resources() -> None:
     assert "multiqc:payloads" in contract_ids
     assert "cbioportal:mutations:maf" in contract_ids
     assert "goodomics:sdk_metrics" in contract_ids
+
+
+def test_cbioportal_feature_matrix_contracts_have_semantic_fields() -> None:
+    fields_by_contract = built_in_data_contract_fields_by_contract()
+
+    assert {
+        contract_id: [field.field_id for field in fields_by_contract[contract_id]]
+        for contract_id in (
+            "cbioportal:copy_number:continuous",
+            "cbioportal:copy_number:log2",
+            "cbioportal:mrna_expression:continuous",
+            "cbioportal:mrna_expression:z_score",
+            "cbioportal:methylation:continuous_beta",
+            "cbioportal:protein_level:log2",
+            "cbioportal:protein_level:z_score",
+            "cbioportal:generic_assay:limit_value",
+        )
+    } == {
+        "cbioportal:copy_number:continuous": ["copy_number"],
+        "cbioportal:copy_number:log2": ["log2_copy_number"],
+        "cbioportal:mrna_expression:continuous": ["expression"],
+        "cbioportal:mrna_expression:z_score": ["expression_z_score"],
+        "cbioportal:methylation:continuous_beta": ["methylation_beta"],
+        "cbioportal:protein_level:log2": ["protein_abundance"],
+        "cbioportal:protein_level:z_score": ["protein_abundance_z_score"],
+        "cbioportal:generic_assay:limit_value": ["assay_measurement"],
+    }
 
 
 def test_data_contract_specs_reject_duplicate_contract_ids() -> None:

@@ -1,7 +1,7 @@
-"""Create a contract-aware synthetic catalog and analytical dataset.
+"""Create a contract-aware synthetic metadata and analytical dataset.
 
 The fixture intentionally uses the same public label write path as importers so
-it exercises dimension resolution as well as the run-contract catalog model.
+it exercises dimension resolution as well as the run-contract metadata model.
 """
 
 from __future__ import annotations
@@ -54,9 +54,9 @@ def main() -> None:
     if database_path is not None:
         _reset_database(database_path)
 
-    # The fresh catalog assigns deterministic integer IDs. Analytical catalog
+    # The fresh metadata assigns deterministic integer IDs. Analytical metadata
     # columns deliberately store those IDs rather than a second label mapping.
-    asyncio.run(_write_catalog_database(args.runs, args.samples))
+    asyncio.run(_write_metadata_database(args.runs, args.samples))
     store = DuckDBAnalyticsStore(DEFAULT_ANALYTICS_PATH)
     store.ensure_schema()
     with duckdb.connect(str(DEFAULT_ANALYTICS_PATH)) as connection:
@@ -209,14 +209,14 @@ def _load_analytics(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-async def _write_catalog_database(runs: int, samples: int) -> None:
-    print("writing contract-aware catalog...")
+async def _write_metadata_database(runs: int, samples: int) -> None:
+    print("writing contract-aware metadata...")
     async with initialized_store(DEFAULT_DATABASE_URL) as store:
         await store.ensure_default_project()
-        await _write_catalog_records(store, runs, samples)
+        await _write_metadata_records(store, runs, samples)
 
 
-async def _write_catalog_records(
+async def _write_metadata_records(
     store: SQLModelGoodomicsStore, runs: int, samples: int
 ) -> None:
     now = datetime.now(UTC)
@@ -242,7 +242,7 @@ async def _write_catalog_records(
         session.add_all([analysis_type, method])
         await session.flush()
         if analysis_type.id is None or method.id is None:
-            raise RuntimeError("Analysis catalogs were not persisted")
+            raise RuntimeError("Analysis metadatas were not persisted")
 
         contracts: list[DataContractRecord] = []
         for contract_id, name, data_type, primary_table in (

@@ -109,7 +109,7 @@ class GoodomicsQueryTools:
     ) -> dict[str, Any]:
         """List projects with optional text filtering over IDs, slugs, and names."""
 
-        # Start from the catalog project list, then apply lightweight in-memory
+        # Start from the metadata project list, then apply lightweight in-memory
         # filtering. Counts and dashboard links are added by _project_summary().
         projects = await self._all_projects()
         term = _normalize(query or "")
@@ -517,7 +517,7 @@ class GoodomicsQueryTools:
                 ]
         except Exception:
             # Tool calls should remain useful if the analytics store is missing
-            # or stale. Catalog-backed run details can still be returned.
+            # or stale. Metadata-backed run details can still be returned.
             metrics = []
 
         bounded = _bounded_limit(limit)
@@ -536,7 +536,7 @@ class GoodomicsQueryTools:
     ) -> dict[str, Any]:
         """List run-linked and import-linked files with optional kind filtering."""
 
-        # Files are catalog records with link rows that describe whether a file
+        # Files are metadata records with link rows that describe whether a file
         # belongs to a run, sample, import, or data contract.
         run_result = await self.get_run(run_id, project=project)
         run = run_result.get("run")
@@ -854,7 +854,7 @@ def _score(reference: str, candidate: str) -> float:
 
 
 def _bounded_limit(limit: int, *, maximum: int = 50) -> int:
-    # Keep tool responses compact and prevent accidental huge catalog/analytics
+    # Keep tool responses compact and prevent accidental huge metadata/analytics
     # reads from being returned to an agent.
     return max(1, min(limit, maximum))
 
@@ -1084,7 +1084,7 @@ async def _public_label(
     label_name: str,
     identifier: int | None,
 ) -> str | None:
-    # Generic FK-to-label lookup used when turning catalog rows into tool
+    # Generic FK-to-label lookup used when turning metadata rows into tool
     # payloads. Missing links are tolerated because older/local data may be
     # partially populated.
     if identifier is None:

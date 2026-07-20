@@ -28,14 +28,14 @@ from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.projects import DEFAULT_PROJECT_ID
-from goodomics.server.db.catalog import CATALOG_MODELS
+from goodomics.server.db.metadata import METADATA_MODELS
 from goodomics.server.db.models import (
     InsightRecord,
     InsightResultCacheRecord,
     ReportRecord,
     ReportResultCacheRecord,
 )
-from goodomics.server.insight_catalog import (
+from goodomics.server.insight_capabilities import (
     ALL_ROWS_INLINE_THRESHOLD,
     ANALYSIS_GRAINS,
     EXPORT_FULL_DATA_LIMIT,
@@ -68,7 +68,7 @@ from goodomics.storage.sqlalchemy import (
 )
 
 JsonObject = dict[str, Any]
-StoreName = Literal["catalog", "analytics"]
+StoreName = Literal["metadata", "analytics"]
 
 # Builder queries intentionally support a tiny aggregation/operator vocabulary.
 # Advanced SQL exists as an escape hatch, but the default UI/API path stays
@@ -172,7 +172,7 @@ def validate_and_explain_config(config: Mapping[str, Any]) -> JsonObject:
         "messages": messages,
         "normalized_config": normalized,
         "explanation": explain_insight_config(normalized),
-        "catalog_version": 1,
+        "capabilities_version": 1,
     }
 
 
@@ -453,7 +453,7 @@ async def execute_data_query(
         limit = _query_limit(query_config, config)
         if store == "analytics":
             return analytics_store.query_rows(sql, limit=limit)
-        return await _execute_catalog_sql(session, sql, limit=limit)
+        return await _execute_metadata_sql(session, sql, limit=limit)
     if table is None:
         raise ValueError("Query source must include a table.")
     sql, parameters, columns = await _compile_builder_query(
@@ -467,7 +467,7 @@ async def execute_data_query(
     limit = _query_limit(query_config, config)
     if store == "analytics":
         return analytics_store.query_rows(sql, parameters=parameters, limit=limit)
-    return await _execute_catalog_sql(session, sql, parameters=parameters, limit=limit)
+    return await _execute_metadata_sql(session, sql, parameters=parameters, limit=limit)
 
 
 async def _decorate_identity_values(
@@ -1651,7 +1651,7 @@ async def _compile_contract_query(
     synthetic_fields = _synthetic_contract_fields(table)
 
     # Some analytical tables expose meaningful columns directly instead of
-    # catalog-backed data_contract_fields rows. Treat those as synthetic fields so
+    # metadata-backed data_contract_fields rows. Treat those as synthetic fields so
     # users can still query them through the same contract-first grammar.
     if table in {"feature_value_numeric", *synthetic_fields} and not requested_fields:
         requested_fields = [next(iter(synthetic_fields.get(table, {"value": "value"})))]
@@ -2487,11 +2487,11 @@ async def fingerprint_source(
                 "size": analytics_store.database_size_bytes(),
             }
         )
-    if table and table in CATALOG_MODELS:
-        model = CATALOG_MODELS[str(table)]
+    if table and table in METADATA_MODELS:
+        model = METADATA_MODELS[str(table)]
         statement = select(func.count()).select_from(model)
         if project_id is not None and "project_id" in model.model_fields:
-            # Catalog project columns are mixed: most core tables use integer
+            # Metadata project columns are mixed: most core tables use integer
             # project foreign keys, while server tables store public project IDs.
             project_pk = await _project_pk(session, project_id)
             model_any = cast(Any, model)
@@ -2501,7 +2501,7 @@ async def fingerprint_source(
                 else model_any.project_id == project_id
             )
         count = int((await session.exec(statement)).one())
-        return canonical_hash({"store": "catalog", "table": table, "rows": count})
+        return canonical_hash({"store": "metadata", "table": table, "rows": count})
     return canonical_hash({"store": store, "table": table, "project_id": project_id})
 
 
@@ -2514,9 +2514,9 @@ async def _compile_builder_query(
     query_config: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> tuple[str, list[Any], list[str]]:
-    """Compile a catalog-backed builder query into SQL.
+    """Compile a metadata-backed builder query into SQL.
 
-    Generic builder queries target a physical catalog/analytics table. They
+    Generic builder queries target a physical metadata/analytics table. They
     are less semantic than contract-first queries but useful for database
     previews and advanced dashboard workflows.
     """
@@ -2602,15 +2602,15 @@ async def _project_scope_where(
     columns: Sequence[str],
     parameters: list[Any],
 ) -> str | None:
-    """Compile project scoping for catalog SQL tables.
+    """Compile project scoping for metadata SQL tables.
 
     Project scoping only applies to tables that expose a project_id column.
     Analytics tables already store public project labels when they have one.
     """
     if project_id is None or "project_id" not in columns:
         return None
-    if store == "catalog":
-        model = CATALOG_MODELS.get(table)
+    if store == "metadata":
+        model = METADATA_MODELS.get(table)
         if model is not None and _project_field_is_integer(model):
             # Core metadata tables use integer project FKs, so resolve the public
             # project_id to its SQL primary key before filtering.
@@ -2676,14 +2676,14 @@ def _order_sql(columns: set[str], value: Any) -> str | None:
     return f"{_quote_identifier(column)} {direction}"
 
 
-async def _execute_catalog_sql(
+async def _execute_metadata_sql(
     session: AsyncSession,
     sql: str,
     *,
     parameters: Sequence[Any] = (),
     limit: int,
 ) -> tuple[list[str], list[JsonObject]]:
-    """Execute catalog SQL and return JSON-compatible rows.
+    """Execute metadata SQL and return JSON-compatible rows.
 
     SQLAlchemy text queries use named parameters, while the shared query
     compiler emits positional question marks for both stores. Rewrite them
@@ -2708,7 +2708,7 @@ def _named_sql_parameters(
     """Extract named parameters from a SQL string.
 
     Replace ? placeholders with SQLAlchemy named parameters. This keeps the
-    compiler simple while still using safe bound values for catalog SQL.
+    compiler simple while still using safe bound values for metadata SQL.
     """
     named: dict[str, Any] = {}
     parts = sql.split("?")
@@ -2835,7 +2835,7 @@ def _parse_source(value: Any) -> tuple[StoreName, str | None]:
             store, table = "analytics", value
     else:
         store, table = "analytics", None
-    if store not in {"catalog", "analytics"}:
+    if store not in {"metadata", "analytics"}:
         raise ValueError(f"Unsupported query store: {store}")
     return cast(StoreName, store), str(table) if table else None
 
@@ -3099,12 +3099,12 @@ def _contract_filter_sql(
 def _record_pk(row: Any) -> int:
     """Return a model primary key or raise if it is not persisted.
 
-    Query compilation depends on catalog primary keys; fail loudly if a caller
+    Query compilation depends on metadata primary keys; fail loudly if a caller
     passes an unflushed SQLModel row.
     """
     row_id = getattr(row, "id", None)
     if row_id is None:
-        raise ValueError("Catalog record has not been flushed.")
+        raise ValueError("Metadata record has not been flushed.")
     return int(row_id)
 
 
@@ -3119,9 +3119,9 @@ def _columns_for_source(store: StoreName, table: str) -> list[str]:
         if serializer is None:
             raise ValueError(f"Unknown analytical table: {table}")
         return list(serializer.columns)
-    model = CATALOG_MODELS.get(table)
+    model = METADATA_MODELS.get(table)
     if model is None:
-        raise ValueError(f"Unknown catalog table: {table}")
+        raise ValueError(f"Unknown metadata table: {table}")
     return list(model.model_fields)
 
 

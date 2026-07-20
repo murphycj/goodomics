@@ -1,8 +1,8 @@
-"""Insight/report builder catalog and validation helpers.
+"""Insight/report builder capabilities and validation helpers.
 
-The catalog is the Goodomics-owned contract for chart intent. Dashboard controls,
-API validation, report execution, and future AI insight drafting should use this
-module rather than reaching directly for ECharts-specific behavior.
+These capabilities are the Goodomics-owned contract for chart intent. Dashboard
+controls, API validation, report execution, and future AI insight drafting should
+use this module rather than reaching directly for ECharts-specific behavior.
 """
 
 from __future__ import annotations
@@ -313,8 +313,8 @@ RESULT_POLICIES: dict[str, JsonObject] = {
 }
 
 
-def insight_catalog() -> JsonObject:
-    """Return the server-owned catalog used by builders and validators."""
+def insight_capabilities() -> JsonObject:
+    """Return the server-owned capabilities used by builders and validators."""
 
     return {
         "version": 1,
@@ -376,9 +376,9 @@ def normalize_result_policy(value: Any) -> JsonObject:
         raw_seed = None
     if mode not in RESULT_POLICIES:
         mode = "preview"
-    catalog_policy = RESULT_POLICIES[mode]
-    default_limit = int(catalog_policy["default_limit"])
-    max_limit = int(catalog_policy["max_limit"])
+    policy_definition = RESULT_POLICIES[mode]
+    default_limit = int(policy_definition["default_limit"])
+    max_limit = int(policy_definition["max_limit"])
     try:
         limit = int(raw_limit if raw_limit is not None else default_limit)
     except (TypeError, ValueError):
@@ -431,7 +431,7 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
 
 
 def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
-    """Validate catalog-level config shape before data-specific checks."""
+    """Validate the config shape before data-specific checks."""
 
     messages: list[JsonObject] = []
     chart = str(config.get("visualization") or "table")

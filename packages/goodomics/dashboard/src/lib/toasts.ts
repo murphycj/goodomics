@@ -18,7 +18,7 @@ type ToastDefinition<TParams> = {
   type: ToastType;
 };
 
-const toastCatalog = {
+const toastDefinitions = {
   clipboard_copy_failed: {
     description: ({ projectRef }) =>
       `Copy ${projectRef} manually if clipboard access is unavailable.`,
@@ -54,7 +54,9 @@ export function showToast<Code extends ToastCode>(
   code: Code,
   params: ToastParamsByCode[Code],
 ) {
-  const definition = toastCatalog[code] as ToastDefinition<ToastParamsByCode[Code]>;
+  const definition = toastDefinitions[code] as ToastDefinition<
+    ToastParamsByCode[Code]
+  >;
   toast[definition.type](definition.title, {
     description: definition.description(params),
     duration: definition.duration,

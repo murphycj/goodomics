@@ -169,13 +169,13 @@ const databaseSummarySchema = z.object({
   total_samples: z.number(),
   total_scalar_metrics: z.number(),
   total_payloads: z.number(),
-  control_tables: z.array(tableCountSchema),
+  metadata_tables: z.array(tableCountSchema),
   analytics_tables: z.array(tableCountSchema),
 });
 
 const databaseTableSchema = z.object({
   name: z.string(),
-  store: z.enum(['catalog', 'analytics']),
+  store: z.enum(['metadata', 'analytics']),
   rows: z.number(),
   columns: z.array(z.string()),
   editable: z.boolean(),
@@ -183,7 +183,7 @@ const databaseTableSchema = z.object({
 
 const databaseTablePageSchema = z.object({
   name: z.string(),
-  store: z.enum(['catalog', 'analytics']),
+  store: z.enum(['metadata', 'analytics']),
   columns: z.array(z.string()),
   rows: z.array(z.record(z.string(), z.unknown())),
   total: z.number(),
@@ -265,7 +265,7 @@ const reportResultSchema = z.object({
   result: z.record(z.string(), z.unknown()),
 });
 
-const insightCatalogSchema = z.object({
+const insightCapabilitiesSchema = z.object({
   version: z.number(),
   analysis_grains: z.array(z.record(z.string(), z.unknown())).default([]),
   templates: z.array(z.record(z.string(), z.unknown())).default([]),
@@ -280,7 +280,7 @@ const insightValidationSchema = z.object({
   messages: z.array(z.record(z.string(), z.unknown())).default([]),
   normalized_config: z.record(z.string(), z.unknown()),
   explanation: z.string(),
-  catalog_version: z.number(),
+  capabilities_version: z.number(),
 });
 
 const sampleGroupSchema = z.object({
@@ -391,7 +391,7 @@ export type SavedInsight = z.infer<typeof insightSchema>;
 export type SavedReport = z.infer<typeof reportSchema>;
 export type InsightResult = z.infer<typeof insightResultSchema>['result'];
 export type ReportResult = z.infer<typeof reportResultSchema>['result'];
-export type InsightCatalog = z.infer<typeof insightCatalogSchema>;
+export type InsightCapabilities = z.infer<typeof insightCapabilitiesSchema>;
 export type InsightValidation = z.infer<typeof insightValidationSchema>;
 export type SampleGroup = z.infer<typeof sampleGroupSchema>;
 export type SampleGroupPage = z.infer<typeof sampleGroupPageSchema>;
@@ -680,8 +680,8 @@ export function getContractResultOptions(projectId: string, dataContractId: stri
   );
 }
 
-export function getInsightCatalog() {
-  return getJson('/api/v1/insights/catalog', insightCatalogSchema);
+export function getInsightCapabilities() {
+  return getJson('/api/v1/insights/capabilities', insightCapabilitiesSchema);
 }
 
 export async function validateInsightConfig(config: Record<string, unknown>) {

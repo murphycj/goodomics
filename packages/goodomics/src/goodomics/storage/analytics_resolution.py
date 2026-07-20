@@ -1,4 +1,4 @@
-"""Catalog identifier resolution helpers for analytics ingest record batches."""
+"""Metadata identifier resolution helpers for analytics ingest record batches."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ _OCCURRENCE_COLUMNS = frozenset(
     {"data_contract_id", "run_contract_id", "run_id", "run_sample_id", "sample_id"}
 )
 
-CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
+METADATA_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
     "entity_attributes": frozenset({"data_contract_id", "field_id"}),
     "sample_metrics": _OCCURRENCE_COLUMNS | {"field_id"},
     "feature_value_numeric": _OCCURRENCE_COLUMNS,
@@ -41,47 +41,47 @@ CATALOG_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
 }
 
 
-def resolve_analytics_batch_catalog_ids(
+def resolve_analytics_batch_metadata_ids(
     batch: AnalyticsIngestBatch,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]],
+    metadata_id_maps: Mapping[str, Mapping[Any, int]],
 ) -> AnalyticsIngestBatch:
     """Return a storage-ready batch with SQL-owned labels replaced by int IDs."""
 
     values = batch.model_dump()
-    for field_name, columns in CATALOG_COLUMNS_BY_BATCH_FIELD.items():
+    for field_name, columns in METADATA_COLUMNS_BY_BATCH_FIELD.items():
         records = getattr(batch, field_name)
         values[field_name] = [
-            _resolve_record_catalog_ids(record, columns, catalog_id_maps)
+            _resolve_record_metadata_ids(record, columns, metadata_id_maps)
             for record in records
         ]
     return AnalyticsIngestBatch.model_validate(values)
 
 
-def resolve_catalog_id(
+def resolve_metadata_id(
     column: str,
     value: Any,
-    catalog_id_maps: Mapping[str, Mapping[Any, int]],
+    metadata_id_maps: Mapping[str, Mapping[Any, int]],
 ) -> int | None:
-    """Resolve a catalog identifier from label form to SQL integer id."""
+    """Resolve a metadata identifier from label form to SQL integer id."""
 
     if value is None or isinstance(value, int):
         return value
-    column_map = catalog_id_maps.get(column, {})
+    column_map = metadata_id_maps.get(column, {})
     identifier = column_map.get(value)
     if identifier is None:
         identifier = column_map.get(str(value))
     if identifier is None:
         raise ValueError(
             f"No SQL metadata integer id found for {column}={value!r}. "
-            "Resolve catalog IDs before writing analytics rows to DuckDB."
+            "Resolve metadata IDs before writing analytics rows to DuckDB."
         )
     return int(identifier)
 
 
-def _resolve_record_catalog_ids(
+def _resolve_record_metadata_ids(
     record: Any,
     columns: frozenset[str],
-    catalog_id_maps: Mapping[str, Mapping[Any, int]],
+    metadata_id_maps: Mapping[str, Mapping[Any, int]],
 ) -> Any:
     updates: dict[str, int | None] = {}
     if (
@@ -92,7 +92,7 @@ def _resolve_record_catalog_ids(
         contract_id = _record_value(record, "data_contract_id")
         if isinstance(run_id, str) and isinstance(contract_id, str):
             occurrence_label = f"{run_id}:{contract_id}"
-            occurrence_id = catalog_id_maps.get("run_contract_id", {}).get(
+            occurrence_id = metadata_id_maps.get("run_contract_id", {}).get(
                 occurrence_label
             )
             if occurrence_id is not None:
@@ -100,7 +100,7 @@ def _resolve_record_catalog_ids(
     for column in columns:
         value = _record_value(record, column)
         if value is not None and not isinstance(value, int):
-            updates[column] = resolve_catalog_id(column, value, catalog_id_maps)
+            updates[column] = resolve_metadata_id(column, value, metadata_id_maps)
     if not updates:
         return record
     if isinstance(record, BaseModel):

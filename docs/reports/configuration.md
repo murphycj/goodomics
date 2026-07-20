@@ -247,7 +247,7 @@ reported in diagnostics.
 
 ## Visualizations
 
-The server catalog currently defines:
+The server currently defines:
 
 | Visualization | Main constraint |
 | --- | --- |
@@ -261,8 +261,8 @@ The server catalog currently defines:
 | `boxplot` | Numeric values, optionally grouped for comparison |
 | `pie`, `donut` | Exactly one series |
 
-Clients should fetch `GET /api/v1/insights/catalog` rather than duplicating
-these rules. The catalog also contains starter templates, grain descriptions,
+Clients should fetch `GET /api/v1/insights/capabilities` rather than duplicating
+these rules. The capability response also contains starter templates, grain descriptions,
 linkers, result policies, and shared validation messages.
 
 ## Result-size policy

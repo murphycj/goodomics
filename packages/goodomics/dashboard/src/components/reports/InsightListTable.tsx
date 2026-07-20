@@ -14,7 +14,7 @@ import {
 } from "../ui";
 import { isRecord } from "./reportUtils";
 
-type Store = "catalog" | "analytics";
+type Store = "metadata" | "analytics";
 
 /** Reusable table for browsing insights and optionally adding them to a report. */
 export function InsightListTable({
@@ -124,13 +124,13 @@ export function InsightListTable({
 function parseSource(value: unknown): { store: Store; table: string } {
   if (isRecord(value)) {
     return {
-      store: value.store === "catalog" ? "catalog" : "analytics",
+      store: value.store === "metadata" ? "metadata" : "analytics",
       table: typeof value.table === "string" ? value.table : "",
     };
   }
   if (typeof value === "string" && value.includes(".")) {
     const [store, table] = value.split(".", 2);
-    return { store: store === "catalog" ? "catalog" : "analytics", table };
+    return { store: store === "metadata" ? "metadata" : "analytics", table };
   }
   return { store: "analytics", table: typeof value === "string" ? value : "" };
 }

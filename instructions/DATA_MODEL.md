@@ -18,7 +18,7 @@ The guiding identity rule:
   relationships.
 - Stable public labels such as `sample_id`, `run_id`, `analysis_type_id`,
   `method_id`, `data_contract_id`, and `run_contract_id` are indexed labels.
-- DuckDB fact tables use SQL-owned integer IDs for catalog dimensions.
+- DuckDB fact tables use SQL-owned integer IDs for shared dimensions.
 - API, SDK, CLI, parser, and MCP boundaries accept stable labels and resolve
   them before analytical writes.
 - User/API/ingest boundaries may accept readable labels, then resolve them to
@@ -360,13 +360,13 @@ should generally be `run_sample_id` based.
 
 ### `analysis_types`
 
-Controlled catalog with stable `analysis_type_id`, display name, description,
+Controlled definitions with stable `analysis_type_id`, display name, description,
 optional project ownership, and metadata. Ingest boundaries reject unknown
 free-text values instead of creating spelling or punctuation variants.
 
 ### `analysis_methods`
 
-Catalog with stable `method_id`, name, `method_kind`, description, optional
+Definitions with stable `method_id`, name, `method_kind`, description, optional
 project ownership, and metadata. Supported method kinds are `workflow`, `tool`,
 `algorithm`, `notebook`, `benchmark`, `script`, and `importer`.
 
@@ -401,7 +401,7 @@ identity once in DuckDB metadata and keep `project_id` in the SQL metadata store
 Dimension tables do not always need contract identity.
 
 The analytical store is modular by design. Do not force every ingested result
-into one universal table. Use a small catalog of reusable biological data
+into one universal table. Use a small set of reusable biological data
 shapes, and add derived layouts only for hot query paths.
 
 | Shape                  | Purpose                                                          | Examples                                                                     |
@@ -472,7 +472,7 @@ it serves a named UI, SDK, MCP, report, or notebook access path.
 
 ### `data_contract_fields`
 
-SQL-side field catalog for queryable metrics, clinical attributes, metadata
+SQL-side field definitions for queryable metrics, clinical attributes, metadata
 facets, and other user-facing fields inside a data contract.
 
 `data_contracts` describe a logical dataset. `data_contract_fields` describe the

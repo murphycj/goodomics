@@ -61,7 +61,7 @@ result.
 ## Metadata versus analytical values
 
 Use the metadata store for identity and provenance. Examples include a run's
-status, its method version, a sample's stable name, the contract catalog, and a
+status, its method version, a sample's stable name, a contract definition, and a
 saved report layout. These records are small, relational, and frequently
 created or edited individually.
 
@@ -111,7 +111,7 @@ An ingest or SDK run normally produces the following chain:
 3. It registers the stable data contracts and fields emitted by the source.
 4. It records a run-contract occurrence and per-sample availability.
 5. It writes measurements or payloads to the appropriate DuckDB tables.
-6. The insight builder lists contracts and fields from the metadata catalog.
+6. The insight builder lists registered data contracts and field definitions.
 7. At execution time, the result resolver selects exact occurrences and the
    insight compiler queries DuckDB.
 

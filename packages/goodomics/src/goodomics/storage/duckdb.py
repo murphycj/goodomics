@@ -443,7 +443,7 @@ class DuckDBDimension:
             """
 
 
-CATALOG_ID_COLUMNS = frozenset(
+METADATA_ID_COLUMNS = frozenset(
     {
         "project_id",
         "data_contract_id",
@@ -504,8 +504,8 @@ class IntegerKeyedTableDefinition:
     dimensions: Mapping[str, DuckDBDimension]
     """Public columns resolved through dimension tables."""
 
-    catalog_columns: frozenset[str] = frozenset()
-    """Public columns already resolved to SQL integer catalog IDs before write."""
+    metadata_columns: frozenset[str] = frozenset()
+    """Public columns already resolved to SQL integer metadata IDs before write."""
 
     @property
     def physical_columns(self) -> tuple[str, ...]:
@@ -541,7 +541,7 @@ class IntegerKeyedTableDefinition:
 
     def _physical_column_sql(self, public_column: str) -> str:
         dimension = self.dimensions.get(public_column)
-        if dimension is not None or public_column in self.catalog_columns:
+        if dimension is not None or public_column in self.metadata_columns:
             physical_column = (
                 dimension.physical_column if dimension is not None else public_column
             )
@@ -586,7 +586,7 @@ class IntegerKeyedTableDefinition:
     def delete_run(self, connection: duckdb.DuckDBPyConnection, run_id: str) -> None:
         """Delete rows for one run from this integer-keyed table."""
 
-        if "run_id" in self.catalog_columns:
+        if "run_id" in self.metadata_columns:
             connection.execute(
                 f"""
                 DELETE FROM {self.table_name}
@@ -619,8 +619,8 @@ def _integer_id_dimensions(*columns: str) -> dict[str, DuckDBDimension]:
     }
 
 
-def _catalog_id_columns(*columns: str) -> frozenset[str]:
-    return frozenset(column for column in columns if column in CATALOG_ID_COLUMNS)
+def _metadata_id_columns(*columns: str) -> frozenset[str]:
+    return frozenset(column for column in columns if column in METADATA_ID_COLUMNS)
 
 
 INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
@@ -628,7 +628,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
         table_name=table,
         serializer=SERIALIZERS_BY_TABLE[table],
         dimensions=_integer_id_dimensions(*columns),
-        catalog_columns=_catalog_id_columns(*columns),
+        metadata_columns=_metadata_id_columns(*columns),
     )
     for table, columns in {
         "entity_attributes": (
@@ -1793,20 +1793,20 @@ def _physical_storage_row(
                 physical.append(raw)
             else:
                 physical.append(dimension_maps[column].get(str(raw)))
-        elif column in integer_table.catalog_columns:
-            physical.append(_catalog_storage_value(column, values.get(column)))
+        elif column in integer_table.metadata_columns:
+            physical.append(_metadata_storage_value(column, values.get(column)))
         else:
             physical.append(_to_db_value(values.get(column)))
     return tuple(physical)
 
 
-def _catalog_storage_value(column: str, value: Any) -> int | None:
+def _metadata_storage_value(column: str, value: Any) -> int | None:
     value = _to_db_value(value)
     if value is None or isinstance(value, int):
         return value
     raise ValueError(
         f"Expected integer SQL metadata id for {column}, got {value!r}. "
-        "Resolve catalog IDs before writing analytics rows to DuckDB."
+        "Resolve metadata IDs before writing analytics rows to DuckDB."
     )
 
 
@@ -1815,9 +1815,9 @@ def _stage_delete_value(
     column: str,
     value: Any,
 ) -> Any:
-    if column not in integer_table.catalog_columns:
+    if column not in integer_table.metadata_columns:
         return value
-    return _catalog_storage_value(column, value)
+    return _metadata_storage_value(column, value)
 
 
 def _storage_select_column(
@@ -1830,7 +1830,7 @@ def _storage_select_column(
     dimension = integer_table.dimensions.get(column)
     if dimension is not None:
         return f"dim_{index}.{_quote_identifier(dimension.id_column)}"
-    if column in integer_table.catalog_columns:
+    if column in integer_table.metadata_columns:
         stage_column = f"{source_alias}.{_quote_identifier(column)}"
         return f"CAST({stage_column} AS BIGINT)"
     return f"{source_alias}.{_quote_identifier(column)}"
@@ -1874,7 +1874,7 @@ def _delete_unique_predicate(
         stored_column = f"stored.{_quote_identifier(dimension.physical_column)}"
         dimension_column = f"dim_{index}.{_quote_identifier(dimension.id_column)}"
         return f"{stored_column} IS NOT DISTINCT FROM {dimension_column}"
-    if column in integer_table.catalog_columns:
+    if column in integer_table.metadata_columns:
         stored_column = f"stored.{_quote_identifier(column)}"
         stage_column = f"stage.{_quote_identifier(column)}"
         resolved_column = f"CAST({stage_column} AS BIGINT)"

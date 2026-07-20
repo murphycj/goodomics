@@ -586,7 +586,7 @@ def _users_create(
     settings = _load_user_management_settings(config)
 
     async def create() -> None:
-        """Persist the user within an initialized catalog lifecycle."""
+        """Persist the user using an initialized metadata store."""
 
         async with initialized_store(database_url or settings.database_url) as store:
             async with store.session() as session:
@@ -730,7 +730,7 @@ def users_disable(
     settings = _load_user_management_settings(config)
 
     async def disable() -> None:
-        """Disable the user within an initialized catalog lifecycle."""
+        """Disable the user using an initialized metadata store."""
 
         async with initialized_store(database_url or settings.database_url) as store:
             async with store.session() as session:

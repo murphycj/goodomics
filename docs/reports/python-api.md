@@ -27,7 +27,7 @@ and analytical storage use the intended project.
 
 ## Discover contracts and fields
 
-Do not guess field IDs. Ask the contract catalog which values are available:
+Do not guess field IDs. Ask the contracts API which values are available:
 
 ```python
 contracts = client.get(
@@ -150,7 +150,7 @@ than producing a misleading unmatched point.
 
 ## Validate before execution
 
-Use the shared validator to normalize defaults and catch catalog-level errors:
+Use the shared validator to normalize defaults and catch config errors:
 
 ```python
 validation = client.post(

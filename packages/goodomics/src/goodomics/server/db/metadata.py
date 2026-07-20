@@ -46,7 +46,7 @@ from goodomics.storage.sqlalchemy import (
 
 
 @dataclass(frozen=True)
-class CatalogTable:
+class MetadataTable:
     """Server exposure policy for one SQL metadata table."""
 
     model: type[SQLModel]
@@ -58,7 +58,7 @@ class CatalogTable:
 def _table_name(model: type[SQLModel]) -> str:
     table_name = getattr(model, "__tablename__", None)
     if not isinstance(table_name, str):
-        raise RuntimeError(f"Catalog model has no __tablename__: {model!r}")
+        raise RuntimeError(f"Metadata model has no __tablename__: {model!r}")
     return table_name
 
 
@@ -68,10 +68,10 @@ def _editable(*fields: str) -> frozenset[str]:
 
 # The registry is explicit about which SQLModel classes the server exposes, but
 # derives table-name keys from each model to avoid string/model drift.
-CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
+METADATA_TABLE_REGISTRY: dict[str, MetadataTable] = {
     _table_name(entry.model): entry
     for entry in (
-        CatalogTable(
+        MetadataTable(
             ProjectRecord,
             "project_id",
             queryable=True,
@@ -83,61 +83,61 @@ CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
                 "metadata_json",
             ),
         ),
-        CatalogTable(SubjectRecord, "subject_id", queryable=True),
-        CatalogTable(
+        MetadataTable(SubjectRecord, "subject_id", queryable=True),
+        MetadataTable(
             SampleRecord,
             "sample_id",
             queryable=True,
             editable_fields=_editable("sample_name", "metadata_json"),
         ),
-        CatalogTable(
+        MetadataTable(
             RunRecord,
             "run_id",
             queryable=True,
             editable_fields=_editable("project", "method_version", "status"),
         ),
-        CatalogTable(AnalysisTypeRecord, "analysis_type_id", queryable=True),
-        CatalogTable(AnalysisMethodRecord, "method_id", queryable=True),
-        CatalogTable(RunSampleRecord, "run_sample_id", queryable=True),
-        CatalogTable(RunRelationshipRecord, "id", queryable=True),
-        CatalogTable(DataImportRecord, "data_import_id", queryable=True),
-        CatalogTable(DataContractRecord, "data_contract_id", queryable=True),
-        CatalogTable(DataContractAnalysisTypeRecord, "id", queryable=True),
-        CatalogTable(RunContractRecord, "run_contract_id", queryable=True),
-        CatalogTable(RunContractSampleRecord, "id", queryable=True),
-        CatalogTable(DataContractFieldRecord, "id", queryable=True),
-        CatalogTable(
+        MetadataTable(AnalysisTypeRecord, "analysis_type_id", queryable=True),
+        MetadataTable(AnalysisMethodRecord, "method_id", queryable=True),
+        MetadataTable(RunSampleRecord, "run_sample_id", queryable=True),
+        MetadataTable(RunRelationshipRecord, "id", queryable=True),
+        MetadataTable(DataImportRecord, "data_import_id", queryable=True),
+        MetadataTable(DataContractRecord, "data_contract_id", queryable=True),
+        MetadataTable(DataContractAnalysisTypeRecord, "id", queryable=True),
+        MetadataTable(RunContractRecord, "run_contract_id", queryable=True),
+        MetadataTable(RunContractSampleRecord, "id", queryable=True),
+        MetadataTable(DataContractFieldRecord, "id", queryable=True),
+        MetadataTable(
             FileRecord,
             "file_id",
             queryable=True,
             editable_fields=_editable("file_role", "path", "uri", "metadata_json"),
         ),
-        CatalogTable(FileLinkRecord, "id", queryable=True),
-        CatalogTable(SampleGroupRecord, "sample_group_id", queryable=True),
-        CatalogTable(SampleGroupMemberRecord, "id", queryable=True),
-        CatalogTable(QCDecisionRecord, "id", queryable=True),
-        CatalogTable(
+        MetadataTable(FileLinkRecord, "id", queryable=True),
+        MetadataTable(SampleGroupRecord, "sample_group_id", queryable=True),
+        MetadataTable(SampleGroupMemberRecord, "id", queryable=True),
+        MetadataTable(QCDecisionRecord, "id", queryable=True),
+        MetadataTable(
             InsightRecord,
             "insight_id",
             queryable=True,
             editable_fields=_editable("name", "description", "config"),
         ),
-        CatalogTable(InsightRevisionRecord, "id"),
-        CatalogTable(
+        MetadataTable(InsightRevisionRecord, "id"),
+        MetadataTable(
             ReportRecord,
             "report_id",
             queryable=True,
             editable_fields=_editable("name", "description", "config"),
         ),
-        CatalogTable(ReportRevisionRecord, "id"),
-        CatalogTable(
+        MetadataTable(ReportRevisionRecord, "id"),
+        MetadataTable(
             RenderedReportRecord,
             "rendered_report_id",
             editable_fields=_editable("title"),
         ),
-        CatalogTable(InsightResultCacheRecord, "cache_id"),
-        CatalogTable(ReportResultCacheRecord, "cache_id"),
-        CatalogTable(
+        MetadataTable(InsightResultCacheRecord, "cache_id"),
+        MetadataTable(ReportResultCacheRecord, "cache_id"),
+        MetadataTable(
             QCPolicyRecord,
             "policy_id",
             editable_fields=_editable("name", "thresholds"),
@@ -145,22 +145,22 @@ CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
     )
 }
 
-# API routes use the broad catalog table set for browsing database contents.
-CATALOG_TABLES: dict[str, tuple[type[SQLModel], str]] = {
+# API routes use the broad metadata table set for browsing database contents.
+METADATA_TABLES: dict[str, tuple[type[SQLModel], str]] = {
     name: (entry.model, entry.row_id_field)
-    for name, entry in CATALOG_TABLE_REGISTRY.items()
+    for name, entry in METADATA_TABLE_REGISTRY.items()
 }
 
 # Insight/report builder queries use a narrower allowlist so internal cache and
 # revision tables are not exposed as normal analytical sources.
-CATALOG_MODELS: dict[str, type[SQLModel]] = {
+METADATA_MODELS: dict[str, type[SQLModel]] = {
     name: entry.model
-    for name, entry in CATALOG_TABLE_REGISTRY.items()
+    for name, entry in METADATA_TABLE_REGISTRY.items()
     if entry.queryable
 }
 
 EDITABLE_TABLES: dict[str, tuple[type[SQLModel], str, set[str]]] = {
     name: (entry.model, entry.row_id_field, set(entry.editable_fields))
-    for name, entry in CATALOG_TABLE_REGISTRY.items()
+    for name, entry in METADATA_TABLE_REGISTRY.items()
     if entry.editable_fields
 }

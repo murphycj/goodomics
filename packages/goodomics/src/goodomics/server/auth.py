@@ -131,7 +131,7 @@ class Principal:
     """Stable public user identifier for a user principal."""
 
     user_pk: int | None = None
-    """Internal catalog primary key for authorization queries."""
+    """Internal metadata primary key for authorization queries."""
 
     email: str | None = None
     """Normalized email associated with a user principal."""

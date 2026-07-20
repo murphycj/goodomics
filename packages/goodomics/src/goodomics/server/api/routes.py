@@ -2,13 +2,13 @@
 
 This module owns the HTTP boundary for the dashboard and local server. Route
 handlers validate request models, enforce project scoping, delegate analytical
-work to the catalog/DuckDB stores, and translate internal SQLModel records into
+work to the metadata/DuckDB stores, and translate internal SQLModel records into
 JSON-ready API shapes.
 
 The lower helpers intentionally keep database details close to the routes that
 need them: public IDs are resolved from internal integer keys, project-specific
 analytics stores are selected, and database-preview endpoints are constrained by
-the shared catalog registry.
+the shared metadata registry.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ from goodomics.server.auth import (
     require_project_permission,
     seed_project_roles,
 )
-from goodomics.server.db.catalog import CATALOG_TABLES, EDITABLE_TABLES
+from goodomics.server.db.metadata import EDITABLE_TABLES, METADATA_TABLES
 from goodomics.server.db.models import (
     InsightRecord,
     InsightResultCacheRecord,
@@ -76,7 +76,7 @@ from goodomics.server.db.models import (
     ReportResultCacheRecord,
     ReportRevisionRecord,
 )
-from goodomics.server.insight_catalog import insight_catalog
+from goodomics.server.insight_capabilities import insight_capabilities
 from goodomics.server.insights import (
     execute_insight,
     execute_report,
@@ -263,7 +263,7 @@ class SearchResultRead(BaseModel):
 
 
 class FileRead(BaseModel):
-    """File metadata plus the catalog link explaining why it is in scope."""
+    """File metadata plus the metadata link explaining why it is in scope."""
 
     file_id: str
     project_id: str | None = None
@@ -415,7 +415,7 @@ class InsightValidationRead(BaseModel):
     messages: list[dict[str, JsonValue]]
     normalized_config: dict[str, JsonValue]
     explanation: str
-    catalog_version: int = 1
+    capabilities_version: int = 1
 
 
 class SampleGroupRead(BaseModel):
@@ -520,10 +520,10 @@ class QCPolicyRead(BaseModel):
 
 
 class DatabaseTableRead(BaseModel):
-    """Summary row for a catalog or analytics table in the database browser."""
+    """Summary row for a metadata or analytics table in the database browser."""
 
     name: str
-    store: str = "catalog"
+    store: str = "metadata"
     rows: int = 0
     columns: list[str] = Field(default_factory=list)
     editable: bool = False
@@ -650,7 +650,7 @@ class DatabaseSummaryRead(BaseModel):
     total_samples: int
     total_scalar_metrics: int
     total_payloads: int
-    control_tables: list[TableCountRead]
+    metadata_tables: list[TableCountRead]
     analytics_tables: list[TableCountRead]
 
 
@@ -937,7 +937,7 @@ async def upload_project_file(
 
 @router.delete("/projects/{project_id}/files/{file_id}", status_code=204)
 async def delete_project_file(project_id: str, file_id: str, request: Request) -> None:
-    """Delete a managed project file after removing its final catalog link."""
+    """Delete a managed project file after removing its final metadata link."""
 
     project = await _require_project(request, project_id)
 
@@ -1400,7 +1400,7 @@ async def create_run(payload: RunCreate, request: Request) -> Run:
             for sample in payload.samples
         ],
     )
-    await request.app.state.store.replace_run_catalog(
+    await request.app.state.store.replace_run_metadata(
         run,
         analysis_types=[resolve_analysis_type(payload.analysis_type_id)],
         analysis_methods=[
@@ -1850,7 +1850,7 @@ async def _file_content_response(
     if row.path is None:
         raise HTTPException(status_code=404, detail="Stored file not found")
 
-    # Only serve files whose catalog row points at an existing local file.
+    # Only serve files whose metadata row points at an existing local file.
     path = Path(row.path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file not found")
@@ -1885,11 +1885,11 @@ async def list_insights(
     return [_saved_insight_read(row) for row in rows]
 
 
-@router.get("/insights/catalog")
-async def get_insight_catalog() -> dict[str, JsonValue]:
-    """Return the server-owned insight/report builder catalog."""
+@router.get("/insights/capabilities")
+async def get_insight_capabilities() -> dict[str, JsonValue]:
+    """Return the server-owned insight/report builder capabilities."""
 
-    return insight_catalog()
+    return insight_capabilities()
 
 
 @router.post("/insights/validate", response_model=InsightValidationRead)
@@ -2757,22 +2757,22 @@ async def list_database_tables(
     request: Request,
     project_id: str | None = Query(default=None),
 ) -> list[DatabaseTableRead]:
-    """List catalog and analytics tables available to the database browser."""
+    """List metadata and analytics tables available to the database browser."""
 
     if project_id is not None:
         await _require_project(request, project_id)
-    catalog_counts = await _control_table_counts(request, project_id=project_id)
+    metadata_counts = await _metadata_table_counts(request, project_id=project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
     analytics_counts = analytics_store.row_counts()
     return [
         DatabaseTableRead(
             name=name,
-            store="catalog",
-            rows=catalog_counts.get(name, 0),
-            columns=_catalog_columns(model),
+            store="metadata",
+            rows=metadata_counts.get(name, 0),
+            columns=_metadata_columns(model),
             editable=name in EDITABLE_TABLES,
         )
-        for name, (model, _) in sorted(CATALOG_TABLES.items())
+        for name, (model, _) in sorted(METADATA_TABLES.items())
     ] + [
         DatabaseTableRead(
             name=name,
@@ -2794,20 +2794,20 @@ async def get_database_summary(
 
     if project_id is not None:
         await _require_project(request, project_id)
-    control_counts = await _control_table_counts(request, project_id=project_id)
+    metadata_counts = await _metadata_table_counts(request, project_id=project_id)
     analytics_store = _analytics_store_for_project(request, project_id)
     analytics_counts = analytics_store.row_counts()
     return DatabaseSummaryRead(
         sqlite_size_bytes=_sqlite_size_bytes(request.app.state.settings.database_url),
         duckdb_size_bytes=analytics_store.database_size_bytes(),
         file_size_bytes=_path_size(Path(request.app.state.settings.file_root)),
-        total_runs=control_counts.get("runs", 0),
-        total_samples=control_counts.get("samples", 0),
+        total_runs=metadata_counts.get("runs", 0),
+        total_samples=metadata_counts.get("samples", 0),
         total_scalar_metrics=analytics_counts.get("sample_metrics", 0),
         total_payloads=analytics_counts.get("result_payloads", 0),
-        control_tables=[
+        metadata_tables=[
             TableCountRead(name=name, rows=count)
-            for name, count in sorted(control_counts.items())
+            for name, count in sorted(metadata_counts.items())
         ],
         analytics_tables=[
             TableCountRead(name=name, rows=count)
@@ -2818,7 +2818,7 @@ async def get_database_summary(
 
 @router.get("/database/tables/{table_name}/rows")
 async def list_database_rows(table_name: str, request: Request) -> list[dict[str, Any]]:
-    """List rows from an editable catalog table."""
+    """List rows from an editable metadata table."""
 
     model, _, _ = _editable_table(table_name)
     rows = await _list_table(request, model)
@@ -2839,12 +2839,12 @@ async def preview_database_table(
     sort_by: str | None = Query(default=None),
     sort_direction: str = Query(default="asc", pattern="^(asc|desc)$"),
 ) -> DatabaseTablePageRead:
-    """Preview paginated rows from a catalog or analytics table."""
+    """Preview paginated rows from a metadata or analytics table."""
 
     if project_id is not None:
         await _require_project(request, project_id)
-    if store == "catalog":
-        return await _catalog_table_page(
+    if store == "metadata":
+        return await _metadata_table_page(
             request,
             table_name,
             project_id=project_id,
@@ -2887,7 +2887,7 @@ async def preview_database_table(
 async def patch_database_row(
     table_name: str, row_id: str, payload: DatabaseRowPatch, request: Request
 ) -> dict[str, Any]:
-    """Patch one row in a registry-approved editable catalog table."""
+    """Patch one row in a registry-approved editable metadata table."""
 
     model, primary_key, allowed = _editable_table(table_name)
     disallowed = set(payload.values) - allowed
@@ -3080,7 +3080,7 @@ async def _sample_group_read(
     member_count: int | None = None,
     project_id: str | None = None,
 ) -> SampleGroupRead:
-    """Convert a sample-group catalog row into a dashboard/API response."""
+    """Convert a sample-group metadata row into a dashboard/API response."""
 
     row_id = int(row.id or 0)
     count = (
@@ -3541,7 +3541,7 @@ async def _get_run_record(request: Request, run_id: str) -> RunRecord:
 async def _get_project_run_record(
     request: Request, project_id: str, run_id: str
 ) -> RunRecord:
-    """Return a run catalog row after checking project ownership."""
+    """Return a run metadata row after checking project ownership."""
 
     project = await _require_project(request, project_id)
     row = await _get_run_record(request, run_id)
@@ -3867,7 +3867,7 @@ async def _get_sample_run_link(
     sample_id: str,
     run_id: str,
 ) -> tuple[RunRecord, RunSampleRecord]:
-    """Return the catalog link proving a sample belongs to a run."""
+    """Return the metadata link proving a sample belongs to a run."""
 
     project = await get_record_by_field(
         session, ProjectRecord, ProjectRecord.project_id, project_id
@@ -3952,7 +3952,7 @@ async def _list_runs(
 
 
 async def _run_from_row_public(session: AsyncSession, row: RunRecord) -> Run:
-    """Convert a run catalog row into the public SDK/API run model."""
+    """Convert a run metadata row into the public SDK/API run model."""
 
     return Run(
         run_id=row.run_id,
@@ -3991,7 +3991,7 @@ async def _sample_from_row_public(
     session: AsyncSession,
     row: SampleRecord,
 ) -> Sample:
-    """Convert a sample catalog row into the public SDK/API sample model."""
+    """Convert a sample metadata row into the public SDK/API sample model."""
 
     metadata_value = row.metadata_json
     metadata_dict = metadata_value if isinstance(metadata_value, dict) else {}
@@ -4223,7 +4223,7 @@ async def _list_table(request: Request, model: type[SQLModel]) -> list[SQLModel]
         return list((await session.exec(select(model))).all())
 
 
-async def _catalog_table_page(
+async def _metadata_table_page(
     request: Request,
     table_name: str,
     *,
@@ -4233,10 +4233,10 @@ async def _catalog_table_page(
     sort_by: str | None,
     sort_direction: str,
 ) -> DatabaseTablePageRead:
-    """Preview one catalog table with safe sorting and project scoping."""
+    """Preview one metadata table with safe sorting and project scoping."""
 
-    model, primary_key = _catalog_table(table_name)
-    columns = _catalog_columns(model)
+    model, primary_key = _metadata_table(table_name)
+    columns = _metadata_columns(model)
     order_column_name = sort_by or primary_key
     if order_column_name not in model.model_fields:
         raise HTTPException(
@@ -4276,7 +4276,7 @@ async def _catalog_table_page(
         rows = list((await session.exec(row_statement)).all())
     return DatabaseTablePageRead(
         name=table_name,
-        store="catalog",
+        store="metadata",
         columns=columns,
         rows=cast(list[dict[str, JsonValue]], [_jsonable_row(row) for row in rows]),
         total=total,
@@ -4287,15 +4287,15 @@ async def _catalog_table_page(
     )
 
 
-async def _control_table_counts(
+async def _metadata_table_counts(
     request: Request, project_id: str | None = None
 ) -> dict[str, int]:
-    """Count rows in each registered catalog table."""
+    """Count rows in each registered metadata table."""
     async with _session_context(request) as session:
         counts: dict[str, int] = {}
         project_pk = await _project_pk(request, project_id, session=session)
         project_run_ids = await _project_run_ids(request, project_id, session=session)
-        for name, (model, _) in CATALOG_TABLES.items():
+        for name, (model, _) in METADATA_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
             # Count with the same scoping rules used by table previews so the
@@ -4449,17 +4449,17 @@ def _editable_table(table_name: str) -> tuple[type[SQLModel], str, set[str]]:
     return table_config
 
 
-def _catalog_table(table_name: str) -> tuple[type[SQLModel], str]:
-    """Return catalog browse policy for a table or raise a 404 HTTP error."""
+def _metadata_table(table_name: str) -> tuple[type[SQLModel], str]:
+    """Return metadata browse policy for a table or raise a 404 HTTP error."""
 
-    table_config = CATALOG_TABLES.get(table_name)
+    table_config = METADATA_TABLES.get(table_name)
     if table_config is None:
-        raise HTTPException(status_code=404, detail="Catalog table not found")
+        raise HTTPException(status_code=404, detail="Metadata table not found")
     return table_config
 
 
-def _catalog_columns(model: type[SQLModel]) -> list[str]:
-    """Return public column names for a SQLModel catalog model."""
+def _metadata_columns(model: type[SQLModel]) -> list[str]:
+    """Return public column names for a SQLModel metadata model."""
 
     return list(model.model_fields)
 
@@ -4565,7 +4565,7 @@ def _data_contract_read(
     fields: list[DataContractFieldRecord],
     compatible_analysis_type_ids: list[str] | None = None,
 ) -> DataContractRead:
-    """Convert a data contract catalog row into its API response model."""
+    """Convert a data contract definition row into its API response model."""
 
     field_reads = [_data_contract_field_read(field) for field in fields]
     if not field_reads:
@@ -4683,7 +4683,7 @@ def _synthetic_contract_fields(
 
 
 def _data_contract_field_read(field: DataContractFieldRecord) -> DataContractFieldRead:
-    """Convert a data contract field catalog row into its API response model."""
+    """Convert a data contract field definition into its API response model."""
 
     return DataContractFieldRead(
         field_id=field.field_id,

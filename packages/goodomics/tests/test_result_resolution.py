@@ -30,13 +30,13 @@ from sqlmodel import select
 def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
     tmp_path: Path,
 ) -> None:
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'catalog.db'}"
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'metadata.db'}"
 
-    async def initialize_catalog():
+    async def initialize_metadata():
         async with initialized_store(database_url) as store:
             return await store.ensure_project("resolver")
 
-    project = asyncio.run(initialize_catalog())
+    project = asyncio.run(initialize_metadata())
     now = datetime.now(UTC)
     runs = [
         _run("rna-old", project.project_id, "rna/workflow", "1", now),
@@ -110,9 +110,9 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
         ),
     ]
 
-    async def persist_catalog() -> None:
+    async def persist_metadata() -> None:
         async with initialized_store(database_url) as store:
-            await store.replace_runs_catalog(
+            await store.replace_runs_metadata(
                 runs,
                 analysis_types=[
                     resolve_analysis_type(RNA_SEQUENCING),
@@ -135,7 +135,7 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
                 run_contract_samples=availability,
             )
 
-    asyncio.run(persist_catalog())
+    asyncio.run(persist_metadata())
 
     async def resolve(scope: dict[str, object] | None = None):
         async with initialized_store(database_url) as store, store.session() as session:

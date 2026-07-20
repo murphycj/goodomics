@@ -37,9 +37,9 @@ from goodomics.storage.sqlalchemy import (
     FileLinkRecord,
     FileRecord,
     RunRecord,
+    SampleGroupMemberRecord,
+    SampleGroupRecord,
     SampleRecord,
-    SampleSetMemberRecord,
-    SampleSetRecord,
     initialized_store,
 )
 from sqlmodel import select
@@ -53,8 +53,8 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
@@ -68,8 +68,8 @@ def _run_pk(database_url: str, run_id: str) -> int:
 def _sample_pk(database_url: str, sample_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(
@@ -85,8 +85,8 @@ def _sample_pk(database_url: str, sample_id: str) -> int:
 def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(
@@ -108,7 +108,7 @@ def _external_cbioportal_fixture(name: str) -> Path:
     return study
 
 
-def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
+def test_parse_cbioportal_study_derives_metadata_objects(tmp_path: Path) -> None:
     study = write_cbioportal_fixture(tmp_path / "study")
 
     parsed = parse_cbioportal_study(
@@ -148,6 +148,15 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
         field.field_role == "attribute" and field.field_id == "sample:tmb"
         for field in parsed.data_contract_fields
     )
+    expression_field = next(
+        field
+        for field in parsed.data_contract_fields
+        if field.data_contract_id == CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS
+        and field.field_id == "expression"
+    )
+    assert expression_field.display_name == "Expression"
+    assert expression_field.primary_table == "feature_value_numeric"
+    assert expression_field.query_ref_json["value_column"] == "value"
     assert CBIOPORTAL_STRUCTURAL_VARIANTS in contract_ids
     assert CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE in contract_ids
     assert CBIOPORTAL_GENE_PANEL_MATRIX in contract_ids
@@ -160,8 +169,8 @@ def test_parse_cbioportal_study_derives_control_objects(tmp_path: Path) -> None:
         and link.run_id is None
         for link in parsed.file_links
     )
-    assert parsed.sample_sets[0].name == "All samples"
-    assert {member.run_sample_id for member in parsed.sample_set_members} == {
+    assert parsed.sample_groups[0].name == "All samples"
+    assert {member.run_sample_id for member in parsed.sample_group_members} == {
         "run-cbio:S1:S1",
         "run-cbio:S2:S2",
     }
@@ -293,7 +302,7 @@ def test_parse_cbioportal_studies_reuse_semantic_contracts(tmp_path: Path) -> No
     }
 
 
-def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
+def test_ingest_cbioportal_writes_metadata_and_analytics(tmp_path: Path) -> None:
     study = write_cbioportal_fixture(tmp_path / "study")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
     analytics_path = tmp_path / "state" / "analytics.duckdb"
@@ -320,12 +329,12 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
     assert run.run_kind == "imported_result"
     assert run.data_import_id == "run-cbio"
 
-    async def load_catalog_counts() -> tuple[
+    async def load_metadata_counts() -> tuple[
         int, int, int, int, int, int, list[str], set[int | None]
     ]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             imports = (await session.exec(select(DataImportRecord))).all()
             runs = (
@@ -334,17 +343,17 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
             files = (await session.exec(select(FileRecord))).all()
             links = (await session.exec(select(FileLinkRecord))).all()
             contracts = (await session.exec(select(DataContractRecord))).all()
-            sample_sets = (await session.exec(select(SampleSetRecord))).all()
-            sample_set_members = (
-                await session.exec(select(SampleSetMemberRecord))
+            sample_groups = (await session.exec(select(SampleGroupRecord))).all()
+            sample_group_members = (
+                await session.exec(select(SampleGroupMemberRecord))
             ).all()
         return (
             len(imports),
             len(files),
             len(links),
             len(contracts),
-            len(sample_sets),
-            len(sample_set_members),
+            len(sample_groups),
+            len(sample_group_members),
             [row.run_id for row in runs],
             {link.data_import_id for link in links},
         )
@@ -354,19 +363,19 @@ def test_ingest_cbioportal_writes_control_and_analytics(tmp_path: Path) -> None:
         files_count,
         links_count,
         contracts_count,
-        sample_sets_count,
-        sample_set_members_count,
+        sample_groups_count,
+        sample_group_members_count,
         run_ids,
         linked_import_ids,
-    ) = asyncio.run(load_catalog_counts())
+    ) = asyncio.run(load_metadata_counts())
     assert imports_count == 1
     assert run_ids == ["run-cbio", "run-cbio:S1", "run-cbio:S2"]
     assert linked_import_ids == {1}
     assert files_count > 0
     assert links_count >= files_count
     assert contracts_count == result.contracts_ingested
-    assert sample_sets_count == 1
-    assert sample_set_members_count == 2
+    assert sample_groups_count == 1
+    assert sample_group_members_count == 2
 
     analytics = DuckDBAnalyticsStore(analytics_path)
     counts = analytics.row_counts()
@@ -494,8 +503,8 @@ def test_cbioportal_run_files_include_inherited_import_files(
 
     async def load_direct_run_links() -> list[FileLinkRecord]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             return list(
                 (
@@ -555,8 +564,8 @@ def test_ingest_cbioportal_without_run_id_writes_generated_sample_runs(
 
     async def load_runs() -> list[str]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             return [
                 row.run_id

@@ -19,7 +19,7 @@ The builder follows this conceptual workflow:
 6. **View as**: choose a compatible table, metric, or chart.
 
 The dashboard, API, report renderer, and AI-assisted drafting use the same
-server-owned catalog and config grammar. Chart configs describe Goodomics
+server-owned capabilities and config grammar. Chart configs describe Goodomics
 intent; ECharts options are compiled output rather than the primary authoring
 format.
 

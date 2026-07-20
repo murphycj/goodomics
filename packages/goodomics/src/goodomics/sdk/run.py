@@ -9,7 +9,7 @@ with run("my-run") as ctx:
     ctx.log_metric("S1", "pct_mapped", 97.2)
 ```
 
-The SDK buffers user calls in memory, then flushes them into the same catalog
+The SDK buffers user calls in memory, then flushes them into the same metadata
 and analytics storage path used by parser/ingest workflows. SQL stores durable
 entities and relationships; DuckDB stores metric observations.
 """
@@ -39,8 +39,8 @@ from goodomics.schemas.models import (
     UnresolvedAnalyticalRecord,
 )
 from goodomics.storage.analytics_resolution import (
-    resolve_analytics_batch_catalog_ids,
-    resolve_catalog_id,
+    resolve_analytics_batch_metadata_ids,
+    resolve_metadata_id,
 )
 from goodomics.storage.database import ensure_sqlite_parent, resolve_database_url
 
@@ -75,7 +75,7 @@ class GoodomicsRun:
 
     A ``GoodomicsRun`` buffers metrics and files while user code runs. Calling
     :meth:`flush`, or exiting a successful ``with run(...)`` block, writes the
-    run catalog records to SQL and metric observations to DuckDB.
+    run metadata records to SQL and metric observations to DuckDB.
 
     Field-level docstrings below document constructor arguments and dataclass
     attributes for API reference pages and editor hover. The class docstring
@@ -192,7 +192,7 @@ class GoodomicsRun:
         the path in memory so the public API shape is already available.
         """
 
-        # File logging is currently buffered for future catalog/file persistence.
+        # File logging is currently buffered for future metadata/file persistence.
         # Metrics are the only SDK payload written by flush() today.
         self.files.append(Path(path))
 
@@ -212,12 +212,12 @@ class GoodomicsRun:
 
         The returned rows still contain public labels like ``run_id`` and
         ``field_id``. :meth:`flush` resolves those labels to SQL-owned integer
-        IDs after it writes the catalog records.
+        IDs after it writes the metadata records.
         """
 
         # Build the unresolved DuckDB batch. "Unresolved" means rows still carry
         # public labels like run_id/sample_id/field_id; flush() resolves those
-        # labels to SQL-owned integer IDs after the catalog write.
+        # labels to SQL-owned integer IDs after the metadata write.
         resolved_run_id = run_id or self.name
         resolved_contract_id = data_contract_id or GOODOMICS_SDK_METRICS
         metrics: list[UnresolvedAnalyticalRecord] = []
@@ -284,21 +284,21 @@ class GoodomicsRun:
             await self._flush_with_store(store)
 
     async def _flush_with_store(self, store: Any) -> None:
-        """Write buffered catalog and analytics data using an initialized store."""
+        """Write buffered metadata and analytics data using an initialized store."""
 
         # These imports are intentionally local so importing goodomics.sdk.run
         # does not eagerly import DuckDB/SQLModel storage machinery for users who
         # only construct a run object or inspect SDK helpers.
         from goodomics.storage.duckdb import DuckDBAnalyticsStore
         from goodomics.storage.sqlalchemy import (
-            catalog_id_maps_from_records,
+            metadata_id_maps_from_records,
         )
 
         # ensure_project() returns the default project when self.project is None,
         # or creates/resolves the requested project otherwise.
         project = await store.ensure_project(self.project)
         run_id = self.name
-        # Derive sample catalog rows from logged sample-scoped metrics. Run-level
+        # Derive sample metadata rows from logged sample-scoped metrics. Run-level
         # metrics have sample_id=None and therefore do not create run_samples.
         sample_ids = sorted(
             {
@@ -340,7 +340,7 @@ class GoodomicsRun:
             name=self.method_id,
             method_kind=self.method_kind,
         )
-        catalog_run = Run(
+        metadata_run = Run(
             run_id=run_id,
             project_id=project.project_id,
             project=project.slug,
@@ -352,10 +352,10 @@ class GoodomicsRun:
             samples=samples,
             metadata_json={"source": "goodomics-sdk"},
         )
-        # Replace the catalog slice for this run so repeated SDK writes update
+        # Replace the metadata slice for this run so repeated SDK writes update
         # the run, samples/run_samples, contract, and field definitions together.
-        catalog_result = await store.replace_run_catalog(
-            catalog_run,
+        metadata_result = await store.replace_run_metadata(
+            metadata_run,
             analysis_types=[analysis_type],
             analysis_methods=[method],
             samples=samples,
@@ -398,30 +398,30 @@ class GoodomicsRun:
             # DuckDB owns the observation values themselves, keeping SDK metrics
             # on the same analytical path as parser and ingest metrics.
             #
-            # catalog_id_maps maps public labels like run_id and field_id to the
-            # integer IDs SQL assigned during replace_run_catalog().
-            catalog_id_maps = catalog_id_maps_from_records(catalog_result)
+            # metadata_id_maps maps public labels like run_id and field_id to the
+            # integer IDs SQL assigned during replace_run_metadata().
+            metadata_id_maps = metadata_id_maps_from_records(metadata_result)
             # Resolve every analytical row to those integer IDs before writing
             # to DuckDB. This keeps the analytical store aligned with the SQL
-            # catalog identity model.
-            resolved_batch = resolve_analytics_batch_catalog_ids(
+            # metadata identity model.
+            resolved_batch = resolve_analytics_batch_metadata_ids(
                 self.to_analytics_batch(
                     run_id=run_id,
                     data_contract_id=data_contract_id,
                 ),
-                catalog_id_maps,
+                metadata_id_maps,
             )
             # replace_run_data() deletes/replaces by the resolved integer run ID,
-            # not the public label, because DuckDB stores catalog IDs as ints.
-            resolved_duckdb_run_id = resolve_catalog_id(
-                "run_id", run_id, catalog_id_maps
+            # not the public label, because DuckDB stores metadata IDs as ints.
+            resolved_duckdb_run_id = resolve_metadata_id(
+                "run_id", run_id, metadata_id_maps
             )
             analytics_path = self._resolved_analytics_path(project.project_id)
             DuckDBAnalyticsStore(analytics_path).replace_run_data(
                 resolved_duckdb_run_id,
                 resolved_batch,
             )
-        # Mark flushed after all catalog/analytics writes complete successfully.
+        # Mark flushed after all metadata/analytics writes complete successfully.
         self._flushed = True
 
     def _resolved_analytics_path(self, project_id: str) -> Path:
@@ -492,7 +492,7 @@ def _metric_contract_fields(
                 metadata_json={"producer_tool": "goodomics-sdk"},
             ),
         )
-    # Deterministic ordering keeps catalog writes and tests stable.
+    # Deterministic ordering keeps metadata writes and tests stable.
     return [fields[key] for key in sorted(fields)]
 
 
@@ -517,7 +517,7 @@ def run(
         analysis_type_id: Controlled analysis type ID.
         method_id: Stable primary analysis method ID.
         method_version: Optional primary method version.
-        method_kind: Method catalog kind.
+        method_kind: Method category.
         database_url: Optional SQL metadata database URL override.
         analytics_path: Optional direct DuckDB analytics file override.
         auto_persist: Whether successful context-manager exit should call

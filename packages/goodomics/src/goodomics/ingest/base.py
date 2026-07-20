@@ -40,10 +40,10 @@ class AnalyticsBulkLoad(Protocol):
         """Write analytical records using an open DuckDB connection."""
         ...
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> AnalyticsBulkLoad:
-        """Return a bulk loader that writes SQL-owned catalog references as ints."""
+        """Return a bulk loader that writes SQL-owned metadata references as ints."""
         ...
 
 
@@ -54,16 +54,16 @@ class AnalyticsStagedLoad(Protocol):
         """Write staged analytical records using an open DuckDB connection."""
         ...
 
-    def resolve_catalog_ids(
-        self, catalog_id_maps: Mapping[str, Mapping[Any, int]]
+    def resolve_metadata_ids(
+        self, metadata_id_maps: Mapping[str, Mapping[Any, int]]
     ) -> AnalyticsStagedLoad:
-        """Return a staged loader that writes SQL-owned catalog references as ints."""
+        """Return a staged loader that writes SQL-owned metadata references as ints."""
         ...
 
 
 @dataclass
 class NormalizedIngestResult:
-    """Canonical parsed ingest payload spanning catalog and analytical records."""
+    """Canonical parsed ingest payload spanning metadata and analytical records."""
 
     run: Run
     runs: list[Run] = field(default_factory=list)

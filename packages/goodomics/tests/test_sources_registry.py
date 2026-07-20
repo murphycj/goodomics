@@ -36,8 +36,8 @@ def _scalar(row: tuple[Any, ...] | None) -> Any:
 def _run_pk(database_url: str, run_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(select(RunRecord).where(RunRecord.run_id == run_id))
@@ -51,8 +51,8 @@ def _run_pk(database_url: str, run_id: str) -> int:
 def _data_contract_pk(database_url: str, data_contract_id: str) -> int:
     async def load() -> int:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             row = (
                 await session.exec(
@@ -263,8 +263,8 @@ def test_tool_contract_reuse_preserves_existing_fields(tmp_path: Path) -> None:
 
     async def load_salmon_fields() -> set[str]:
         async with (
-            initialized_store(database_url) as catalog_store,
-            catalog_store.session() as session,
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
         ):
             contract = (
                 await session.exec(

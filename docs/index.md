@@ -27,7 +27,7 @@ Goodomics is useful in a few modes:
 - [Data model and storage](concepts/architecture.md): understand projects,
   runs, samples, contracts, SQL metadata, DuckDB analytics, and files.
 - [Data contracts and fields](concepts/data-contracts.md): understand the
-  semantic catalog and physical query routing.
+  semantic definitions and physical query routing.
 - [CLI](interfaces/cli.md): run reports and ingest outputs from the command
   line.
 - [Python SDK](interfaces/sdk.md): record runs, samples, metrics, and files from

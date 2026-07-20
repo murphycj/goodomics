@@ -44,7 +44,7 @@ const DEFAULT_COLUMN_WIDTH = 150;
 const LONG_COLUMN_WIDTH = 220;
 const PAGE_SIZES = [25, 50, 100, 250];
 const STORE_LABELS: Record<TableStore, string> = {
-  catalog: "Metadata tables",
+  metadata: "Metadata tables",
   analytics: "Analytical tables",
 };
 const COPY_FORMAT_LABELS = {
@@ -157,7 +157,7 @@ export function DatabasePage({ projectId }: { projectId: string }) {
     queryFn: () =>
       previewProjectDatabaseTable({
         projectId,
-        store: selected?.store ?? "catalog",
+        store: selected?.store ?? "metadata",
         table: selected?.name ?? "",
         limit: pageSize,
         offset,
@@ -500,7 +500,7 @@ function TableBrowser({
   const normalizedFilter = filter.trim().toLowerCase();
   return (
     <div className="mt-4 space-y-4 pb-4">
-      {(["catalog", "analytics"] as const).map((store) => {
+      {(["metadata", "analytics"] as const).map((store) => {
         const filtered = tables.filter(
           (table) =>
             table.store === store &&
