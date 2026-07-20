@@ -71,16 +71,16 @@ context:
 ```yaml
 context:
   kind: cohort
-  sample_set_id: production-rnaseq
+  sample_group_id: production-rnaseq
 ```
 
 Singular `sample_id` and plural `sample_ids` are both accepted. Cohort context
-accepts singular `sample_set_id` or plural `sample_set_ids`. Sample sets contain
+accepts singular `sample_group_id` or plural `sample_group_ids`. Sample groups contain
 run-sample membership, so they preserve the result occurrence represented by a
 cohort.
 
 An empty cohort context is unbounded; it does not imply a particular saved
-sample set.
+sample group.
 
 ## Contract query
 

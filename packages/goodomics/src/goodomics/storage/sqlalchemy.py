@@ -38,8 +38,8 @@ from goodomics.schemas.models import (
     RunRelationship,
     RunSample,
     Sample,
-    SampleSet,
-    SampleSetMember,
+    SampleGroup,
+    SampleGroupMember,
     Subject,
 )
 from goodomics.storage.database import create_async_database_engine
@@ -65,8 +65,8 @@ class CatalogWriteResult:
     data_contract_fields: list[DataContractFieldRecord]
     files: list[FileRecord]
     file_links: list[FileLinkRecord]
-    sample_sets: list[SampleSetRecord]
-    sample_set_members: list[SampleSetMemberRecord]
+    sample_groups: list[SampleGroupRecord]
+    sample_group_members: list[SampleGroupMemberRecord]
 
 
 # These SQLModel classes are persistence records, not the public Goodomics
@@ -363,11 +363,11 @@ class FileLinkRecord(SQLModel, table=True):
     link_role: str = Field(max_length=255)
 
 
-class SampleSetRecord(SQLModel, table=True):
-    __tablename__ = "sample_sets"
+class SampleGroupRecord(SQLModel, table=True):
+    __tablename__ = "sample_groups"
 
     id: int | None = Field(default=None, primary_key=True)
-    sample_set_id: str = Field(max_length=255, unique=True, index=True)
+    sample_group_id: str = Field(max_length=255, unique=True, index=True)
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
     kind: str = Field(default="cohort", max_length=64)
@@ -378,18 +378,18 @@ class SampleSetRecord(SQLModel, table=True):
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
-class SampleSetMemberRecord(SQLModel, table=True):
-    __tablename__ = "sample_set_members"
+class SampleGroupMemberRecord(SQLModel, table=True):
+    __tablename__ = "sample_group_members"
     __table_args__ = (
         UniqueConstraint(
-            "sample_set_id",
+            "sample_group_id",
             "run_sample_id",
-            name="uq_sample_set_members_sample_set_run_sample",
+            name="uq_sample_group_members_sample_group_run_sample",
         ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    sample_set_id: int = Field(foreign_key="sample_sets.id", index=True)
+    sample_group_id: int = Field(foreign_key="sample_groups.id", index=True)
     run_sample_id: int = Field(foreign_key="run_samples.id", index=True)
 
 
@@ -573,8 +573,8 @@ class SQLModelGoodomicsStore:
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
-        sample_sets: list[SampleSet] | None = None,
-        sample_set_members: list[SampleSetMember] | None = None,
+        sample_groups: list[SampleGroup] | None = None,
+        sample_group_members: list[SampleGroupMember] | None = None,
         session: AsyncSession | None = None,
     ) -> CatalogWriteResult:
         # Replace the SQL metadata rows for one run. Analytical metric
@@ -599,8 +599,8 @@ class SQLModelGoodomicsStore:
             data_contract_fields=data_contract_fields,
             files=files,
             file_links=normalized_links,
-            sample_sets=sample_sets,
-            sample_set_members=sample_set_members,
+            sample_groups=sample_groups,
+            sample_group_members=sample_group_members,
             session=session,
         )
 
@@ -622,8 +622,8 @@ class SQLModelGoodomicsStore:
         data_contract_fields: list[DataContractField] | None = None,
         files: list[FileAsset] | None = None,
         file_links: list[FileLink] | None = None,
-        sample_sets: list[SampleSet] | None = None,
-        sample_set_members: list[SampleSetMember] | None = None,
+        sample_groups: list[SampleGroup] | None = None,
+        sample_group_members: list[SampleGroupMember] | None = None,
         session: AsyncSession | None = None,
     ) -> CatalogWriteResult:
         # Bulk variant used by imports that produce multiple logical runs from
@@ -830,52 +830,56 @@ class SQLModelGoodomicsStore:
             session.add_all(file_link_rows)
             await session.flush()
 
-            set_ids = [sample_set.sample_set_id for sample_set in sample_sets or []]
-            if set_ids:
-                set_pks = (
+            group_ids = [
+                sample_group.sample_group_id for sample_group in sample_groups or []
+            ]
+            if group_ids:
+                group_pks = (
                     await session.exec(
-                        select(SampleSetRecord.id).where(
-                            cast(Any, SampleSetRecord.sample_set_id).in_(set_ids)
+                        select(SampleGroupRecord.id).where(
+                            cast(Any, SampleGroupRecord.sample_group_id).in_(group_ids)
                         )
                     )
                 ).all()
                 await session.exec(
-                    delete(SampleSetMemberRecord).where(
-                        cast(Any, SampleSetMemberRecord.sample_set_id).in_(set_pks)
+                    delete(SampleGroupMemberRecord).where(
+                        cast(Any, SampleGroupMemberRecord.sample_group_id).in_(
+                            group_pks
+                        )
                     )
                 )
                 await session.exec(
-                    delete(SampleSetRecord).where(
-                        cast(Any, SampleSetRecord.sample_set_id).in_(set_ids)
+                    delete(SampleGroupRecord).where(
+                        cast(Any, SampleGroupRecord.sample_group_id).in_(group_ids)
                     )
                 )
 
-            sample_set_rows = [
-                SampleSetRecord(
-                    sample_set_id=sample_set.sample_set_id,
+            sample_group_rows = [
+                SampleGroupRecord(
+                    sample_group_id=sample_group.sample_group_id,
                     project_id=project_pk,
-                    name=sample_set.name,
-                    kind=sample_set.kind,
-                    description=sample_set.description,
-                    definition_json=dict(sample_set.definition_json),
-                    created_at=sample_set.created_at,
-                    updated_at=sample_set.updated_at,
-                    metadata_json=dict(sample_set.metadata_json),
+                    name=sample_group.name,
+                    kind=sample_group.kind,
+                    description=sample_group.description,
+                    definition_json=dict(sample_group.definition_json),
+                    created_at=sample_group.created_at,
+                    updated_at=sample_group.updated_at,
+                    metadata_json=dict(sample_group.metadata_json),
                 )
-                for sample_set in sample_sets or []
+                for sample_group in sample_groups or []
             ]
-            session.add_all(sample_set_rows)
+            session.add_all(sample_group_rows)
             await session.flush()
-            sample_set_pk_by_label = _id_map(sample_set_rows, "sample_set_id")
+            sample_group_pk_by_label = _id_map(sample_group_rows, "sample_group_id")
 
-            sample_set_member_rows = [
-                SampleSetMemberRecord(
-                    sample_set_id=sample_set_pk_by_label[member.sample_set_id],
+            sample_group_member_rows = [
+                SampleGroupMemberRecord(
+                    sample_group_id=sample_group_pk_by_label[member.sample_group_id],
                     run_sample_id=run_sample_pk_by_label[member.run_sample_id],
                 )
-                for member in sample_set_members or []
+                for member in sample_group_members or []
             ]
-            session.add_all(sample_set_member_rows)
+            session.add_all(sample_group_member_rows)
             await session.flush()
 
             result = CatalogWriteResult(
@@ -901,8 +905,8 @@ class SQLModelGoodomicsStore:
                 data_contract_fields=_snapshot_records(contract_field_rows),
                 files=_snapshot_records(file_rows),
                 file_links=_snapshot_records(file_link_rows),
-                sample_sets=_snapshot_records(sample_set_rows),
-                sample_set_members=_snapshot_records(sample_set_member_rows),
+                sample_groups=_snapshot_records(sample_group_rows),
+                sample_group_members=_snapshot_records(sample_group_member_rows),
             )
             await session.commit()
         return result
@@ -1079,7 +1083,7 @@ def catalog_id_maps_from_records(
         "run_sample_id": _id_map(result.run_samples, "run_sample_id"),
         "sample_id": _id_map(result.samples, "sample_id"),
         "source_file_id": _id_map(result.files, "file_id"),
-        "sample_set_id": _id_map(result.sample_sets, "sample_set_id"),
+        "sample_group_id": _id_map(result.sample_groups, "sample_group_id"),
         "subject_id": _id_map(result.subjects, "subject_id"),
     }
 
@@ -1732,13 +1736,13 @@ async def _delete_run_scoped_catalog(
             select(FileLinkRecord.file_id).where(FileLinkRecord.run_id == run_pk)
         )
     ).all()
-    sample_set_ids: list[int] = []
+    sample_group_ids: list[int] = []
     if run_sample_ids:
-        sample_set_ids = list(
+        sample_group_ids = list(
             (
                 await session.exec(
-                    select(SampleSetMemberRecord.sample_set_id).where(
-                        cast(Any, SampleSetMemberRecord.run_sample_id).in_(
+                    select(SampleGroupMemberRecord.sample_group_id).where(
+                        cast(Any, SampleGroupMemberRecord.run_sample_id).in_(
                             list(run_sample_ids)
                         )
                     )
@@ -1788,15 +1792,15 @@ async def _delete_run_scoped_catalog(
         await session.exec(
             delete(FileRecord).where(cast(Any, FileRecord.id).in_(file_ids))
         )
-    if sample_set_ids:
+    if sample_group_ids:
         await session.exec(
-            delete(SampleSetMemberRecord).where(
-                SampleSetMemberRecord.sample_set_id.in_(list(sample_set_ids))
+            delete(SampleGroupMemberRecord).where(
+                SampleGroupMemberRecord.sample_group_id.in_(list(sample_group_ids))
             )
         )
         await session.exec(
-            delete(SampleSetRecord).where(
-                cast(Any, SampleSetRecord.id).in_(list(sample_set_ids))
+            delete(SampleGroupRecord).where(
+                cast(Any, SampleGroupRecord.id).in_(list(sample_group_ids))
             )
         )
 

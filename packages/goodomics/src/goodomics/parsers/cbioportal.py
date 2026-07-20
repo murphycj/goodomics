@@ -14,6 +14,7 @@ from goodomics.analysis import EXTERNAL_ONCOLOGY, analysis_method, resolve_analy
 from goodomics.contracts.cbioportal import (
     contract_for_meta as cbioportal_data_contract_for_meta,
 )
+from goodomics.contracts.registry import built_in_data_contract_fields_by_contract
 from goodomics.ingest.base import (
     AnalyticsBulkLoad,
     AnalyticsStagedLoad,
@@ -33,8 +34,8 @@ from goodomics.schemas.models import (
     RunContractSample,
     RunSample,
     Sample,
-    SampleSet,
-    SampleSetMember,
+    SampleGroup,
+    SampleGroupMember,
     Subject,
     UnresolvedAnalyticalRecord,
 )
@@ -95,8 +96,8 @@ class CbioPortalParseContext:
     data_contract_fields: dict[tuple[str, str], DataContractField] = field(
         default_factory=dict
     )
-    sample_sets: list[SampleSet] = field(default_factory=list)
-    sample_set_members: list[SampleSetMember] = field(default_factory=list)
+    sample_groups: list[SampleGroup] = field(default_factory=list)
+    sample_group_members: list[SampleGroupMember] = field(default_factory=list)
     batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
     bulk_loads: list[AnalyticsBulkLoad] = field(default_factory=list)
     staged_loads: list[AnalyticsStagedLoad] = field(default_factory=list)
@@ -153,6 +154,7 @@ def parse_cbioportal_study(
         metas_by_file=metas_by_file,
     )
 
+    _register_authored_contract_fields(context)
     _register_source_files(context, metas)
     _parse_clinical_files(context)
     _parse_case_lists(context)
@@ -258,8 +260,8 @@ def parse_cbioportal_study(
             context.source_files_by_path.values(), key=lambda file: file.file_id
         ),
         file_links=_file_links_from_context(context),
-        sample_sets=context.sample_sets,
-        sample_set_members=context.sample_set_members,
+        sample_groups=context.sample_groups,
+        sample_group_members=context.sample_group_members,
         analytics_batch=context.batch,
         bulk_loads=context.bulk_loads,
         staged_loads=context.staged_loads,
@@ -269,6 +271,15 @@ def parse_cbioportal_study(
             "bulk_loads": len(context.bulk_loads),
         },
     )
+
+
+def _register_authored_contract_fields(context: CbioPortalParseContext) -> None:
+    """Attach declarative fields for the built-in cBioPortal contracts in use."""
+    fields_by_contract = built_in_data_contract_fields_by_contract()
+    for contract in context.contracts_by_file.values():
+        for contract_field in fields_by_contract.get(contract.data_contract_id, ()):
+            key = (contract.data_contract_id, contract_field.field_id)
+            context.data_contract_fields[key] = contract_field
 
 
 def _discover_metas(root: Path) -> list[CbioPortalMeta]:
@@ -665,8 +676,8 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
     for path in sorted(case_root.glob("*.txt")):
         values = _read_meta_file(path)
         stable_id = values.get("stable_id") or path.stem
-        sample_set = SampleSet(
-            sample_set_id=f"{context.data_import_id}:{_normalize_id(stable_id)}",
+        sample_group = SampleGroup(
+            sample_group_id=f"{context.data_import_id}:{_normalize_id(stable_id)}",
             project_id=context.project_id,
             name=values.get("case_list_name") or stable_id,
             kind=(
@@ -681,7 +692,7 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
                 "source_data_import_id": context.data_import_id,
             },
         )
-        context.sample_sets.append(sample_set)
+        context.sample_groups.append(sample_group)
         for sample_id in _split_case_ids(values.get("case_list_ids")):
             _ensure_sample(
                 context,
@@ -689,9 +700,9 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
                 subject_id=_subject_id_from_sample(sample_id),
                 row={},
             )
-            context.sample_set_members.append(
-                SampleSetMember(
-                    sample_set_id=sample_set.sample_set_id,
+            context.sample_group_members.append(
+                SampleGroupMember(
+                    sample_group_id=sample_group.sample_group_id,
                     run_sample_id=context.run_sample_id_for_sample(sample_id),
                 )
             )

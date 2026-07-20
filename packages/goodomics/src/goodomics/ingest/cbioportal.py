@@ -47,7 +47,7 @@ class CbioPortalIngestResult:
     samples_ingested: int
     run_samples_ingested: int
     files_registered: int
-    sample_sets_ingested: int
+    sample_groups_ingested: int
     bulk_loads: int
     database_url: str
     analytics_path: Path
@@ -151,7 +151,7 @@ async def _ingest_cbioportal_with_store(
         if progress is not None and task_id is not None:
             progress.update(task_id, total=total_steps, completed=2)
 
-        update_progress("Writing SQL catalog metadata", completed=2)
+        update_progress("Writing SQL metadata", completed=2)
         catalog_result = await catalog_store.replace_runs_catalog(
             parsed.all_runs,
             data_import=parsed.data_import,
@@ -167,8 +167,8 @@ async def _ingest_cbioportal_with_store(
             data_contract_fields=parsed.data_contract_fields,
             files=parsed.files,
             file_links=parsed.file_links,
-            sample_sets=parsed.sample_sets,
-            sample_set_members=parsed.sample_set_members,
+            sample_groups=parsed.sample_groups,
+            sample_group_members=parsed.sample_group_members,
         )
         update_progress("Writing DuckDB analytical batch", completed=3)
 
@@ -222,7 +222,7 @@ async def _ingest_cbioportal_with_store(
             samples_ingested=len(parsed.samples),
             run_samples_ingested=len(parsed.run_samples),
             files_registered=len(parsed.files),
-            sample_sets_ingested=len(parsed.sample_sets),
+            sample_groups_ingested=len(parsed.sample_groups),
             bulk_loads=len(parsed.bulk_loads),
             database_url=database_url,
             analytics_path=resolved_analytics_path,

@@ -2,9 +2,9 @@
 
 This module is the server-side bridge between declarative insight/report
 configuration and rendered dashboard/report payloads. It normalizes saved JSON
-configs, compiles safe SQL against either the SQL catalog or DuckDB analytics
-store, caches computed results, and translates rows into chart/table/metric
-payloads.
+configs, compiles safe SQL against either the SQL metadata store or DuckDB
+analytics store, caches computed results, and translates rows into
+chart/table/metric payloads.
 
 The public functions are used by API routes. Private helpers keep the query
 grammar small and Goodomics-specific instead of exposing raw chart-library or
@@ -62,9 +62,9 @@ from goodomics.storage.sqlalchemy import (
     RunContractSampleRecord,
     RunRecord,
     RunSampleRecord,
+    SampleGroupMemberRecord,
+    SampleGroupRecord,
     SampleRecord,
-    SampleSetMemberRecord,
-    SampleSetRecord,
 )
 
 JsonObject = dict[str, Any]
@@ -158,6 +158,7 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
         normalized.get("result_policy") or display_policy
     )
     normalized.setdefault("display", {})
+
     return normalized
 
 
@@ -754,7 +755,7 @@ async def _execute_single_series_count_query(
             parameters=parameters,
         )
     )
-    if field is not None:
+    if field is not None and "field_id" in columns:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
         session=session,
@@ -851,7 +852,7 @@ async def _contract_series_sql(
             parameters=parameters,
         )
     )
-    if field is not None:
+    if field is not None and "field_id" in columns:
         where_parts.append(_field_id_match_sql(parameters, field))
     context_where = await _context_where_sql(
         session=session,
@@ -1155,14 +1156,16 @@ async def _context_where_sql(
             parameters.extend(sample_pks)
             where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
     elif kind == "cohort":
-        sample_set_ids = _context_string_values(
-            context, "sample_set_ids", "sample_set_id"
+        sample_group_ids = _context_string_values(
+            context, "sample_group_ids", "sample_group_id"
         )
-        if sample_set_ids and "run_sample_id" in columns:
+        if sample_group_ids and "run_sample_id" in columns:
             run_sample_ids: list[int] = []
-            for sample_set_id in sample_set_ids:
+            for sample_group_id in sample_group_ids:
                 run_sample_ids.extend(
-                    await _sample_set_run_sample_pks(session, project_id, sample_set_id)
+                    await _sample_group_run_sample_pks(
+                        session, project_id, sample_group_id
+                    )
                 )
             if not run_sample_ids:
                 where_parts.append("1 = 0")
@@ -1515,24 +1518,24 @@ async def _run_sample_pk(
     return row.id if row is not None else None
 
 
-async def _sample_set_run_sample_pks(
-    session: AsyncSession, project_id: str | None, sample_set_id: str
+async def _sample_group_run_sample_pks(
+    session: AsyncSession, project_id: str | None, sample_group_id: str
 ) -> list[int]:
-    """Resolve a sample set to member run/sample primary keys."""
-    statement = select(SampleSetRecord).where(
-        SampleSetRecord.sample_set_id == sample_set_id
+    """Resolve a sample group to member run/sample primary keys."""
+    statement = select(SampleGroupRecord).where(
+        SampleGroupRecord.sample_group_id == sample_group_id
     )
     if project_id is not None:
         statement = statement.where(
-            SampleSetRecord.project_id == await _project_pk(session, project_id)
+            SampleGroupRecord.project_id == await _project_pk(session, project_id)
         )
-    sample_set = (await session.exec(statement)).first()
-    if sample_set is None or sample_set.id is None:
+    sample_group = (await session.exec(statement)).first()
+    if sample_group is None or sample_group.id is None:
         return []
     rows = (
         await session.exec(
-            select(SampleSetMemberRecord.run_sample_id).where(
-                SampleSetMemberRecord.sample_set_id == sample_set.id
+            select(SampleGroupMemberRecord.run_sample_id).where(
+                SampleGroupMemberRecord.sample_group_id == sample_group.id
             )
         )
     ).all()
@@ -1658,10 +1661,16 @@ async def _compile_contract_query(
 
     if table == "feature_value_numeric":
         # Feature matrices store the measured value in a single canonical value
-        # column; the feature dimension carries the biological identity.
+        # column; the contract field supplies its semantic public name while the
+        # feature dimension carries the biological identity.
         field = None
-        field_id = "value"
-        value_column = "value"
+        field_id = requested_fields[0]
+        declared_field = field_rows.get(field_id)
+        value_column = (
+            _contract_value_column(declared_field)
+            if declared_field is not None
+            else "value"
+        )
     elif table in synthetic_fields:
         requested_fields = _normalize_synthetic_requested_fields(
             requested_fields,
@@ -1852,7 +1861,7 @@ async def _compile_contract_query(
             )
         )
 
-    sql = f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)}"
+    sql = f"SELECT {', '.join(select_parts)} FROM {_series_source_sql(table)}"
     sql += " WHERE " + " AND ".join(where_parts)
     if group_parts:
         sql += " GROUP BY " + ", ".join(group_parts)
@@ -2603,7 +2612,7 @@ async def _project_scope_where(
     if store == "catalog":
         model = CATALOG_MODELS.get(table)
         if model is not None and _project_field_is_integer(model):
-            # Core catalog tables use integer project FKs, so resolve the public
+            # Core metadata tables use integer project FKs, so resolve the public
             # project_id to its SQL primary key before filtering.
             parameters.append(await _project_pk(session, project_id))
         else:
@@ -2912,10 +2921,15 @@ def _contract_requested_fields(
         field = measure["field"]
         if field not in {"*", "value"}:
             fields.append(field)
+    identity_columns = {
+        str(column)
+        for grain in ANALYSIS_GRAINS.values()
+        for column in cast(Sequence[Any], grain.get("identity_columns") or [])
+    }
     for value in _string_list(
         query_config.get("dimensions") or query_config.get("group_by")
     ):
-        if value not in {"run_id", "run_sample_id", "sample_id", "entity_id"}:
+        if value not in identity_columns:
             fields.append(value)
     return list(dict.fromkeys(fields))
 
@@ -2939,6 +2953,7 @@ def _contract_value_column(field: DataContractFieldRecord) -> str:
     query_ref = field.query_ref_json if isinstance(field.query_ref_json, dict) else {}
     value_column = query_ref.get("value_column")
     if isinstance(value_column, str) and value_column in {
+        "value",
         "value_numeric",
         "value_string",
         "value_boolean",

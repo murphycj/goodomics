@@ -22,8 +22,8 @@ from goodomics.schemas.models import (
     RunRelationship,
     RunSample,
     Sample,
-    SampleSet,
-    SampleSetMember,
+    SampleGroup,
+    SampleGroupMember,
     Subject,
 )
 
@@ -83,8 +83,8 @@ class NormalizedIngestResult:
     data_contract_fields: list[DataContractField] = field(default_factory=list)
     files: list[FileAsset] = field(default_factory=list)
     file_links: list[FileLink] = field(default_factory=list)
-    sample_sets: list[SampleSet] = field(default_factory=list)
-    sample_set_members: list[SampleSetMember] = field(default_factory=list)
+    sample_groups: list[SampleGroup] = field(default_factory=list)
+    sample_group_members: list[SampleGroupMember] = field(default_factory=list)
     analytics_batch: AnalyticsIngestBatch = field(default_factory=AnalyticsIngestBatch)
     bulk_loads: list[AnalyticsBulkLoad] = field(default_factory=list)
     staged_loads: list[AnalyticsStagedLoad] = field(default_factory=list)

@@ -26,7 +26,7 @@ config:
     columns: 12
   context:
     kind: cohort
-    sample_set_id: production-rnaseq
+    sample_group_id: production-rnaseq
   items:
     - insight_id: mapping-rate
       x: 0

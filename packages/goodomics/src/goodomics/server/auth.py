@@ -477,7 +477,7 @@ def _request_permission(method: str, path: str) -> str:
     if "/qc-policies" in path:
         return "qc_policy.manage" if mutation else "qc_policy.read"
 
-    if "/sample-groups" in path or "/sample-sets" in path:
+    if "/sample-groups" in path or "/sample-groups" in path:
         return "cohort.manage" if mutation else "cohort.read"
 
     if "/database" in path:

@@ -243,10 +243,10 @@ class FileLink(GoodomicsModel):
     link_role: str
 
 
-class SampleSet(GoodomicsModel):
+class SampleGroup(GoodomicsModel):
     """Saved group of sample/run links, such as a cohort or reference set."""
 
-    sample_set_id: str
+    sample_group_id: str
     project_id: str | None = None
     name: str
     kind: str = "cohort"
@@ -257,10 +257,10 @@ class SampleSet(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
-class SampleSetMember(GoodomicsModel):
-    """Membership row linking a sample set to a run/sample link."""
+class SampleGroupMember(GoodomicsModel):
+    """Membership row linking a sample group to a run/sample link."""
 
-    sample_set_id: str
+    sample_group_id: str
     run_sample_id: str
 
 
@@ -689,9 +689,9 @@ class GeneAlterationState(AnalyticalRecord):
 
 
 class CohortSummary(AnalyticalRecord):
-    """Precomputed summary statistics for a sample set and contract feature."""
+    """Precomputed summary statistics for a sample group and contract feature."""
 
-    sample_set_id: int
+    sample_group_id: int
     data_contract_id: int
     field_id: int | None = None
     feature_id: int | None = None

@@ -26,7 +26,7 @@ import {
   type GoodomicsRun,
   type SampleGroupMember,
   type SampleListItem,
-  type SampleSet,
+  type SampleGroup,
 } from "../api";
 import {
   Button,
@@ -54,7 +54,7 @@ const PICKER_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 type DataBrowserTab = "samples" | "sample-groups" | "runs";
 type SampleGridRow = SampleListItem & { __rowId: string };
 type RunGridRow = GoodomicsRun & { __rowId: string };
-type SampleGroupGridRow = SampleSet & { __rowId: string };
+type SampleGroupGridRow = SampleGroup & { __rowId: string };
 type SampleGroupMemberGridRow = SampleGroupMember & { __rowId: string };
 type SampleGroupEditorTarget =
   | { mode: "new" }
@@ -332,7 +332,7 @@ function SampleGroupsTab({
   const rows = useMemo<SampleGroupGridRow[]>(
     () =>
       (data?.items ?? []).map((group) => ({
-        __rowId: group.sample_set_id,
+        __rowId: group.sample_group_id,
         ...group,
       })),
     [data?.items],
@@ -352,7 +352,7 @@ function SampleGroupsTab({
     });
   };
   const openGroup = (
-    group: SampleSet,
+    group: SampleGroup,
     mode: "edit" | "view" = "view",
     options?: OpenSampleGroupOptions,
   ) => {
@@ -373,7 +373,7 @@ function SampleGroupsTab({
         : routeGroup.data
           ? {
               group: {
-                __rowId: routeGroup.data.sample_set_id,
+                __rowId: routeGroup.data.sample_group_id,
                 ...routeGroup.data,
               },
               mode: routeTarget.mode,
@@ -604,7 +604,7 @@ function SampleGroupEditorPage({
 }: {
   onBack: () => void;
   onOpenGroup: (
-    group: SampleSet,
+    group: SampleGroup,
     mode?: "edit" | "view",
     options?: OpenSampleGroupOptions,
   ) => void;
@@ -613,7 +613,7 @@ function SampleGroupEditorPage({
   target: SampleGroupEditorTarget;
 }) {
   const group = target.mode === "new" ? null : target.group;
-  const groupId = group?.sample_set_id;
+  const groupId = group?.sample_group_id;
   const isReadOnly = target.mode === "view";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -676,7 +676,7 @@ function SampleGroupEditorPage({
     queryFn: () =>
       listProjectSampleGroupMembers({
         projectId,
-        sampleSetId: groupId ?? "",
+        sampleGroupId: groupId ?? "",
         limit: pageSize,
         offset,
         search,
@@ -714,7 +714,7 @@ function SampleGroupEditorPage({
     onSuccess: (savedGroup) => {
       void invalidateSampleGroups(
         projectId,
-        savedGroup.sample_set_id,
+        savedGroup.sample_group_id,
         routeSampleGroupRef,
       );
       onOpenGroup(savedGroup, "view", { replace: true });
@@ -1000,7 +1000,7 @@ function SampleGroupEditorPage({
           <AddSamplesDialog
             open={addOpen}
             projectId={projectId}
-            sampleSetId={groupId}
+            sampleGroupId={groupId}
             onOpenChange={setAddOpen}
           />
         </div>
@@ -1095,12 +1095,12 @@ function AddSamplesDialog({
   onOpenChange,
   open,
   projectId,
-  sampleSetId,
+  sampleGroupId,
 }: {
   onOpenChange: (open: boolean) => void;
   open: boolean;
   projectId: string;
-  sampleSetId: string;
+  sampleGroupId: string;
 }) {
   const [selectedSamples, setSelectedSamples] = useState<Set<string>>(new Set());
 
@@ -1113,13 +1113,13 @@ function AddSamplesDialog({
     mutationFn: () =>
       addProjectSampleGroupMembers(
         projectId,
-        sampleSetId,
+        sampleGroupId,
         Array.from(selectedSamples),
       ),
     onSuccess: () => {
       setSelectedSamples(new Set());
       onOpenChange(false);
-      void invalidateSampleGroups(projectId, sampleSetId);
+      void invalidateSampleGroups(projectId, sampleGroupId);
     },
   });
 
@@ -1133,7 +1133,7 @@ function AddSamplesDialog({
           <SamplePickerGrid
             enabled={open}
             projectId={projectId}
-            queryKeySuffix={sampleSetId}
+            queryKeySuffix={sampleGroupId}
             selectedSamples={selectedSamples}
             setSelectedSamples={setSelectedSamples}
           />
@@ -1371,25 +1371,25 @@ function queryError(error: unknown): Error | null {
 
 async function invalidateSampleGroups(
   projectId: string,
-  sampleSetId?: string,
+  sampleGroupId?: string,
   sampleGroupRef?: string,
 ) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["sample-groups", projectId] }),
-    queryClient.invalidateQueries({ queryKey: ["sample-sets", projectId] }),
-    sampleSetId
+    queryClient.invalidateQueries({ queryKey: ["sample-groups", projectId] }),
+    sampleGroupId
       ? queryClient.invalidateQueries({
-          queryKey: ["sample-group", projectId, sampleSetId],
+          queryKey: ["sample-group", projectId, sampleGroupId],
         })
       : Promise.resolve(),
-    sampleGroupRef && sampleGroupRef !== sampleSetId
+    sampleGroupRef && sampleGroupRef !== sampleGroupId
       ? queryClient.invalidateQueries({
           queryKey: ["sample-group", projectId, sampleGroupRef],
         })
       : Promise.resolve(),
-    sampleSetId
+    sampleGroupId
       ? queryClient.invalidateQueries({
-          queryKey: ["sample-group-members", projectId, sampleSetId],
+          queryKey: ["sample-group-members", projectId, sampleGroupId],
         })
       : Promise.resolve(),
   ]);

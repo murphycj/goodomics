@@ -85,14 +85,14 @@ function PreviewAuditBar({
 
 function contextLabel(context: Record<string, unknown> | null) {
   const kind = stringValue(context?.kind) || "cohort";
-  const sampleSet = stringValue(context?.sample_set_id);
+  const sampleGroup = stringValue(context?.sample_group_id);
   const sample = stringValue(context?.sample_id);
-  const sampleSets = stringArrayValue(context?.sample_set_ids);
+  const sampleGroups = stringArrayValue(context?.sample_group_ids);
   const samples = stringArrayValue(context?.sample_ids);
   if (samples.length > 1) return `${samples.length} samples`;
-  if (sampleSets.length > 1) return `${sampleSets.length} sample groups`;
+  if (sampleGroups.length > 1) return `${sampleGroups.length} sample groups`;
   if (sample) return `Sample ${sample}`;
-  if (sampleSet) return `Sample group ${sampleSet}`;
+  if (sampleGroup) return `Sample group ${sampleGroup}`;
   return kind === "sample" ? "Sample context" : "All samples";
 }
 

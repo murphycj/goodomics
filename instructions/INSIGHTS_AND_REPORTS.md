@@ -14,7 +14,7 @@ This file is the source of truth for saved insight and report behavior.
   beneath their stable data contract.
 - Selecting a field determines compatible analysis types, methods, result
   defaults, aggregations, and chart choices.
-- Global context may restrict biological samples or canonical sample sets.
+- Global context may restrict biological samples or canonical sample groups.
 - Table columns use raw values by default. Chart series own aggregation and
   field-level filters.
 
@@ -79,7 +79,7 @@ ECharts is an implementation detail. Goodomics configs describe chart intent.
 - `bar`: one value by entity, categorical counts, or aligned numeric series.
 - `stacked_bar`: at least two numeric series with a shared linker.
 - `histogram`: one or more overlaid numeric distributions.
-- `boxplot`: numeric values grouped by sample set, sample, run, or category.
+- `boxplot`: numeric values grouped by sample group, sample, run, or category.
 - `pie`/`donut`: exactly one series.
 - `table`: any supported fields.
 

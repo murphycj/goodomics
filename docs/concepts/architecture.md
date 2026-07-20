@@ -36,7 +36,7 @@ Project
   │         └── Run contract sample ── Run sample
   ├── Data import
   ├── File ── File link ── import/run/sample/contract
-  └── Sample set ── Sample set member ── Run sample
+  └── Sample group ── Sample group member ── Run sample
 ```
 
 The terms have distinct meanings:

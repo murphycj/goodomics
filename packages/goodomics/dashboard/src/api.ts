@@ -283,8 +283,8 @@ const insightValidationSchema = z.object({
   catalog_version: z.number(),
 });
 
-const sampleSetSchema = z.object({
-  sample_set_id: z.string(),
+const sampleGroupSchema = z.object({
+  sample_group_id: z.string(),
   url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
@@ -297,8 +297,8 @@ const sampleSetSchema = z.object({
   member_count: z.number(),
 });
 
-const sampleSetPageSchema = z.object({
-  items: z.array(sampleSetSchema),
+const sampleGroupPageSchema = z.object({
+  items: z.array(sampleGroupSchema),
   total: z.number(),
   limit: z.number(),
   offset: z.number(),
@@ -393,8 +393,8 @@ export type InsightResult = z.infer<typeof insightResultSchema>['result'];
 export type ReportResult = z.infer<typeof reportResultSchema>['result'];
 export type InsightCatalog = z.infer<typeof insightCatalogSchema>;
 export type InsightValidation = z.infer<typeof insightValidationSchema>;
-export type SampleSet = z.infer<typeof sampleSetSchema>;
-export type SampleSetPage = z.infer<typeof sampleSetPageSchema>;
+export type SampleGroup = z.infer<typeof sampleGroupSchema>;
+export type SampleGroupPage = z.infer<typeof sampleGroupPageSchema>;
 export type SampleGroupMember = z.infer<typeof sampleGroupMemberSchema>;
 export type SampleGroupMemberPage = z.infer<typeof sampleGroupMemberPageSchema>;
 export type AiMessage = z.infer<typeof aiMessageSchema>;
@@ -694,10 +694,10 @@ export async function validateInsightConfig(config: Record<string, unknown>) {
   return insightValidationSchema.parse(await response.json());
 }
 
-export function listSampleSets(projectId: string, kind?: string) {
+export function listSampleGroups(projectId: string, kind?: string) {
   const params = new URLSearchParams({ project_id: projectId });
   if (kind) params.set('kind', kind);
-  return getJson(`/api/v1/sample-sets?${params.toString()}`, z.array(sampleSetSchema));
+  return getJson(`/api/v1/sample-groups?${params.toString()}`, z.array(sampleGroupSchema));
 }
 
 export function listProjectSampleGroups({
@@ -721,7 +721,7 @@ export function listProjectSampleGroups({
   if (search?.trim()) params.set('search', search.trim());
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups?${params.toString()}`,
-    sampleSetPageSchema,
+    sampleGroupPageSchema,
   );
 }
 
@@ -738,20 +738,20 @@ export function createProjectSampleGroup(
     `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups`,
     'POST',
     payload,
-    sampleSetSchema,
+    sampleGroupSchema,
   );
 }
 
 export function getProjectSampleGroup(projectId: string, sampleGroupRef: string) {
   return getJson(
     `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupRef)}`,
-    sampleSetSchema,
+    sampleGroupSchema,
   );
 }
 
 export function patchProjectSampleGroup(
   projectId: string,
-  sampleSetId: string,
+  sampleGroupId: string,
   payload: {
     description?: string | null;
     kind?: string;
@@ -760,19 +760,19 @@ export function patchProjectSampleGroup(
   },
 ) {
   return sendJson(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupId)}`,
     'PATCH',
     payload,
-    sampleSetSchema,
+    sampleGroupSchema,
   );
 }
 
 export async function deleteProjectSampleGroup(
   projectId: string,
-  sampleSetId: string,
+  sampleGroupId: string,
 ) {
   const response = await apiFetch(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupId)}`,
     { method: 'DELETE' },
   );
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -782,13 +782,13 @@ export function listProjectSampleGroupMembers({
   limit,
   offset,
   projectId,
-  sampleSetId,
+  sampleGroupId,
   search,
 }: {
   limit: number;
   offset: number;
   projectId: string;
-  sampleSetId: string;
+  sampleGroupId: string;
   search?: string;
 }) {
   const params = new URLSearchParams({
@@ -797,34 +797,34 @@ export function listProjectSampleGroupMembers({
   });
   if (search?.trim()) params.set('search', search.trim());
   return getJson(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members?${params.toString()}`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupId)}/members?${params.toString()}`,
     sampleGroupMemberPageSchema,
   );
 }
 
 export function addProjectSampleGroupMembers(
   projectId: string,
-  sampleSetId: string,
+  sampleGroupId: string,
   sampleIds: string[],
 ) {
   return sendJson(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupId)}/members`,
     'POST',
     { sample_ids: sampleIds },
-    sampleSetSchema,
+    sampleGroupSchema,
   );
 }
 
 export function removeProjectSampleGroupMembers(
   projectId: string,
-  sampleSetId: string,
+  sampleGroupId: string,
   runSampleIds: string[],
 ) {
   return sendJson(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleSetId)}/members`,
+    `/api/v1/projects/${encodeURIComponent(projectId)}/sample-groups/${encodeURIComponent(sampleGroupId)}/members`,
     'DELETE',
     { run_sample_ids: runSampleIds },
-    sampleSetSchema,
+    sampleGroupSchema,
   );
 }
 

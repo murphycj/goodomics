@@ -52,7 +52,7 @@ import {
   type DatabaseTable,
   type InsightCatalog,
   type InsightValidation,
-  type SampleSet,
+  type SampleGroup,
   type SampleListItem,
   type SavedInsight,
 } from "../api";
@@ -195,7 +195,7 @@ export function InsightsPage({
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [tableColumnPickerOpen, setTableColumnPickerOpen] = useState(false);
   const [analysisGrain, setAnalysisGrain] = useState<AnalysisGrain>("sample");
-  const [sampleSetIds, setSampleSetIds] = useState<string[]>([]);
+  const [sampleGroupIds, setSampleGroupIds] = useState<string[]>([]);
   const [sampleIds, setSampleIds] = useState<string[]>([]);
   const [runSampleIds, setRunSampleIds] = useState<string[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>("contract");
@@ -270,7 +270,7 @@ export function InsightsPage({
       parseLinkerKind(linker.kind) || defaultLinkerForGrain(nextGrain),
     );
     setQueryMode("contract");
-    setSampleSetIds([]);
+    setSampleGroupIds([]);
     setSampleIds([]);
     setRunSampleIds([]);
     if (stringConfig(template?.label)) {
@@ -366,7 +366,7 @@ export function InsightsPage({
       setDescription("");
       setDescriptionOpen(false);
       setAnalysisGrain("sample");
-      setSampleSetIds([]);
+      setSampleGroupIds([]);
       setSampleIds([]);
       setRunSampleIds([]);
       setVisualization("table");
@@ -511,8 +511,8 @@ export function InsightsPage({
     setDescriptionOpen(Boolean(selectedInsight.description?.trim()));
     setVisualization(String(config.visualization ?? "table"));
     setAnalysisGrain(parseAnalysisGrain(config.analysis_grain));
-    setSampleSetIds(
-      stringArrayConfig(context.sample_set_ids, context.sample_set_id),
+    setSampleGroupIds(
+      stringArrayConfig(context.sample_group_ids, context.sample_group_id),
     );
     setSampleIds(stringArrayConfig(context.sample_ids, context.sample_id));
     setRunSampleIds([]);
@@ -573,7 +573,7 @@ export function InsightsPage({
         title,
         description,
         analysisGrain,
-        sampleSetIds,
+        sampleGroupIds,
         sampleIds,
         runSampleIds,
         queryMode,
@@ -610,7 +610,7 @@ export function InsightsPage({
       tableColumns,
       selectedContract,
       sampleIds,
-      sampleSetIds,
+      sampleGroupIds,
       store,
       table,
       title,
@@ -828,10 +828,10 @@ export function InsightsPage({
                 <SampleFilterDropdown
                   projectId={projectId}
                   runSampleIds={runSampleIds}
-                  sampleGroupIds={sampleSetIds}
+                  sampleGroupIds={sampleGroupIds}
                   sampleIds={sampleIds}
                   onRunSampleIdsChange={setRunSampleIds}
-                  onSampleGroupIdsChange={setSampleSetIds}
+                  onSampleGroupIdsChange={setSampleGroupIds}
                   onSampleIdsChange={setSampleIds}
                 />
               </CardContent>
@@ -1037,7 +1037,7 @@ function SampleFilterDropdown({
     [sampleGroupPages.data?.pages],
   );
   const selectedGroup = sampleGroups.find((sampleGroup) =>
-    sampleGroupIds.includes(sampleGroup.sample_set_id),
+    sampleGroupIds.includes(sampleGroup.sample_group_id),
   );
   const summary = sampleFilterSummary({
     runSampleIds,
@@ -1195,14 +1195,14 @@ function SampleFilterDropdown({
               {sampleGroups.map((sampleGroup) => {
                 return (
                   <FilterOptionButton
-                    key={sampleGroup.sample_set_id}
+                    key={sampleGroup.sample_group_id}
                     selected={pendingSampleGroupIds.includes(
-                      sampleGroup.sample_set_id,
+                      sampleGroup.sample_group_id,
                     )}
                     subtitle={`${sampleGroup.member_count.toLocaleString()} samples`}
                     title={sampleGroup.name}
                     search={sampleGroupSearch}
-                    onClick={() => selectSampleGroup(sampleGroup.sample_set_id)}
+                    onClick={() => selectSampleGroup(sampleGroup.sample_group_id)}
                   />
                 );
               })}
@@ -1497,7 +1497,7 @@ function sampleFilterSummary({
   sampleIds,
 }: {
   runSampleIds: string[];
-  sampleGroup: SampleSet | undefined;
+  sampleGroup: SampleGroup | undefined;
   sampleGroupIds: string[];
   sampleIds: string[];
 }) {
@@ -2174,14 +2174,14 @@ function validationWarning(validation: InsightValidation | undefined) {
 
 function buildContext({
   sampleIds,
-  sampleSetIds,
+  sampleGroupIds,
 }: {
   runSampleIds: string[];
   sampleIds: string[];
-  sampleSetIds: string[];
+  sampleGroupIds: string[];
 }) {
   const cleanedSampleIds = uniqueNonEmpty(sampleIds);
-  const cleanedSampleSetIds = uniqueNonEmpty(sampleSetIds);
+  const cleanedSampleGroupIds = uniqueNonEmpty(sampleGroupIds);
   if (cleanedSampleIds.length) {
     return {
       kind: "sample",
@@ -2191,9 +2191,9 @@ function buildContext({
   }
   return {
     kind: "cohort",
-    sample_set_id: cleanedSampleSetIds[0],
-    sample_set_ids: cleanedSampleSetIds.length
-      ? cleanedSampleSetIds
+    sample_group_id: cleanedSampleGroupIds[0],
+    sample_group_ids: cleanedSampleGroupIds.length
+      ? cleanedSampleGroupIds
       : undefined,
   };
 }
@@ -2219,7 +2219,7 @@ function buildConfig({
   title,
   description,
   analysisGrain,
-  sampleSetIds,
+  sampleGroupIds,
   sampleIds,
   runSampleIds,
   queryMode,
@@ -2242,7 +2242,7 @@ function buildConfig({
   title: string;
   description: string;
   analysisGrain: AnalysisGrain;
-  sampleSetIds: string[];
+  sampleGroupIds: string[];
   sampleIds: string[];
   runSampleIds: string[];
   queryMode: QueryMode;
@@ -2267,7 +2267,7 @@ function buildConfig({
   const context = buildContext({
     runSampleIds,
     sampleIds,
-    sampleSetIds,
+    sampleGroupIds,
   });
   const resultPolicy = buildResultPolicy({
     mode: resultPolicyMode,

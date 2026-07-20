@@ -119,7 +119,7 @@ def print_cbioportal_ingest_result(result: Any, console: Console) -> None:
             "samples_ingested": result.samples_ingested,
             "run_samples_ingested": result.run_samples_ingested,
             "files_registered": result.files_registered,
-            "sample_sets_ingested": result.sample_sets_ingested,
+            "sample_groups_ingested": result.sample_groups_ingested,
             "bulk_loads": result.bulk_loads,
             "database_url": result.database_url,
             "analytics_path": str(result.analytics_path),

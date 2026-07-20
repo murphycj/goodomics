@@ -375,9 +375,9 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
     AnalyticalTableSerializer(
         "cohort_summaries",
         CohortSummary,
-        "sample_set_id, data_contract_id, field_id, feature_id",
+        "sample_group_id, data_contract_id, field_id, feature_id",
         unique_columns=(
-            "sample_set_id",
+            "sample_group_id",
             "data_contract_id",
             "field_id",
             "feature_id",
@@ -451,7 +451,7 @@ CATALOG_ID_COLUMNS = frozenset(
         "run_contract_id",
         "run_sample_id",
         "sample_id",
-        "sample_set_id",
+        "sample_group_id",
         "subject_id",
     }
 )
@@ -744,7 +744,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "source_event_id",
         ),
         "cohort_summaries": (
-            "sample_set_id",
+            "sample_group_id",
             "data_contract_id",
             "field_id",
             "feature_id",

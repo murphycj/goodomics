@@ -38,9 +38,9 @@ from goodomics.storage.sqlalchemy import (
     RunRecord,
     RunRelationshipRecord,
     RunSampleRecord,
+    SampleGroupMemberRecord,
+    SampleGroupRecord,
     SampleRecord,
-    SampleSetMemberRecord,
-    SampleSetRecord,
     SubjectRecord,
 )
 
@@ -113,8 +113,8 @@ CATALOG_TABLE_REGISTRY: dict[str, CatalogTable] = {
             editable_fields=_editable("file_role", "path", "uri", "metadata_json"),
         ),
         CatalogTable(FileLinkRecord, "id", queryable=True),
-        CatalogTable(SampleSetRecord, "sample_set_id", queryable=True),
-        CatalogTable(SampleSetMemberRecord, "id", queryable=True),
+        CatalogTable(SampleGroupRecord, "sample_group_id", queryable=True),
+        CatalogTable(SampleGroupMemberRecord, "id", queryable=True),
         CatalogTable(QCDecisionRecord, "id", queryable=True),
         CatalogTable(
             InsightRecord,

@@ -238,7 +238,7 @@ CHARTS: dict[str, JsonObject] = {
         "icon": "Box",
         "series": {"min": 1, "max": None, "numeric": True},
         "requires_linker": "comparison",
-        "rule": "Numeric values grouped by sample set, sample, run, or category.",
+        "rule": "Numeric values grouped by sample group, sample, run, or category.",
     },
     "pie": {
         "id": "pie",
@@ -417,8 +417,8 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
         for item in _table_column_items(config)
     ]
     context_label = str(context.get("kind") or "cohort")
-    if context.get("sample_set_id"):
-        context_label += f" {context['sample_set_id']}"
+    if context.get("sample_group_id"):
+        context_label += f" {context['sample_group_id']}"
     if context.get("sample_id"):
         context_label += f" {context['sample_id']}"
     return (

@@ -28,7 +28,7 @@ The guiding identity rule:
 
 | Concept       | User-facing meaning                                         | Implementation role                                                                |
 | ------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Project       | Workspace or data boundary                                  | Owns runs, samples, files, sample sets, contracts, and analytical store            |
+| Project       | Workspace or data boundary                                  | Owns runs, samples, files, sample groups, contracts, and analytical store           |
 | Subject       | Optional patient, donor, organism, cell line, or individual | Links related samples                                                              |
 | Sample        | Biological or material sample users recognize and navigate  | Stable sample identity across runs                                                 |
 | Data import   | Data entry/audit event                                      | Records how files/results entered Goodomics                                        |
@@ -36,9 +36,9 @@ The guiding identity rule:
 | Run sample    | A sample included in a specific run                         | Simple `run_sample` linker for sample/run lookup, comparison, and metrics          |
 | File          | Original or derived file                                    | Tracks physical evidence and outputs                                               |
 | Data contract | Smallest logical queryable dataset                          | Declares data type, provenance, and query behavior                                 |
-| Sample set    | Saved group of sample/run links                             | General primitive behind cohorts and reference sets                                |
-| Cohort        | Sample set used for grouping or comparison                  | Specialized sample set                                                             |
-| Reference set | Sample set used as a baseline                               | Specialized sample set                                                             |
+| Sample group  | Saved group of sample/run links                             | General primitive behind cohorts and reference sets                                |
+| Cohort        | Sample group used for grouping or comparison                | Specialized sample group                                                           |
+| Reference set | Sample group used as a baseline                             | Specialized sample group                                                           |
 | Feature       | Thing being measured                                        | Metric, gene, transcript, protein, antibody, variant, interval, pathway, signature |
 | Observation   | Value, call, or measurement                                 | Conceptual analytical fact stored in modular tables                                |
 
@@ -331,23 +331,23 @@ nullable ownership columns.
 | `data_contract_id` | Nullable linked data contract integer ID                           |
 | `link_role`        | Relationship role, such as `source`, `index`, `derived`, `preview` |
 
-### `sample_sets`
+### `sample_groups`
 
 General saved grouping primitive.
 
 | Column            | Notes                                                             |
 | ----------------- | ----------------------------------------------------------------- |
 | `id`              | Integer primary key                                               |
-| `sample_set_id`   | Stable readable sample-set ID, unique/indexed                     |
+| `sample_group_id` | Stable readable sample-group ID, unique/indexed                   |
 | `project_id`      | Owning project integer ID                                         |
-| `name`            | Human-readable set name                                           |
+| `name`            | Human-readable group name                                         |
 | `kind`            | Example: `cohort`, `reference_set`, `benchmark_set`, `case_group` |
 | `description`     | Optional description                                              |
 | `definition_json` | Optional rule/filter definition                                   |
 | `created_at`      | Creation timestamp                                                |
-| `metadata_json`   | Flexible sample-set metadata                                      |
+| `metadata_json`   | Flexible sample-group metadata                                    |
 
-### `sample_set_members`
+### `sample_group_members`
 
 Usually points to sample/run links, not raw samples. Reference sets for QC
 should generally be `run_sample_id` based.
@@ -355,7 +355,7 @@ should generally be `run_sample_id` based.
 | Column          | Notes                               |
 | --------------- | ----------------------------------- |
 | `id`            | Integer primary key                 |
-| `sample_set_id` | Owning sample set integer ID        |
+| `sample_group_id` | Owning sample group integer ID      |
 | `run_sample_id` | Included sample/run link integer ID |
 
 ### `analysis_types`
@@ -373,7 +373,7 @@ project ownership, and metadata. Supported method kinds are `workflow`, `tool`,
 ### Other SQL Metadata Tables
 
 These stay in the metadata store and should point to projects, runs, processed
-samples, data contracts, sample sets, and files where relevant.
+samples, data contracts, sample groups, and files where relevant.
 
 | Table                  | Purpose                                    |
 | ---------------------- | ------------------------------------------ |
@@ -958,11 +958,11 @@ Recommended physical layouts:
 ### Cohort Summary Tables
 
 Precomputed reference-set and cohort statistics. Treat these as derived/cache
-data keyed by the sample set, contract, field or feature, and source fingerprint.
+data keyed by the sample group, contract, field or feature, and source fingerprint.
 
 | Column             | Notes                                         |
 | ------------------ | --------------------------------------------- |
-| `sample_set_id`    | Cohort/reference set integer ID               |
+| `sample_group_id`  | Cohort/reference set integer ID               |
 | `data_contract_id` | Contract integer ID summarized                |
 | `field_id`         | Nullable contract field integer ID summarized |
 | `feature_id`       | Nullable feature integer ID summarized        |
