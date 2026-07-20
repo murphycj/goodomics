@@ -8,6 +8,8 @@ use_directory_urls: true
 
 theme:
   name: material
+  logo: assets/images/logo-light.svg
+  favicon: assets/images/logo-light.svg
   features:
     - content.code.copy
     - content.code.annotate

@@ -54,6 +54,47 @@ body {
   box-shadow: none;
 }
 
+.md-header__button.md-logo,
+.md-nav__button.md-logo {
+  display: inline-flex;
+  width: 1.8rem;
+  min-width: 1.8rem;
+  height: 2rem;
+  flex: 0 0 1.8rem;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0.25rem 0 0;
+  overflow: hidden;
+  padding: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.md-logo img,
+.md-logo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+[data-md-color-scheme="default"] .md-logo {
+  background-image: url("../assets/images/logo-light.svg");
+}
+
+[data-md-color-scheme="slate"] .md-logo {
+  background-image: url("../assets/images/logo.svg");
+}
+
+.md-header__title {
+  margin-left: 0.15rem;
+}
+
+.md-nav--primary > .md-nav__title {
+  display: none;
+}
+
 [data-md-color-scheme="default"] .md-header {
   border-bottom: 1px solid rgba(24, 33, 31, 0.1);
   background-color: rgba(251, 247, 239, 0.94);
