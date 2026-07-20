@@ -34,7 +34,7 @@ npm --prefix packages/goodomics/dashboard run build
 ## Work on the docs
 
 ```bash
-uv run mkdocs serve
+uv run mkdocs serve --dev-addr 127.0.0.1:8001
 uv run mkdocs build
 ```
 
