@@ -10,7 +10,7 @@ operational, and focused on how to work in the repo.
   trust boundaries.
 - Use `instructions/DATA_MODEL.md` for data model terminology and schema
   direction, including projects, runs, samples, subjects, processed samples /
-  `run_samples`, data imports, files, data contracts, observations, SQL control
+  `run_samples`, data imports, files, data contracts, observations, SQL metadata
   tables, DuckDB analytical tables, and MCP/data-query concepts.
 - Use `instructions/PYTHON.md` for Python package layout, uv commands, CLI
   checks, verification, and Python coding style.

@@ -38,7 +38,7 @@ work in `packages/goodomics/dashboard`, also use
 - Use Rich for user-facing progress and logging in long-running CLI workflows,
   especially ingestion and report generation.
 - Future parsers should expose quiet library APIs by default, then let CLI
-  entry points opt into Rich progress for parse/discovery, SQL control writes,
+  entry points opt into Rich progress for parse/discovery, SQL metadata writes,
   analytical-store writes, bulk loads, and report rendering.
 - Keep progress bars visually stable: put the spinner/progress bar/counts
   before changing descriptive text, use a fixed bar width, and clip long

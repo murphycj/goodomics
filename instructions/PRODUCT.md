@@ -16,7 +16,7 @@ context over time.
 ## Related Source Of Truth
 
 Use `instructions/DATA_MODEL.md` for detailed data model terminology, SQL
-control table direction, DuckDB analytical table direction, data contracts,
+SQL metadata table direction, DuckDB analytical table direction, data contracts,
 sample/run links, files, and MCP/data-query concepts. Keep this file focused
 on product direction, user-facing framing, adoption path, boundaries, and
 priorities.
@@ -155,8 +155,8 @@ goodomics ingest ./results --project my-project
 goodomics ui
 ```
 
-Uses SQLite by default for the control plane and DuckDB for project-level
-analytics. The control plane stores users, projects, runs, samples, permissions,
+Uses SQLite by default for the metadata store and DuckDB for project-level
+analytics. The metadata store holds users, projects, runs, samples, permissions,
 reports, cohorts, policies, and file metadata. Each project can have its own
 DuckDB analytical store for metrics and omics-shaped tables.
 
@@ -205,10 +205,10 @@ remain the core product surface.
 
 ## Storage And Data Model Direction
 
-Goodomics should keep a layered storage model: a control store for product
+Goodomics should keep a layered storage model: a metadata store for product
 metadata, a file store for original and derived evidence, and a project-level
 analytical store for queryable metrics and omics-shaped data. SQLite should
-remain the default control store, DuckDB should be the default local analytical
+remain the default metadata store, DuckDB should be the default local analytical
 store, and ordinary files or object storage should hold reports, logs, pipeline
 outputs, BAM/VCF files, notebooks, plots, and other evidence.
 
@@ -233,7 +233,7 @@ The ingestion and analytical storage hierarchy should stay explicit:
 
 Use `instructions/DATA_MODEL.md` as the canonical reference for data model terms
 and table direction, including sample/run links, data contracts, observations,
-SQL control tables, DuckDB analytical tables, and derived query layouts.
+SQL metadata tables, DuckDB analytical tables, and derived query layouts.
 
 ## Core Concepts
 

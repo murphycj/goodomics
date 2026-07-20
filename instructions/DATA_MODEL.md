@@ -7,14 +7,14 @@ samples, files, observations, and agent/MCP data-query behavior.
 
 The guiding split:
 
-- **SQL control store**: remembers what exists, where it came from, and how
+- **SQL metadata store**: remembers what exists, where it came from, and how
   entities relate.
 - **DuckDB analytical store**: stores and query-optimizes measurements, calls,
   matrices, summaries, and derived views.
 
 The guiding identity rule:
 
-- SQL control store tables use integer `id` primary keys and integer foreign keys for internal
+- SQL metadata store tables use integer `id` primary keys and integer foreign keys for internal
   relationships.
 - Stable public labels such as `sample_id`, `run_id`, `analysis_type_id`,
   `method_id`, `data_contract_id`, and `run_contract_id` are indexed labels.
@@ -62,7 +62,7 @@ Users analyze Samples, Subjects, Runs, Features, Variants, and Files.
 `run_samples` is an internal membership/provenance association and is not an
 analysis-builder grain.
 
-## SQL Control Store
+## SQL Metadata Store
 
 These tables are smaller, relational, and CRUD-oriented.
 
@@ -370,9 +370,9 @@ Catalog with stable `method_id`, name, `method_kind`, description, optional
 project ownership, and metadata. Supported method kinds are `workflow`, `tool`,
 `algorithm`, `notebook`, `benchmark`, `script`, and `importer`.
 
-### Other SQL Control Tables
+### Other SQL Metadata Tables
 
-These stay in the control store and should point to projects, runs, processed
+These stay in the metadata store and should point to projects, runs, processed
 samples, data contracts, sample sets, and files where relevant.
 
 | Table                  | Purpose                                    |
@@ -396,7 +396,7 @@ integer `data_contract_id`.
 
 Each project should have its own DuckDB analytical store by default, so large
 analytics tables do not need to repeat `project_id` on every row. Store project
-identity once in DuckDB metadata and keep `project_id` in the SQL control store.
+identity once in DuckDB metadata and keep `project_id` in the SQL metadata store.
 
 Dimension tables do not always need contract identity.
 
@@ -434,7 +434,7 @@ truth.
 ### Physical Layout And Indexing
 
 Use compact integer IDs in DuckDB analytical tables. Readable/source labels are
-resolved at ingest/API boundaries and kept in SQL control tables or small DuckDB
+resolved at ingest/API boundaries and kept in SQL metadata tables or small DuckDB
 dimension tables for lookup and display.
 
 Examples:
@@ -981,7 +981,7 @@ data keyed by the sample set, contract, field or feature, and source fingerprint
 
 Every analytical fact table should include integer `data_contract_id` when the
 row stores an actual value, call, measurement, or contract-specific record. Keep
-the readable contract label in SQL control storage or DuckDB dimensions, and
+the readable contract label in SQL metadata storage or DuckDB dimensions, and
 resolve user-provided labels to integer IDs before writing fact rows.
 
 Examples:
@@ -999,5 +999,5 @@ Examples:
 | `variants`                        | No                                | Canonical variant identity is shared                        |
 | `features`                        | No                                | Shared feature dictionary                                   |
 | `genomic_intervals`               | No                                | Canonical interval identity can be shared                   |
-| `samples`                         | No                                | Control-store entity, not an analytical fact                |
+| `samples`                         | No                                | Metadata-store entity, not an analytical fact               |
 | `files`                           | No                                | File entity; use `file_links` to connect to contracts       |
