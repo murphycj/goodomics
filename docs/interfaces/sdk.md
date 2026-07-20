@@ -16,6 +16,9 @@ SDK, parser, report generation, and pipeline integration features.
 For constructor arguments, class attributes, and method details, see the
 [Python SDK API reference](sdk-api.md).
 
+To query the resulting contract fields or build insights and reports from
+Python, see [Use insights and reports from Python](../reports/python-api.md).
+
 ## Record run context
 
 ```python
@@ -37,6 +40,10 @@ Logged SDK metrics are written to the DuckDB analytical store as generic metric
 records, not to the SQL catalog database. The context manager records the run
 and sample catalog metadata in SQLite, then flushes metric observations to the
 project DuckDB store when the block exits successfully.
+
+The metrics are exposed through the `goodomics:sdk_metrics` data contract.
+Each logged metric becomes a queryable contract field, so insight code can
+discover and select it without querying the `sample_metrics` table directly.
 
 ## Pipeline integration
 

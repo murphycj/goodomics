@@ -1,147 +1,121 @@
-# Report templates
+# Report templates and rendering
 
-Saved reports and insights are the portable contract between the CLI,
-dashboard, and stored rendered report history. The same YAML or JSON model
-should be usable from `goodomics report`, editable in the dashboard, and
-versioned for workflow integration.
+Goodomics currently has two report paths with different capabilities:
 
-Dashboard insight edits are stored in `insights` and `insight_revisions`.
-Dashboard report edits are stored in `reports` and `report_revisions`.
-Generated HTML snapshots are stored separately in `rendered_reports`.
+- **Saved server reports** compose saved insights, execute against project data,
+  and can be rendered and persisted as HTML.
+- **Standalone CLI reports** scan a filesystem results path and render without
+  requiring a server or database.
 
-## Rendering model
+Do not assume that a saved-report export can be passed to the standalone CLI
+and receive the same database-backed execution. Both formats are JSON/YAML
+compatible, but they enter different execution paths today.
 
-Goodomics reports should render as self-contained offline HTML by default. A
-generated `report.html` should include the report structure, data needed for
-display, CSS, and JavaScript runtime without depending on CDN-hosted assets or
-an internet connection.
+## Saved report document
 
-PDF export should use the same report model. The preferred path is to render the
-self-contained HTML file and print it with a local browser renderer, with print
-CSS and chart export behavior tuned for stable output.
-
-Large payloads should not be embedded blindly. Template authors and built-in
-contracts should prefer summarized data, downsampling, binned distributions,
-static SVG or PNG chart output, or explicit opt-in expansion when full raw data
-would make the report unwieldy.
-
-## Template shape
-
-Templates should describe what the report means rather than exposing low-level
-chart-library details first. Goodomics compiles the template into a normalized
-report model, resolves input data, caches computed insight/report payloads, and
-renders charts, tables, text, thresholds, and layout.
+A saved report API document wraps identity and display fields around its config:
 
 ```yaml
-version: 1
-title: RNA-seq QC Report
-
-insights:
-  - insight_id: mapped_reads
-    name: Mapped reads
-    context:
-      kind: cohort
-      sample_set_id: production-rnaseq
-    mode: contract_metrics
-    visualization: bar
-    linker:
-      kind: sample
-    result_policy:
-      mode: preview
-      limit: 1000
-    query:
-      source:
-        kind: data_contract
-        data_contract_id: salmon:results
-      fields: [general_stats.salmon_percent_mapped]
-      entity: sample
-    series:
-      - contract_id: salmon:results
-        field_id: general_stats.salmon_percent_mapped
-        name: Percent mapped
-        aggregation: avg
-        result_scope:
-          selection: latest_successful_per_sample
-
-report:
-  report_id: rnaseq-qc
-  name: RNA-seq QC
+report_id: rnaseq-qc
+project_id: rnaseq-core
+name: RNA-seq QC
+description: Latest compatible QC results for the production cohort.
+config:
+  version: 1
+  layout:
+    columns: 12
   context:
     kind: cohort
     sample_set_id: production-rnaseq
   items:
-    - insight_id: mapped_reads
+    - insight_id: mapping-rate
       x: 0
       y: 0
       w: 6
       h: 4
+  filters: []
+  refresh_policy:
+    mode: manual
 ```
 
-??? info "Advanced chart options"
-    Advanced templates may eventually allow raw ECharts options as an escape
-    hatch, but the default authoring surface should stay Goodomics-specific and
-    stable.
+Create the component insights before creating the report. At execution time,
+Goodomics loads only referenced insight IDs that exist, preserving their order
+from `items`.
 
-## Charting
+Use these routes for the saved-report lifecycle:
 
-Apache ECharts is the default charting engine for Goodomics reports. It covers
-the common MultiQC- and cBioPortal-like chart families Goodomics needs:
-stacked/grouped bars, lines, scatter plots, histograms, heatmaps, boxplots,
-matrix-like views, legends, tooltips, zooming, and custom series.
+| Route | Purpose |
+| --- | --- |
+| `POST /api/v1/reports` | Save a report and its initial revision |
+| `PATCH /api/v1/reports/{report}` | Update metadata/config and record a config revision |
+| `GET /api/v1/reports/{report}/export.yaml` | Export a portable YAML document |
+| `GET /api/v1/reports/{report}/export.json` | Export a portable JSON document |
+| `POST /api/v1/reports/{report}/execute` | Return a structured report result |
+| `POST /api/v1/reports/render` | Execute and persist HTML |
+| `GET /api/v1/rendered-reports/{id}/export.html` | Download a rendered snapshot |
 
-Goodomics keeps chart selection behind a server-owned insight catalog. The
-catalog defines chart IDs, mode IDs, icons, series constraints, linker rules,
-result-size policies, and validation messages. The dashboard builder, API,
-report renderer, and future AI insight drafting path should use that catalog
-instead of exposing raw ECharts as the primary authoring model.
+See the [configuration reference](configuration.md) for insight and report
+keys and [compilation and execution](execution.md) for inheritance, caching,
+and rendering behavior.
 
-Plots that align multiple values should include a visible `linker`, shown in the
-UI as **Matched by**. If `auto` has exactly one valid linker, Goodomics may
-select it. If multiple valid linkers exist, the user must choose one such as
-`sample` or `feature`. Executed insight payloads include linker and result
-selection diagnostics, exact resolved occurrence IDs, and a `plot_table` with
-the rows used for plotting.
+## Insight exports
 
-Histogram insights use a numeric raw-value column and can set `query.bins` or
-`display.bins` to control bin count:
+Reports reference insights by ID rather than embedding every insight config.
+Export the component insights alongside a report when moving a complete report
+definition between installations:
+
+```http
+GET /api/v1/insights/mapping-rate/export.yaml
+GET /api/v1/reports/rnaseq-qc/export.yaml
+```
+
+An insight export contains:
 
 ```yaml
-insight_id: insert_size_distribution
-name: Insert size distribution
-visualization: histogram
-query:
-  source:
-    kind: data_contract
-    data_contract_id: picard:insert_size:metrics
-  fields: [multiqc_picard.insert_size]
-  y: multiqc_picard.insert_size
-  bins: 30
+insight_id: mapping-rate
+project_id: rnaseq-core
+name: Mapping rate
+description: Percent mapped for the latest successful result per sample.
+config:
+  version: 1
+  analysis_grain: sample
+  visualization: table
+  # Remaining insight config omitted here.
 ```
 
-Result-size policies keep previews and reports responsive:
+## Structured results versus rendered HTML
 
-- `preview`: embed up to 1,000 rows.
-- `more_rows`: embed a bounded user-selected number of rows.
-- `random_sample`: embed a deterministic sampled subset.
-- `all_rows`: embed all rows only below the configured threshold.
-- `export_full_data`: write full plot/table data to a file-backed artifact
-  instead of embedding every row in the API response.
+Executing a report returns a JSON object with the normalized report config and
+one result object per insight. This form is appropriate for Python, notebooks,
+MCP tools, and clients that render their own UI.
 
-Goodomics should keep chart intent in its own schema and compile that schema to
-ECharts options internally. Additional charting libraries should only be added
-for concrete gaps and should remain behind the Goodomics report/chart
-abstraction.
+Rendering a saved report runs the same insight execution first, converts the
+result to HTML, and stores the snapshot in `rendered_reports`. The HTML embeds
+the structured result as `window.goodomicsReport` and includes fallback tables
+for the bounded rows in each insight.
 
-## Dashboard editing
+Large result policies still apply during report execution. Use
+`export_full_data` for a file-backed data artifact rather than embedding an
+unbounded dataset in the report payload.
 
-The dashboard report builder should visually edit the same YAML/JSON-compatible
-model consumed by the CLI. Drag-and-drop placement, chart resizing, section
-ordering, data bindings, thresholds, and export settings should update template
-metadata rather than creating a separate dashboard-only format.
+## Standalone CLI templates
 
-## Caching and defaults
+The standalone path remains the lowest-friction way to point Goodomics at a
+results folder:
 
-Insight and report executions are cached by project, canonical config hash, and
-source fingerprint. The dashboard normally reuses a valid cached payload and
-offers a refresh action to recompute it. A project can set `default_report_id`
-so opening the project lands on the saved report instead of the sample list.
+```bash
+goodomics report ./results --template report.yaml --out report.html
+```
+
+The current standalone renderer loads a YAML or JSON mapping and reads
+`config.title` when present:
+
+```yaml
+config:
+  title: RNA-seq QC Report
+```
+
+It records the scanned results path in the output and does not execute saved
+insights against the server's SQL/DuckDB stores. Use a saved server report when
+you need contract selection, result scopes, cohort context, compiled charts,
+cache behavior, or durable report history.

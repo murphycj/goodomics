@@ -24,6 +24,10 @@ Goodomics is useful in a few modes:
 
 - [Getting started](getting-started.md): install Goodomics and generate the
   first standalone report.
+- [Data model and storage](concepts/architecture.md): understand projects,
+  runs, samples, contracts, control metadata, DuckDB analytics, and files.
+- [Data contracts and fields](concepts/data-contracts.md): understand the
+  semantic catalog and physical query routing.
 - [CLI](interfaces/cli.md): run reports and ingest outputs from the command
   line.
 - [Python SDK](interfaces/sdk.md): record runs, samples, metrics, and files from
@@ -33,8 +37,8 @@ Goodomics is useful in a few modes:
 - [Server](interfaces/server.md): run the optional FastAPI, MCP, database, and
   dashboard server.
 - [Dashboard](interfaces/dashboard.md): browse runs and edit reports and insights.
-- [Reports and insights](reports/report-templates.md): define portable report
-  layouts for the CLI and dashboard.
+- [Insights and reports](reports/index.md): build, execute, save, compose, and
+  render analytical tables and charts.
 
 ## Trust boundary
 

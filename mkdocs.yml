@@ -76,6 +76,9 @@ nav:
   - Get started:
       - Overview: index.md
       - Getting started: getting-started.md
+  - Concepts:
+      - Data model and storage: concepts/architecture.md
+      - Data contracts and fields: concepts/data-contracts.md
   - Interfaces:
       - CLI: interfaces/cli.md
       - Python SDK: interfaces/sdk.md
@@ -84,8 +87,12 @@ nav:
       - Server: interfaces/server.md
       - Dashboard: interfaces/dashboard.md
       - MCP integration: interfaces/mcp.md
-  - Reports:
-      - Report templates: reports/report-templates.md
+  - Insights and reports:
+      - Overview: reports/index.md
+      - Python and API usage: reports/python-api.md
+      - Configuration reference: reports/configuration.md
+      - Compilation and execution: reports/execution.md
+      - Templates and rendering: reports/report-templates.md
   - Operations:
       - Database backends: operations/database-backends.md
       - Deployment: operations/deployment.md

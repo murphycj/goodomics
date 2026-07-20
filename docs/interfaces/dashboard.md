@@ -26,6 +26,11 @@ Saved insights are individual charts, metrics, or tables. Saved reports compose
 one or more insights into a grid. A project can set `default_report_id` so the
 project opens directly to its report view.
 
+See [Insights and reports](../reports/index.md) for the builder workflow,
+[configuration reference](../reports/configuration.md) for the saved JSON/YAML
+shape, and [compilation and execution](../reports/execution.md) for backend
+behavior.
+
 ## Charting
 
 Apache ECharts is the default charting engine for dashboard previews and
