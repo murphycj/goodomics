@@ -10,7 +10,7 @@ from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore
 
 
 def create_store(database_url: str) -> SQLModelGoodomicsStore:
-    """Create the application-owned SQL catalog store."""
+    """Create the application-owned SQL metadata store."""
 
     return SQLModelGoodomicsStore(database_url)
 

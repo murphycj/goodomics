@@ -53,7 +53,7 @@ class LoggedMetric:
     """Metric buffered by the SDK before persistence.
 
     Buffered metrics are converted into DuckDB analytical rows during
-    :meth:`GoodomicsRun.flush`; they are not stored directly in the SQL catalog.
+    :meth:`GoodomicsRun.flush`; they are not stored directly in the SQL metadata store.
     """
 
     sample_id: str | None
@@ -101,7 +101,7 @@ class GoodomicsRun:
     """Workflow, tool, algorithm, notebook, benchmark, script, or importer."""
 
     database_url: str | None = None
-    """Optional SQL catalog database URL override."""
+    """Optional SQL metadata database URL override."""
 
     analytics_path: Path | None = None
     """Optional direct DuckDB analytics file override."""
@@ -261,7 +261,7 @@ class GoodomicsRun:
         return AnalyticsIngestBatch(sample_metrics=metrics)
 
     def flush(self) -> None:
-        """Persist buffered SDK data to the SQL catalog and DuckDB analytics store.
+        """Persist buffered SDK data to the SQL metadata and DuckDB analytical stores.
 
         The method is idempotent for one ``GoodomicsRun`` instance: later calls
         return immediately after a successful flush.
@@ -332,7 +332,7 @@ class GoodomicsRun:
             if self.metrics
             else []
         )
-        # The SQL catalog run stores execution/context metadata and links to the
+        # The SQL metadata run stores execution/context metadata and links to the
         # stable samples. It does not store the metric values themselves.
         analysis_type = resolve_analysis_type(self.analysis_type_id)
         method = analysis_method(
@@ -518,7 +518,7 @@ def run(
         method_id: Stable primary analysis method ID.
         method_version: Optional primary method version.
         method_kind: Method catalog kind.
-        database_url: Optional SQL catalog database URL override.
+        database_url: Optional SQL metadata database URL override.
         analytics_path: Optional direct DuckDB analytics file override.
         auto_persist: Whether successful context-manager exit should call
             :meth:`GoodomicsRun.flush`.

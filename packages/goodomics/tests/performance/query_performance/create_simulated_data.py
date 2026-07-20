@@ -375,7 +375,7 @@ async def _write_catalog_records(
 
 def _print_summary(store: DuckDBAnalyticsStore) -> None:
     print(f"analytics database: {DEFAULT_ANALYTICS_PATH}")
-    print(f"catalog database: {DEFAULT_DATABASE_URL}")
+    print(f"metadata database: {DEFAULT_DATABASE_URL}")
     with store._connect() as connection:
         for table in ("sample_metrics", "features", "feature_value_numeric"):
             row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()

@@ -1152,7 +1152,9 @@ function SqlSourceForm({
             <SelectContent>
               {stores.map((value) => (
                 <SelectItem key={value} value={value}>
-                  {value === "analytics" ? "DuckDB analytics" : "SQL catalog"}
+                  {value === "analytics"
+                    ? "DuckDB analytical store"
+                    : "SQL metadata store"}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -1,4 +1,4 @@
-"""Shared registry for SQL catalog tables exposed by the server.
+"""Shared registry for SQL metadata tables exposed by the server.
 
 The SQLModel record classes are defined in the storage and server model modules.
 This module describes how the server is allowed to expose those records to API
@@ -47,7 +47,7 @@ from goodomics.storage.sqlalchemy import (
 
 @dataclass(frozen=True)
 class CatalogTable:
-    """Server exposure policy for one SQL catalog table."""
+    """Server exposure policy for one SQL metadata table."""
 
     model: type[SQLModel]
     row_id_field: str

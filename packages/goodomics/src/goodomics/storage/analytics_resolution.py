@@ -72,7 +72,7 @@ def resolve_catalog_id(
         identifier = column_map.get(str(value))
     if identifier is None:
         raise ValueError(
-            f"No SQL catalog integer id found for {column}={value!r}. "
+            f"No SQL metadata integer id found for {column}={value!r}. "
             "Resolve catalog IDs before writing analytics rows to DuckDB."
         )
     return int(identifier)

@@ -16,7 +16,7 @@ def resolve_database_url(
     *,
     environ: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve the catalog database URL from argument, environment, or default."""
+    """Resolve the metadata database URL from argument, environment, or default."""
     environment = os.environ if environ is None else environ
     return database_url or environment.get(DATABASE_URL_ENV, DEFAULT_DATABASE_URL)
 

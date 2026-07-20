@@ -422,7 +422,7 @@ async def initialized_store(
 
 
 class SQLModelGoodomicsStore:
-    """Application-owned SQL catalog engine and session factory."""
+    """Application-owned SQL metadata engine and session factory."""
 
     def __init__(self, database_url: str, *, engine: AsyncEngine | None = None) -> None:
         """Create one engine and typed session factory for this store."""
@@ -458,7 +458,7 @@ class SQLModelGoodomicsStore:
         await self._engine.dispose()
 
     async def ensure_schema(self) -> None:
-        """Create any missing SQL catalog tables."""
+        """Create any missing SQL metadata tables."""
 
         async with self._engine.begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
@@ -577,7 +577,7 @@ class SQLModelGoodomicsStore:
         sample_set_members: list[SampleSetMember] | None = None,
         session: AsyncSession | None = None,
     ) -> CatalogWriteResult:
-        # Replace the SQL catalog rows for one run. Analytical metric
+        # Replace the SQL metadata rows for one run. Analytical metric
         # observations are intentionally not stored here; they live in DuckDB.
         normalized_links = [
             link.model_copy(update={"run_id": link.run_id or run.run_id})

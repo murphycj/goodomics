@@ -104,7 +104,7 @@ class ParserOutput:
 
         Pass a full `DataContract` when you have one, or pass a contract ID plus
         keyword fields accepted by `goodomics.contract(...)`. The contract is
-        written to the SQL catalog during ingest and can then be referenced by
+        written to the SQL metadata store during ingest and can then be referenced by
         later metric, feature, call, or payload records.
         """
         if isinstance(data_contract, DataContract):

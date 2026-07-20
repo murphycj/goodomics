@@ -1805,7 +1805,7 @@ def _catalog_storage_value(column: str, value: Any) -> int | None:
     if value is None or isinstance(value, int):
         return value
     raise ValueError(
-        f"Expected integer SQL catalog id for {column}, got {value!r}. "
+        f"Expected integer SQL metadata id for {column}, got {value!r}. "
         "Resolve catalog IDs before writing analytics rows to DuckDB."
     )
 

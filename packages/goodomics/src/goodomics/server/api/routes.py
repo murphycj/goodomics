@@ -1441,7 +1441,7 @@ async def get_run(run_id: str, request: Request) -> Run:
 
 @router.patch("/runs/{run_id}", response_model=Run)
 async def patch_run(run_id: str, payload: RunPatch, request: Request) -> Run:
-    """Patch editable run fields in the SQL catalog."""
+    """Patch editable run fields in the SQL metadata store."""
     values = payload.model_dump(exclude_unset=True)
     if values:
         async with _session_context(request) as session:
@@ -3519,7 +3519,7 @@ async def _get_project_run(request: Request, project_id: str, run_id: str) -> Ru
 
 
 async def _get_run_record(request: Request, run_id: str) -> RunRecord:
-    """Return the SQL catalog row for a run."""
+    """Return the SQL metadata row for a run."""
     async with _session_context(request) as session:
         row = await get_record_by_field(session, RunRecord, RunRecord.run_id, run_id)
     if row is None:
@@ -4243,7 +4243,7 @@ async def _catalog_table_page(
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
-    # Most catalog tables scope directly by project_id. A few tables either
+    # Most metadata tables scope directly by project_id. A few tables either
     # include global rows or only reference runs, so each case is handled
     # explicitly instead of assuming a universal schema.
     if (

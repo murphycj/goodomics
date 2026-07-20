@@ -44,7 +44,7 @@ const DEFAULT_COLUMN_WIDTH = 150;
 const LONG_COLUMN_WIDTH = 220;
 const PAGE_SIZES = [25, 50, 100, 250];
 const STORE_LABELS: Record<TableStore, string> = {
-  catalog: "Catalog tables",
+  catalog: "Metadata tables",
   analytics: "Analytical tables",
 };
 const COPY_FORMAT_LABELS = {
@@ -53,7 +53,7 @@ const COPY_FORMAT_LABELS = {
 } as const;
 type CopyFormat = keyof typeof COPY_FORMAT_LABELS;
 
-/** Project database browser for catalog and analytical tables. */
+/** Project database browser for metadata and analytical tables. */
 export function DatabasePage({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<{ store: TableStore; name: string } | null>(
     null,
@@ -449,13 +449,13 @@ function SummaryMetrics({
   }
   const metrics = [
     {
-      label: "Database",
-      subtitle: "SQLite catalog",
+      label: "Metadata store",
+      subtitle: "SQLite",
       value: formatBytes(query.data.sqlite_size_bytes),
     },
     {
-      label: "Analytics database",
-      subtitle: "DuckDB analytical store",
+      label: "Analytical store",
+      subtitle: "DuckDB",
       value: formatBytes(query.data.duckdb_size_bytes),
     },
   ];
@@ -485,7 +485,7 @@ function SummaryMetrics({
   );
 }
 
-/** Sidebar table navigator grouped by catalog and analytics stores. */
+/** Sidebar table navigator grouped by metadata and analytical stores. */
 function TableBrowser({
   tables,
   selected,

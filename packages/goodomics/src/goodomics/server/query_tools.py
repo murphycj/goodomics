@@ -1,4 +1,4 @@
-"""Read-only query tool surface bridging SQL catalog and DuckDB analytics."""
+"""Read-only query tool surface bridging SQL metadata and DuckDB analytics."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from goodomics.storage.sqlalchemy import (
 )
 
 # This module is the "friendly read API" for agents and query tools. It bridges
-# the SQL catalog, which tracks projects/runs/samples/files/contracts, and the
+# the SQL metadata store, which tracks projects/runs/samples/files/contracts, and the
 # DuckDB analytics store, which holds metric values and other analytical facts.
 # The public methods intentionally return compact dictionaries with dashboard
 # links and stable public IDs rather than raw SQLModel or DuckDB records.
@@ -84,7 +84,7 @@ class QueryToolContext:
     """Server settings used to locate project analytics databases."""
 
     store: SQLModelGoodomicsStore
-    """SQL catalog store used for short-lived query sessions."""
+    """SQL metadata store used for short-lived query sessions."""
 
     analytics_stores: AnalyticsStoreRegistry = field(
         default_factory=AnalyticsStoreRegistry
@@ -399,7 +399,7 @@ class GoodomicsQueryTools:
     ) -> dict[str, Any]:
         """List project samples with optional substring search."""
 
-        # Samples live in the SQL catalog. Analytical rows in DuckDB reference
+        # Samples live in the SQL metadata store. Analytical rows in DuckDB reference
         # them by integer ID, but tool callers work with stable sample_id labels.
         project_id, resolution = await self._required_project_id(project)
         if project_id is None:
