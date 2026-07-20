@@ -10,7 +10,7 @@ def build_ingest_request(
     *,
     project: str | None = None,
     report_name: str | None = None,
-    cohort: str | None = None,
+    sample_group_id: str | None = None,
     run_id: str | None = None,
 ) -> dict[str, str | None]:
     """Return CLI-facing ingest request fields with the path serialized as a string."""
@@ -19,6 +19,6 @@ def build_ingest_request(
         "results": str(results),
         "project": project,
         "report": report_name,
-        "cohort": cohort,
+        "sample_group_id": sample_group_id,
         "run_id": run_id,
     }

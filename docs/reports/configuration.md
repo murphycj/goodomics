@@ -11,7 +11,7 @@ The executor fills missing top-level values with these defaults:
 ```yaml
 version: 1
 context:
-  kind: cohort
+  kind: sample_group
 analysis_grain: sample
 visualization: table
 query: {}
@@ -33,7 +33,7 @@ The full top-level structure is:
 | `title` / `name` | Result title |
 | `description` | Optional explanatory text |
 | `analysis_grain` | Public entity being analyzed |
-| `context` | Sample or cohort restriction |
+| `context` | Sample or sample group restriction |
 | `visualization` | Table, metric, or chart ID |
 | `query` | Source, fields, dimensions, measures, filters, and chart axes |
 | `series` | Contract-backed chart values |
@@ -70,16 +70,16 @@ context:
 
 ```yaml
 context:
-  kind: cohort
+  kind: sample_group
   sample_group_id: production-rnaseq
 ```
 
-Singular `sample_id` and plural `sample_ids` are both accepted. Cohort context
-accepts singular `sample_group_id` or plural `sample_group_ids`. Sample groups contain
-run-sample membership, so they preserve the result occurrence represented by a
-cohort.
+Singular `sample_id` and plural `sample_ids` are both accepted. Sample-group
+context accepts singular `sample_group_id` or plural `sample_group_ids`. Sample
+groups contain run-sample membership, so they preserve the represented result
+occurrence.
 
-An empty cohort context is unbounded; it does not imply a particular saved
+An empty sample group context is unbounded; it does not imply a particular saved
 sample group.
 
 ## Contract query

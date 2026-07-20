@@ -35,7 +35,7 @@ METADATA_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
             "run_contract_id",
         }
     ),
-    "cohort_summaries": frozenset({"sample_group_id", "data_contract_id"}),
+    "sample_group_summaries": frozenset({"sample_group_id", "data_contract_id"}),
     "tool_versions": frozenset({"run_id"}),
     "data_sources": frozenset({"run_id", "run_sample_id", "sample_id"}),
 }

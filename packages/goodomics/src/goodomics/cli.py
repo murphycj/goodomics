@@ -69,7 +69,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 app = typer.Typer(
     cls=GoodomicsTyperGroup,
     context_settings=CONTEXT_SETTINGS,
-    help="Cohort-aware QC for omics pipelines.",
+    help="Sample context, QC, and storage for omics pipelines.",
 )
 console = Console()
 RESULTS_ARGUMENT = typer.Argument(..., help="Pipeline results directory.")
@@ -92,7 +92,7 @@ INGEST_TYPE_OPTION = typer.Option(
     help="Input type to ingest.",
 )
 REPORT_OPTION = typer.Option(None, "--report", "-r")
-COHORT_OPTION = typer.Option(None, "--cohort", "-c")
+GROUP_OPTION = typer.Option(None, "--group", "-g")
 RUN_ID_OPTION = typer.Option(None, "--run-id", "-R")
 DATABASE_URL_OPTION = typer.Option(
     None,
@@ -358,7 +358,7 @@ def ingest(
     project: str | None = PROJECT_OPTION,
     analysis_type_id: str | None = ANALYSIS_TYPE_OPTION,
     report_name: str | None = REPORT_OPTION,
-    cohort: str | None = COHORT_OPTION,
+    group: str | None = GROUP_OPTION,
     run_id: str | None = RUN_ID_OPTION,
     database_url: str | None = DATABASE_URL_OPTION,
     analytics_path: Path | None = ANALYTICS_PATH_OPTION,
@@ -370,8 +370,8 @@ def ingest(
     _configure_cli_logging(log_level)
     if report_name:
         console.print("[yellow]Ignoring --report during ingestion.[/yellow]")
-    if cohort:
-        console.print("[yellow]Ignoring --cohort during ingestion.[/yellow]")
+    if group:
+        console.print("[yellow]Ignoring --group during ingestion.[/yellow]")
     _run_configured_ingest(
         results=results,
         ingest_type=ingest_type,

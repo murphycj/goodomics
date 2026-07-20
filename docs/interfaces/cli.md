@@ -48,7 +48,7 @@ storage:
 goodomics ingest ./results \
   --project rnaseq-core \
   --report rnaseq-qc@v3 \
-  --cohort production-rnaseq-hg38@2026-05 \
+  --group production-rnaseq-hg38@2026-05 \
   --run-id 2026-06-16_batch_042
 ```
 

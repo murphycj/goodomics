@@ -9,7 +9,7 @@ The builder follows this conceptual workflow:
 1. **Analyze by**: choose the public grain—sample, subject, run, feature,
    variant, or file.
 2. **Context**: optionally restrict the analysis to samples or a saved sample
-   set/cohort.
+   group.
 3. **Choose data**: select one or more fields grouped under their data
    contracts.
 4. **Results from**: decide which produced result occurrence to use for every

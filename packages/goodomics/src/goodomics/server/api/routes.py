@@ -419,7 +419,7 @@ class InsightValidationRead(BaseModel):
 
 
 class SampleGroupRead(BaseModel):
-    """Canonical sample-group/cohort context option."""
+    """Canonical sample-group context option."""
 
     sample_group_id: str
     url_slug: str
@@ -448,7 +448,7 @@ class SampleGroupCreate(BaseModel):
 
     name: str
     description: str | None = None
-    kind: str = "cohort"
+    kind: str = "sample_group"
     sample_ids: list[str] = Field(default_factory=list)
 
 
@@ -2436,7 +2436,7 @@ async def create_project_sample_group(
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Sample group name is required")
-    kind = payload.kind.strip() or "cohort"
+    kind = payload.kind.strip() or "sample_group"
     now = datetime.now(UTC)
     async with _session_context(request) as session:
         row = SampleGroupRecord(
@@ -2506,7 +2506,7 @@ async def patch_project_sample_group(
         if payload.description is not None:
             row.description = payload.description
         if payload.kind is not None:
-            row.kind = payload.kind.strip() or "cohort"
+            row.kind = payload.kind.strip() or "sample_group"
         if payload.metadata_json is not None:
             row.metadata_json = payload.metadata_json
         row.updated_at = datetime.now(UTC)
@@ -2625,7 +2625,7 @@ async def list_sample_groups(
     project_id: str | None = Query(default=None),
     kind: str | None = Query(default=None),
 ) -> list[SampleGroupRead]:
-    """List canonical sample groups used as cohort/reference contexts."""
+    """List canonical sample groups used for filtering and comparison."""
     project_pk: int | None = None
     if project_id is not None:
         project = await _require_project(request, project_id)

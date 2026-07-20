@@ -62,7 +62,7 @@ config = {
     "version": 1,
     "title": "Mapping rate by sample",
     "analysis_grain": "sample",
-    "context": {"kind": "cohort"},
+    "context": {"kind": "sample_group"},
     "visualization": "table",
     "query": {
         "source": {

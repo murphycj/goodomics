@@ -15,7 +15,7 @@ relationship into one database.
 
 | Layer | Default | Stores | Typical access |
 | --- | --- | --- | --- |
-| Metadata store | SQLite | Projects, runs, samples, subjects, imports, contracts, fields, files, cohorts, saved insights, reports, revisions, and cache records | CRUD, relationships, permissions, and result selection |
+| Metadata store | SQLite | Projects, runs, samples, subjects, imports, contracts, fields, files, sample groups, saved insights, reports, revisions, and cache records | CRUD, relationships, permissions, and result selection |
 | Analytical store | One DuckDB database per project | Scalar metrics, attributes, feature values and calls, variants, segments, and logical payloads | Filtering, aggregation, comparison, and plotting |
 | File store | Local filesystem | Original evidence and generated artifacts such as reports, logs, VCFs, BAMs, and exported insight data | Download, archival, and provenance |
 

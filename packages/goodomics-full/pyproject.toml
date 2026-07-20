@@ -1,7 +1,7 @@
 [project]
 name = "goodomics"
 version = "0.1.0"
-description = "Cohort-aware QC, reporting, storage, dashboard, API, and MCP for omics pipelines"
+description = "Sample-group-based QC, reporting, storage, dashboard, API, and MCP for omics pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

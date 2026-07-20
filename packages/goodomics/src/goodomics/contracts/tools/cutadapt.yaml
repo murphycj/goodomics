@@ -10,7 +10,7 @@ contracts:
     feature_type: tool_output
     value_type: mixed
     entity_grain: sample
-    query_modes: [sample, metric, payload, cohort]
+    query_modes: [sample, metric, payload, sample_group]
     description: Metrics and result payloads from Cutadapt outputs.
     metadata_json:
       contract_scope: semantic_contract

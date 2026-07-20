@@ -1049,7 +1049,7 @@ def test_contract_series_charts_match_metadata_field_ids(
     base_config = {
         "version": 1,
         "title": "Salmon mapped",
-        "context": {"kind": "cohort"},
+        "context": {"kind": "sample_group"},
         "analysis_grain": "sample",
         "query": {
             "source": {
@@ -1155,7 +1155,7 @@ def test_contract_browser_scopes_contracts_and_fields_to_project(
         data_type="sample_metrics",
         producer_tool="project-scope-test",
         value_type="numeric",
-        query_modes=["sample", "cohort"],
+        query_modes=["sample", "sample_group"],
     )
 
     @parser(key="project-scope-test", contracts=[shared_contract])
@@ -1440,7 +1440,7 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "config": {
                     "version": 1,
                     "analysis_grain": "feature",
-                    "context": {"kind": "cohort"},
+                    "context": {"kind": "sample_group"},
                     "visualization": "histogram",
                     "query": {
                         "source": {
@@ -2018,7 +2018,7 @@ def test_sample_group_context_endpoint_uses_canonical_model(
         "\n".join(
             [
                 "stable_id: demo_cases",
-                "case_list_name: Demo cohort",
+                "case_list_name: Demo sample group",
                 "case_list_category: selected_samples",
                 "case_list_ids: S1 S2",
             ]
@@ -2041,7 +2041,7 @@ def test_sample_group_context_endpoint_uses_canonical_model(
         project_id = test_client.get("/api/v1/projects").json()[0]["project_id"]
         response = test_client.get(
             "/api/v1/sample-groups",
-            params={"project_id": project_id, "kind": "cohort"},
+            params={"project_id": project_id, "kind": "sample_group"},
         )
 
     assert response.status_code == 200
@@ -2091,7 +2091,7 @@ def test_project_sample_group_lifecycle(client: TestClient) -> None:
     group = created_group.json()
     assert group["sample_group_id"].startswith("sample-group-")
     assert re.match(r"^sg_[0-9a-f]{10}-responders$", group["url_slug"])
-    assert group["kind"] == "cohort"
+    assert group["kind"] == "sample_group"
     assert group["member_count"] == 2
     assert group["updated_at"]
 

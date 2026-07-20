@@ -4,7 +4,7 @@ This file is the source of truth for saved insight and report behavior.
 
 ## Builder model
 
-- The workflow is **Analyze by** → sample/cohort context → **Choose data** →
+- The workflow is **Analyze by** → sample or sample-group context → **Choose data** →
   per-series filters and **Results from** → **Matched by** → **View as**.
 - Public grains are `sample`, `subject`, `run`, `feature`, `variant`, and `file`.
   `run_sample` is internal and must not appear in builder grains, templates,

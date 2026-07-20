@@ -37,7 +37,7 @@ def tool_results_contract(
         feature_type="tool_output",
         value_type="mixed",
         entity_grain="sample",
-        query_modes=["sample", "metric", "payload", "cohort"],
+        query_modes=["sample", "metric", "payload", "sample_group"],
         description=f"Metrics and result payloads from {display_base} outputs.",
     )
     return _with_tool_metadata(data_contract, normalized_tool, normalized_context)

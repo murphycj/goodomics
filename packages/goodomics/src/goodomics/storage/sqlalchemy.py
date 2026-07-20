@@ -370,7 +370,7 @@ class SampleGroupRecord(SQLModel, table=True):
     sample_group_id: str = Field(max_length=255, unique=True, index=True)
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
-    kind: str = Field(default="cohort", max_length=64)
+    kind: str = Field(default="sample_group", max_length=64)
     description: str | None = None
     definition_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime
@@ -400,7 +400,7 @@ class QCDecisionRecord(SQLModel, table=True):
     run_id: int = Field(foreign_key="runs.id", index=True)
     status: str = Field(max_length=32)
     reasons: list[str] = Field(default_factory=list, sa_type=JSON)
-    cohort: str | None = Field(default=None, max_length=255)
+    sample_group_id: str | None = Field(default=None, max_length=255)
     report_version: str | None = Field(default=None, max_length=255)
     policy_version: str | None = Field(default=None, max_length=255)
 

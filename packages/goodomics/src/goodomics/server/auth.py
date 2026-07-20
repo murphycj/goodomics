@@ -59,8 +59,8 @@ PERMISSIONS = frozenset(
         "report.delete",
         "report.execute",
         "result.persist",
-        "cohort.read",
-        "cohort.manage",
+        "sample_group.read",
+        "sample_group.manage",
         "qc_policy.read",
         "qc_policy.manage",
         "ai.chat",
@@ -77,7 +77,7 @@ VIEWER_PERMISSIONS = frozenset(
         "insight.execute",
         "report.read",
         "report.execute",
-        "cohort.read",
+        "sample_group.read",
         "qc_policy.read",
         "ai.chat",
     }
@@ -98,7 +98,7 @@ DATA_MANAGER_PERMISSIONS = ANALYST_PERMISSIONS | {
     "database.edit",
     "files.create",
     "files.delete",
-    "cohort.manage",
+    "sample_group.manage",
     "qc_policy.manage",
 }
 OWNER_PERMISSIONS = PERMISSIONS - {"project.create"}
@@ -477,8 +477,8 @@ def _request_permission(method: str, path: str) -> str:
     if "/qc-policies" in path:
         return "qc_policy.manage" if mutation else "qc_policy.read"
 
-    if "/sample-groups" in path or "/sample-groups" in path:
-        return "cohort.manage" if mutation else "cohort.read"
+    if "/sample-groups" in path:
+        return "sample_group.manage" if mutation else "sample_group.read"
 
     if "/database" in path:
         return "database.edit" if mutation else "database.read"

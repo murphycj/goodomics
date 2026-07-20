@@ -681,7 +681,7 @@ def _parse_case_lists(context: CbioPortalParseContext) -> None:
             project_id=context.project_id,
             name=values.get("case_list_name") or stable_id,
             kind=(
-                "cohort"
+                "sample_group"
                 if values.get("case_list_category") != "all_cases_in_study"
                 else "case_group"
             ),

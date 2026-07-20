@@ -36,7 +36,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: call
-    query_modes: [sample, feature, call, cohort]
+    query_modes: [sample, feature, call, sample_group]
     description: Gene-level discrete copy-number calls imported from cBioPortal.
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:continuous
@@ -45,7 +45,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Gene-level continuous copy-number measurements imported from cBioPortal.
     fields:
       - field_id: copy_number
@@ -66,7 +66,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Gene-level log2 copy-number measurements imported from cBioPortal.
     fields:
       - field_id: log2_copy_number
@@ -96,7 +96,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Continuous mRNA expression measurements imported from cBioPortal.
     fields:
       - field_id: expression
@@ -117,7 +117,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: mRNA expression z-scores imported from cBioPortal.
     fields:
       - field_id: expression_z_score
@@ -139,7 +139,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: gene
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Continuous methylation beta measurements imported from cBioPortal.
     fields:
       - field_id: methylation_beta
@@ -161,7 +161,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: protein
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Continuous protein abundance measurements imported from cBioPortal.
     fields:
       - field_id: protein_abundance
@@ -182,7 +182,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: protein
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Protein abundance z-scores imported from cBioPortal.
     fields:
       - field_id: protein_abundance_z_score
@@ -221,7 +221,7 @@ contracts:
     producer_tool: cbioportal
     feature_type: generic_entity
     value_type: numeric
-    query_modes: [sample, feature, cohort]
+    query_modes: [sample, feature, sample_group]
     description: Numeric limit-type generic assay measurements imported from cBioPortal.
     fields:
       - field_id: assay_measurement

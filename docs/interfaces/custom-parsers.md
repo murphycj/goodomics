@@ -20,7 +20,7 @@ rnaseq_tpm = contract(
     producer_tool="lab-notebook",
     feature_type="gene",
     value_type="numeric",
-    query_modes=["sample", "feature", "cohort"],
+    query_modes=["sample", "feature", "sample_group"],
 )
 
 
@@ -112,7 +112,7 @@ gene_tpm = contract(
     producer_tool="lab-rnaseq",
     feature_type="gene",
     value_type="numeric",
-    query_modes=["sample", "feature", "cohort"],
+    query_modes=["sample", "feature", "sample_group"],
 )
 ```
 

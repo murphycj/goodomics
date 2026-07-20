@@ -10,7 +10,7 @@ contracts:
     feature_type: metric
     value_type: mixed
     entity_grain: sample
-    query_modes: [sample, metric, cohort]
+    query_modes: [sample, metric, sample_group]
     description: User-logged metrics captured through the Goodomics SDK.
     metadata_json:
       contract_scope: semantic_contract

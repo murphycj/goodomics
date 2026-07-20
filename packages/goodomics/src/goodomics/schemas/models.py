@@ -244,12 +244,12 @@ class FileLink(GoodomicsModel):
 
 
 class SampleGroup(GoodomicsModel):
-    """Saved group of sample/run links, such as a cohort or reference set."""
+    """Saved group of sample/run links used for filtering or comparison."""
 
     sample_group_id: str
     project_id: str | None = None
     name: str
-    kind: str = "cohort"
+    kind: str = "sample_group"
     description: str | None = None
     definition_json: JsonObject = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -269,7 +269,7 @@ class QCDecision(GoodomicsModel):
 
     status: Literal["pass", "warn", "fail", "unknown"]
     reasons: list[str] = Field(default_factory=list)
-    cohort: str | None = None
+    sample_group_id: str | None = None
     report_version: str | None = None
     policy_version: str | None = None
 
@@ -688,7 +688,7 @@ class GeneAlterationState(AnalyticalRecord):
     source_event_id: str | None = None
 
 
-class CohortSummary(AnalyticalRecord):
+class SampleGroupSummary(AnalyticalRecord):
     """Precomputed summary statistics for a sample group and contract feature."""
 
     sample_group_id: int
@@ -750,6 +750,6 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     timeline_events: list[Any] = Field(default_factory=list)
     result_payloads: list[Any] = Field(default_factory=list)
     gene_alteration_state: list[Any] = Field(default_factory=list)
-    cohort_summaries: list[Any] = Field(default_factory=list)
+    sample_group_summaries: list[Any] = Field(default_factory=list)
     tool_versions: list[Any] = Field(default_factory=list)
     data_sources: list[Any] = Field(default_factory=list)

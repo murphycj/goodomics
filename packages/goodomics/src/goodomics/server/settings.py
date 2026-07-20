@@ -83,7 +83,7 @@ class AnonymousSettings(BaseModel):
             "insight.execute",
             "report.read",
             "report.execute",
-            "cohort.read",
+            "sample_group.read",
             "qc_policy.read",
             "ai.chat",
         ]

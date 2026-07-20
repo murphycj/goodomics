@@ -34,7 +34,7 @@ Common contract properties include:
 | `value_type` | Contract-level value shape |
 | `entity_grain` | Default entity the values describe |
 | `value_semantics` | Meaning such as `tpm`, `count`, `beta`, or `zscore` |
-| `query_modes` | Supported access paths such as sample, metric, cohort, or payload |
+| `query_modes` | Supported access paths such as sample, metric, sample group, or payload |
 | `summary` | Compact profiled summary |
 | `source_fingerprint` | Input fingerprint used to invalidate summaries and caches |
 | `intrinsic_producer_families` | Tool or pipeline families that can emit the contract |
@@ -104,7 +104,7 @@ contracts:
     feature_type: metric
     value_type: numeric
     entity_grain: sample
-    query_modes: [sample, metric, cohort]
+    query_modes: [sample, metric, sample_group]
     description: Scalar metrics emitted by Example Tool.
     fields:
       - field_id: example.score

@@ -1,6 +1,6 @@
 # Goodomics Product Brief
 
-Goodomics is an early-stage Python package for cohort-aware QC and durable
+Goodomics is an early-stage Python package for sample-group-based QC and durable
 context around omics computational outputs.
 
 The adoption path should stay simple:
@@ -39,7 +39,7 @@ Deterministic storage and reviewable provenance remain the trust layer.
 
 QC/reporting is the first concrete wedge. The long-term product is broader:
 structured context for production workflows, exploratory analyses, tool
-benchmarks, parameter sweeps, metrics, files, provenance, cohorts, policies,
+benchmarks, parameter sweeps, metrics, files, provenance, sample groups, policies,
 references, reports, and decisions.
 
 The default storage path should stay boring and easy: SQLite for product and
@@ -95,12 +95,12 @@ Goodomics should help users answer questions like:
 - Which metrics are outliers?
 - Which files, logs, parameters, references, and tool versions were attached
   to this output?
-- What cohort, report template, or QC policy was active?
+- What sample group, report template, or QC policy was active?
 - Can this review or decision be reproduced later?
 
 The key differentiator is versioned, queryable context:
 
-> This run was evaluated against this cohort, using this report version and this
+> This run was evaluated against this sample group, using this report version and this
 > QC policy version.
 
 Goodomics should provide computational and operational context. It should not
@@ -157,7 +157,7 @@ goodomics ui
 
 Uses SQLite by default for the metadata store and DuckDB for project-level
 analytics. The metadata store holds users, projects, runs, samples, permissions,
-reports, cohorts, policies, and file metadata. Each project can have its own
+reports, sample groups, policies, and file metadata. Each project can have its own
 DuckDB analytical store for metrics and omics-shaped tables.
 
 Goodomics should also support Postgres or MySQL for more durable local or team
@@ -171,7 +171,7 @@ For Nextflow, Snakemake, WDL, shell workflows, notebooks, and internal pipelines
 goodomics ingest ./results \
   --project rnaseq-core \
   --report rnaseq-qc@v3 \
-  --cohort production-rnaseq-hg38@2026-05 \
+  --group production-rnaseq-hg38@2026-05 \
   --run-id 2026-06-16_batch_042
 ```
 
@@ -190,7 +190,7 @@ goodomics serve
 The server should expose:
 
 - API routes for runs, samples, metrics, files, reports, report templates,
-  cohorts, and QC policies
+  sample groups, and QC policies
 - a dashboard for browsing and editing stored context
 - MCP access so agents can query structured run history instead of scraping
   random files
@@ -247,11 +247,11 @@ Analysis method = workflow, tool, algorithm, notebook, benchmark, script, or imp
 Data contract = what kind of data was produced.
 Produced result = one run's occurrence of a data contract.
 Observation = a value, call, or measurement inside that contract.
-Cohort or reference set = selected sample/run links.
+Sample group or reference set = selected sample/run links.
 ```
 
 Goodomics should expose bioinformatics-shaped concepts without becoming a LIMS.
-Projects, runs, samples, optional subjects, files, data contracts, cohorts,
+Projects, runs, samples, optional subjects, files, data contracts, sample groups,
 reference sets, QC policies, report templates, review decisions, parser plugins,
 and MCP tools should work together as one product surface. Detailed terminology
 and schema direction live in `instructions/DATA_MODEL.md`.
@@ -284,12 +284,12 @@ goodomics_bundle/
 - Add derived analytical tables or views for common sample-, metric-, gene-, and
   region-centric queries when useful
 - Create and export report templates for workflow integration
-- Create cohorts from previous sample/run links
-- Compare new runs against historical cohorts and trusted references
+- Create sample groups from previous sample/run links
+- Compare new runs against historical sample groups and trusted references
 - Define visual thresholds for metrics
-- Version QC policies, report templates, cohorts, references, and review
+- Version QC policies, report templates, sample groups, references, and review
   decisions
-- Provide a web UI for browsing runs, samples, metrics, cohorts, policies, and
+- Provide a web UI for browsing runs, samples, metrics, sample groups, policies, and
   reports
 - Offer a Python API for custom metrics
 - Expose MCP/API access for structured run-history queries
@@ -421,7 +421,7 @@ Good AI-assisted features:
 - Query run history in natural language through MCP
 - Suggest parser schemas for new outputs
 - Draft QC notes and run summaries
-- Compare outlier samples to a cohort or reference set
+- Compare outlier samples to a sample group or reference set
 
 Trust boundary:
 
@@ -429,5 +429,5 @@ Trust boundary:
 > structured evidence. Scientists and teams make the final call.
 
 Avoid implying that AI makes final QC or scientific decisions. Deterministic
-thresholds, cohort comparisons, stored references, and user-reviewed policies
+thresholds, sample group comparisons, stored references, and user-reviewed policies
 should remain the source of truth.

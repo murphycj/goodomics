@@ -730,7 +730,7 @@ def default_metric_contract(parser_key: str) -> DataContract:
         producer_tool=parser_key,
         feature_type="metric",
         value_type="mixed",
-        query_modes=["sample", "metric", "cohort"],
+        query_modes=["sample", "metric", "sample_group"],
         description=f"Custom metrics emitted by the {parser_key} parser.",
     )
 
@@ -756,7 +756,7 @@ def _contract_from_id(value: str, parser_key: str) -> DataContract:
         producer_tool=parser_key,
         feature_type="metric",
         value_type="mixed",
-        query_modes=["sample", "metric", "cohort"],
+        query_modes=["sample", "metric", "sample_group"],
     )
 
 

@@ -84,7 +84,7 @@ function PreviewAuditBar({
 }
 
 function contextLabel(context: Record<string, unknown> | null) {
-  const kind = stringValue(context?.kind) || "cohort";
+  const kind = stringValue(context?.kind) || "sample_group";
   const sampleGroup = stringValue(context?.sample_group_id);
   const sample = stringValue(context?.sample_id);
   const sampleGroups = stringArrayValue(context?.sample_group_ids);

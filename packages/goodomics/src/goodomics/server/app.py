@@ -90,8 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="Goodomics API",
         version="0.1.0",
         description=(
-            "API for Goodomics runs, samples, metrics, insights, reports, cohorts, "
-            "QC policies, MCP integrations, and the React dashboard."
+            "API for Goodomics runs, samples, metrics, insights, reports, "
+            "sample groups, QC policies, MCP integrations, and the React dashboard."
         ),
         lifespan=lifespan,
     )

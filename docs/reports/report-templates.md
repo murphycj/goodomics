@@ -19,13 +19,13 @@ A saved report API document wraps identity and display fields around its config:
 report_id: rnaseq-qc
 project_id: rnaseq-core
 name: RNA-seq QC
-description: Latest compatible QC results for the production cohort.
+description: Latest compatible QC results for the production sample group.
 config:
   version: 1
   layout:
     columns: 12
   context:
-    kind: cohort
+    kind: sample_group
     sample_group_id: production-rnaseq
   items:
     - insight_id: mapping-rate
@@ -117,5 +117,5 @@ config:
 
 It records the scanned results path in the output and does not execute saved
 insights against the server's SQL/DuckDB stores. Use a saved server report when
-you need contract selection, result scopes, cohort context, compiled charts,
+you need contract selection, result scopes, sample group context, compiled charts,
 cache behavior, or durable report history.

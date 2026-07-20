@@ -1,7 +1,7 @@
 # MCP integration
 
 Goodomics can expose structured run context to MCP clients so agents can query
-stored metrics, files, reports, templates, cohorts, and policies without
+stored metrics, files, reports, templates, sample groups, and policies without
 scraping random output files.
 
 ## Route separation

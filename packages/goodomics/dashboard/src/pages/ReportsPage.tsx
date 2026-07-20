@@ -69,7 +69,7 @@ import { useAuth } from "../components/auth/AuthProvider";
 import { cn } from "../lib/utils";
 
 type ReportMode = "list" | "detail";
-type ReportContextKind = "cohort" | "sample";
+type ReportContextKind = "sample_group" | "sample";
 type ReportTarget =
   | { mode: "list" }
   | { mode: "new" }
@@ -98,8 +98,8 @@ export function ReportsPage({
     queryFn: () => listInsights(projectId),
   });
   const sampleGroups = useQuery({
-    queryKey: ["sample-groups", projectId, "cohort"],
-    queryFn: () => listSampleGroups(projectId, "cohort"),
+    queryKey: ["sample-groups", projectId, "sample_group"],
+    queryFn: () => listSampleGroups(projectId, "sample_group"),
   });
   const mode: ReportMode = target.mode === "list" ? "list" : "detail";
   const isNewReport = target.mode === "new";
@@ -122,7 +122,7 @@ export function ReportsPage({
   const [name, setName] = useState("Project report");
   const [description, setDescription] = useState("");
   const [contextKind, setContextKind] =
-    useState<ReportContextKind>("cohort");
+    useState<ReportContextKind>("sample_group");
   const [sampleGroupId, setSampleGroupId] = useState("");
   const [sampleId, setSampleId] = useState("");
   const [runSampleId, setRunSampleId] = useState("");
@@ -132,7 +132,7 @@ export function ReportsPage({
     if (isNewReport) {
       setName("Project report");
       setDescription("");
-      setContextKind("cohort");
+      setContextKind("sample_group");
       setSampleId("");
       setRunSampleId("");
       setItems([]);
@@ -145,7 +145,7 @@ export function ReportsPage({
     const context = isRecord(selectedReport.config.context)
       ? selectedReport.config.context
       : {};
-    setContextKind(context.kind === "sample" ? "sample" : "cohort");
+    setContextKind(context.kind === "sample" ? "sample" : "sample_group");
     setSampleGroupId(stringValue(context.sample_group_id));
     setSampleId(stringValue(context.sample_id));
     setRunSampleId(stringValue(context.run_sample_id));
@@ -797,7 +797,7 @@ function ReportContextControls({
   return (
     <div className="mt-3 grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
       <div className="grid grid-cols-2 gap-2">
-        {(["cohort", "sample"] as const).map((kind) => (
+        {(["sample_group", "sample"] as const).map((kind) => (
           <Button
             className="justify-center"
             key={kind}
@@ -805,13 +805,13 @@ function ReportContextControls({
             variant={contextKind === kind ? "secondary" : "outline"}
             onClick={() => onContextKindChange(kind)}
           >
-            {kind === "cohort" ? "Cohort" : "Sample"}
+            {kind === "sample_group" ? "Sample group" : "Sample"}
           </Button>
         ))}
       </div>
-      {contextKind === "cohort" ? (
+      {contextKind === "sample_group" ? (
         <div className="space-y-1.5">
-          <Label>Cohort</Label>
+          <Label>Sample group</Label>
           <Select value={sampleGroupId} onValueChange={onSampleGroupIdChange}>
             <SelectTrigger>
               <SelectValue placeholder="All samples" />
@@ -870,7 +870,7 @@ function buildReportContext({
         run_sample_id: runSampleId.trim() || undefined,
       }
     : {
-        kind: "cohort",
+        kind: "sample_group",
         sample_group_id: sampleGroupId || undefined,
       };
 }

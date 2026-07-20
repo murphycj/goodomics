@@ -140,7 +140,7 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
 
     normalized = dict(config)
     normalized.setdefault("version", 1)
-    normalized.setdefault("context", {"kind": "cohort"})
+    normalized.setdefault("context", {"kind": "sample_group"})
     normalized["analysis_grain"] = _normalize_analysis_grain(
         normalized.get("analysis_grain")
     )
@@ -1144,7 +1144,7 @@ async def _context_where_sql(
     context = config.get("context")
     if not isinstance(context, Mapping):
         return []
-    kind = str(context.get("kind") or "cohort")
+    kind = str(context.get("kind") or "sample_group")
     where_parts: list[str] = []
     if kind == "sample":
         sample_ids = _context_string_values(context, "sample_ids", "sample_id")
@@ -1155,7 +1155,7 @@ async def _context_where_sql(
             ]
             parameters.extend(sample_pks)
             where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
-    elif kind == "cohort":
+    elif kind == "sample_group":
         sample_group_ids = _context_string_values(
             context, "sample_group_ids", "sample_group_id"
         )
@@ -1994,7 +1994,7 @@ async def _compile_mixed_contract_table_query(
         # receive the same parameters list used to execute the final query.
         parameters.append(_record_pk(contract))
         where_parts = ["data_contract_id = ?", _field_id_match_sql(parameters, field)]
-        # Apply cohort/sample context only when the source table has the needed
+        # Apply sample-group or sample context only when the source table has the needed
         # identity columns. That lets the same preview combine, for example,
         # sample metrics and result payloads without forcing unsupported filters.
         where_parts.extend(

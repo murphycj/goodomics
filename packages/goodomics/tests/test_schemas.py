@@ -183,7 +183,9 @@ def test_data_import_model_has_expected_defaults() -> None:
 
 
 def test_qc_decision_status_values() -> None:
-    decision = QCDecision(status="warn", reasons=["low depth"], cohort="study-a")
+    decision = QCDecision(
+        status="warn", reasons=["low depth"], sample_group_id="study-a"
+    )
 
     assert decision.status == "warn"
     assert decision.reasons == ["low depth"]

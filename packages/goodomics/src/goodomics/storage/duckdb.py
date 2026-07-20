@@ -16,7 +16,6 @@ from pydantic import BaseModel
 
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
-    CohortSummary,
     CopyNumberSegment,
     DataSource,
     EntityAttribute,
@@ -29,6 +28,7 @@ from goodomics.schemas.models import (
     GeneAlterationState,
     GenomicInterval,
     ResultPayload,
+    SampleGroupSummary,
     SampleIntervalValue,
     SampleMetric,
     SampleStructuralVariantCall,
@@ -373,8 +373,8 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         "feature_id, alteration_type, data_contract_id, run_sample_id",
     ),
     AnalyticalTableSerializer(
-        "cohort_summaries",
-        CohortSummary,
+        "sample_group_summaries",
+        SampleGroupSummary,
         "sample_group_id, data_contract_id, field_id, feature_id",
         unique_columns=(
             "sample_group_id",
@@ -743,7 +743,7 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "run_contract_id",
             "source_event_id",
         ),
-        "cohort_summaries": (
+        "sample_group_summaries": (
             "sample_group_id",
             "data_contract_id",
             "field_id",

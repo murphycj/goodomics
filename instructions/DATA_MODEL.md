@@ -36,8 +36,7 @@ The guiding identity rule:
 | Run sample    | A sample included in a specific run                         | Simple `run_sample` linker for sample/run lookup, comparison, and metrics          |
 | File          | Original or derived file                                    | Tracks physical evidence and outputs                                               |
 | Data contract | Smallest logical queryable dataset                          | Declares data type, provenance, and query behavior                                 |
-| Sample group  | Saved group of sample/run links                             | General primitive behind cohorts and reference sets                                |
-| Cohort        | Sample group used for grouping or comparison                | Specialized sample group                                                           |
+| Sample group  | Saved group of sample/run links                             | Used for filtering, grouping, comparison, and reference baselines                  |
 | Reference set | Sample group used as a baseline                             | Specialized sample group                                                           |
 | Feature       | Thing being measured                                        | Metric, gene, transcript, protein, antibody, variant, interval, pathway, signature |
 | Observation   | Value, call, or measurement                                 | Conceptual analytical fact stored in modular tables                                |
@@ -56,7 +55,7 @@ Short version:
 | Run sample           | That sample in that run                                             |
 | Data contract        | What kind of data was produced                                      |
 | Observation          | A value/call/measurement inside that contract                       |
-| Cohort/reference set | Selected sample/run links                                           |
+| Sample group/reference set | Selected sample/run links                                           |
 
 Users analyze Samples, Subjects, Runs, Features, Variants, and Files.
 `run_samples` is an internal membership/provenance association and is not an
@@ -341,7 +340,7 @@ General saved grouping primitive.
 | `sample_group_id` | Stable readable sample-group ID, unique/indexed                   |
 | `project_id`      | Owning project integer ID                                         |
 | `name`            | Human-readable group name                                         |
-| `kind`            | Example: `cohort`, `reference_set`, `benchmark_set`, `case_group` |
+| `kind`            | Example: `sample_group`, `reference_set`, `benchmark_set`, `case_group` |
 | `description`     | Optional description                                              |
 | `definition_json` | Optional rule/filter definition                                   |
 | `created_at`      | Creation timestamp                                                |
@@ -461,7 +460,7 @@ General rule:
 | Query family                   | Preferred layout                                               |
 | ------------------------------ | -------------------------------------------------------------- |
 | Sample/run detail              | `data_contract_id, run_id, run_sample_id, ...`                 |
-| Feature/gene across a cohort   | `data_contract_id, feature_id, run_sample_id`                  |
+| Feature/gene across a sample group   | `data_contract_id, feature_id, run_sample_id`                  |
 | Metric scans/distributions     | `data_contract_id, field_id, value_numeric, run_sample_id`     |
 | Attribute facets/filters       | `entity_scope, field_id, value_*, entity_id`                   |
 | Genomic range queries          | `genome_build, contig, start_pos, end_pos`                     |
@@ -522,7 +521,7 @@ Recommended physical layouts:
 | Table/layout            | Physical order                               | Optimized for                                          |
 | ----------------------- | -------------------------------------------- | ------------------------------------------------------ |
 | Canonical attributes    | `entity_scope, entity_id, field_id`          | Fetch all attributes for one entity                    |
-| Attribute filter layout | `entity_scope, field_id, value_*, entity_id` | Facets, counts, filters, histograms, cohort comparison |
+| Attribute filter layout | `entity_scope, field_id, value_*, entity_id` | Facets, counts, filters, histograms, sample group comparison |
 
 ### Sample Metrics
 
@@ -639,7 +638,7 @@ Recommended derived layouts:
 
 | Layout    | Physical order                                       | Optimized for                                              |
 | --------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| Canonical | `data_contract_id, feature_id, run_sample_id`        | Gene/feature across samples, cohort matrices, correlations |
+| Canonical | `data_contract_id, feature_id, run_sample_id`        | Gene/feature across samples, sample group matrices, correlations |
 | By sample | `data_contract_id, run_sample_id, feature_id`        | Sample detail pages and sample contract exports            |
 | By value  | `data_contract_id, feature_id, value, run_sample_id` | Threshold filters and top/bottom values                    |
 
@@ -670,7 +669,7 @@ Recommended physical layouts:
 
 | Layout    | Physical order                                           | Optimized for                             |
 | --------- | -------------------------------------------------------- | ----------------------------------------- |
-| Canonical | `data_contract_id, feature_id, call_code, run_sample_id` | Counts by feature/call and cohort filters |
+| Canonical | `data_contract_id, feature_id, call_code, run_sample_id` | Counts by feature/call and sample group filters |
 | By sample | `data_contract_id, run_sample_id, feature_id`            | Sample detail pages and OncoPrint exports |
 
 ### `genomic_intervals`
@@ -955,14 +954,14 @@ Recommended physical layouts:
 | Canonical | `feature_id, alteration_type, data_contract_id, run_sample_id` | Alteration frequency, filters, OncoPrint matrices |
 | By sample | `run_sample_id, feature_id, alteration_type`                   | Sample detail and sample-centric exports          |
 
-### Cohort Summary Tables
+### Sample Group Summary Tables
 
-Precomputed reference-set and cohort statistics. Treat these as derived/cache
+Precomputed sample-group and reference statistics. Treat these as derived/cache
 data keyed by the sample group, contract, field or feature, and source fingerprint.
 
 | Column             | Notes                                         |
 | ------------------ | --------------------------------------------- |
-| `sample_group_id`  | Cohort/reference set integer ID               |
+| `sample_group_id`  | Sample-group/reference integer ID                   |
 | `data_contract_id` | Contract integer ID summarized                |
 | `field_id`         | Nullable contract field integer ID summarized |
 | `feature_id`       | Nullable feature integer ID summarized        |

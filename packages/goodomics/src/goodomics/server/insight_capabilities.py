@@ -416,7 +416,7 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
         str(item.get("label") or item.get("field_id") or item.get("column") or "column")
         for item in _table_column_items(config)
     ]
-    context_label = str(context.get("kind") or "cohort")
+    context_label = str(context.get("kind") or "sample_group")
     if context.get("sample_group_id"):
         context_label += f" {context['sample_group_id']}"
     if context.get("sample_id"):

@@ -2198,7 +2198,7 @@ function buildContext({
     };
   }
   return {
-    kind: "cohort",
+    kind: "sample_group",
     sample_group_id: cleanedSampleGroupIds[0],
     sample_group_ids: cleanedSampleGroupIds.length
       ? cleanedSampleGroupIds

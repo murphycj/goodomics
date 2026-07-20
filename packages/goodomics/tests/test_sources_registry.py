@@ -179,7 +179,7 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
         producer_tool="notebook-parser",
         feature_type="gene",
         value_type="numeric",
-        query_modes=["sample", "feature", "cohort"],
+        query_modes=["sample", "feature", "sample_group"],
     )
 
     @parser(key="notebook-parser", label="Notebook parser", contracts=[rnaseq_tpm])
