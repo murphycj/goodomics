@@ -190,7 +190,7 @@ export function InsightsPage({
   );
   const effectiveSelectedInsightId =
     selectedInsight?.insight_id ?? selectedInsightId;
-  const [title, setTitle] = useState("New insight");
+  const [name, setName] = useState("New insight");
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [tableColumnPickerOpen, setTableColumnPickerOpen] = useState(false);
@@ -274,7 +274,7 @@ export function InsightsPage({
     setSampleIds([]);
     setRunSampleIds([]);
     if (stringConfig(template?.label)) {
-      setTitle(stringConfig(template?.label));
+      setName(stringConfig(template?.label));
     }
     if (stringConfig(template?.description)) {
       setDescription(stringConfig(template?.description));
@@ -362,7 +362,7 @@ export function InsightsPage({
     setMode("detail");
     if (target.mode === "new") {
       setSelectedInsightId(null);
-      setTitle("New insight");
+      setName("New insight");
       setDescription("");
       setDescriptionOpen(false);
       setAnalysisGrain("sample");
@@ -506,7 +506,7 @@ export function InsightsPage({
     const resultPolicy = isRecord(config.result_policy)
       ? config.result_policy
       : {};
-    setTitle(selectedInsight.name);
+    setName(selectedInsight.name);
     setDescription(selectedInsight.description ?? "");
     setDescriptionOpen(Boolean(selectedInsight.description?.trim()));
     setVisualization(String(config.visualization ?? "table"));
@@ -566,12 +566,10 @@ export function InsightsPage({
   }, [selectedInsight, selectedTable?.columns]);
 
   const config = useMemo(
-    // `config` is the persisted insight document. It includes editor metadata
-    // such as title/description in addition to the executable query payload.
+    // Naming metadata lives on the saved insight; config contains only the
+    // executable analytical definition.
     () =>
       buildConfig({
-        title,
-        description,
         analysisGrain,
         sampleGroupIds,
         sampleIds,
@@ -597,7 +595,6 @@ export function InsightsPage({
       advancedSql,
       analysisGrain,
       availableContracts,
-      description,
       displayOptions,
       fieldId,
       linkerKind,
@@ -613,14 +610,13 @@ export function InsightsPage({
       sampleGroupIds,
       store,
       table,
-      title,
       visualization,
       runSampleIds,
       xField,
       yField,
     ],
   );
-  const previewConfig = useMemo(() => executionConfig(config), [config]);
+  const previewConfig = config;
   const validation = useQuery({
     queryKey: ["insight-validation", previewConfig],
     queryFn: () => validateInsightConfig(previewConfig),
@@ -641,6 +637,8 @@ export function InsightsPage({
         insightId: effectiveSelectedInsightId ?? undefined,
         projectId,
         config: previewConfig,
+        name,
+        description,
       }),
     enabled:
       mode === "detail" &&
@@ -664,13 +662,13 @@ export function InsightsPage({
     mutationFn: (continueEditing: boolean) =>
       effectiveSelectedInsightId
         ? patchInsight(effectiveSelectedInsightId, {
-            name: title,
+            name,
             description,
             config,
           })
         : createInsight({
             project_id: projectId,
-            name: title,
+            name,
             description,
             config,
           }),
@@ -735,7 +733,7 @@ export function InsightsPage({
         descriptionOpen={descriptionOpen}
         isSaving={save.isPending}
         canSave={canSave}
-        title={title}
+        name={name}
         onBack={() => {
           window.location.href = `/project/${projectId}/insights`;
         }}
@@ -743,7 +741,7 @@ export function InsightsPage({
         onDescriptionOpenChange={setDescriptionOpen}
         onSave={() => save.mutate(false)}
         onSaveContinue={() => save.mutate(true)}
-        onTitleChange={setTitle}
+        onNameChange={setName}
       />
       {save.error instanceof Error ? (
         <div
@@ -1906,16 +1904,6 @@ function TemplatePickerDialog({
   );
 }
 
-function executionConfig(config: Record<string, unknown>) {
-  // Title and description are saved with the insight, but they are not needed by
-  // the execution endpoint. Dropping them keeps preview cache keys focused on
-  // behavior-affecting query/display settings.
-  const rest = { ...config };
-  delete rest.title;
-  delete rest.description;
-  return rest;
-}
-
 function LinkerStrip({
   capabilities,
   linkerKind,
@@ -2224,8 +2212,6 @@ function buildResultPolicy({
 }
 
 function buildConfig({
-  title,
-  description,
   analysisGrain,
   sampleGroupIds,
   sampleIds,
@@ -2247,8 +2233,6 @@ function buildConfig({
   yField,
   advancedSql,
 }: {
-  title: string;
-  description: string;
   analysisGrain: AnalysisGrain;
   sampleGroupIds: string[];
   sampleIds: string[];
@@ -2315,8 +2299,6 @@ function buildConfig({
       query.measures = [];
       return {
         version: 1,
-        title,
-        description,
         analysis_grain: analysisGrain,
         context,
         visualization,
@@ -2409,8 +2391,6 @@ function buildConfig({
     }
     return {
       version: 1,
-      title,
-      description,
       analysis_grain: analysisGrain,
       context,
       visualization,
@@ -2470,8 +2450,6 @@ function buildConfig({
   }
   return {
     version: 1,
-    title,
-    description,
     analysis_grain: analysisGrain,
     context,
     visualization,

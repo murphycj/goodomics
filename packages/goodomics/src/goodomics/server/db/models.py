@@ -81,7 +81,7 @@ class RenderedReportRecord(SQLModel, table=True):
     project_id: str | None = Field(default=None, max_length=255, index=True)
     run_id: str | None = Field(default=None, max_length=255)
     report_id: str | None = Field(default=None, max_length=255, index=True)
-    title: str = Field(max_length=255)
+    name: str = Field(max_length=255)
     html: str
     created_at: datetime
 

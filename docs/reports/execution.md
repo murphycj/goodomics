@@ -141,7 +141,7 @@ categorical value and returns counts.
 All executions produce a common envelope containing:
 
 ```text
-kind, insight_id, title, description, context, analysis_grain,
+kind, insight_id, name, description, context, analysis_grain,
 linker, filters, result_policy, linker_diagnostics,
 result_selection_diagnostics, visualization, display,
 columns, column_labels, rows, plot_table, computed_at, cached

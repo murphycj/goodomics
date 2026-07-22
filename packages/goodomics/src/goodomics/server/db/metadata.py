@@ -133,7 +133,7 @@ METADATA_TABLE_REGISTRY: dict[str, MetadataTable] = {
         MetadataTable(
             RenderedReportRecord,
             "rendered_report_id",
-            editable_fields=_editable("title"),
+            editable_fields=_editable("name"),
         ),
         MetadataTable(InsightResultCacheRecord, "cache_id"),
         MetadataTable(ReportResultCacheRecord, "cache_id"),

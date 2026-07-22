@@ -60,7 +60,6 @@ field_id = "general_stats.salmon_percent_mapped"
 
 config = {
     "version": 1,
-    "title": "Mapping rate by sample",
     "analysis_grain": "sample",
     "context": {"kind": "sample_group"},
     "visualization": "table",
@@ -90,7 +89,12 @@ config = {
 
 response = client.post(
     "/insights/execute",
-    json={"project_id": project_id, "config": config, "refresh": True},
+    json={
+        "project_id": project_id,
+        "name": "Mapping rate by sample",
+        "config": config,
+        "refresh": True,
+    },
 )
 result = response.raise_for_status().json()["result"]
 
@@ -110,7 +114,6 @@ aggregation, filters, and result scope:
 ```python
 scatter_config = {
     "version": 1,
-    "title": "Mapping rate versus GC",
     "analysis_grain": "sample",
     "visualization": "scatter",
     "series": [
@@ -230,7 +233,7 @@ rendered = client.post(
     json={
         "report_id": report["report_id"],
         "project_id": project_id,
-        "title": "RNA-seq QC",
+        "name": "RNA-seq QC",
         "refresh": False,
     },
 ).raise_for_status().json()

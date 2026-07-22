@@ -80,6 +80,7 @@ from goodomics.server.insight_capabilities import insight_capabilities
 from goodomics.server.insights import (
     execute_insight,
     execute_report,
+    normalize_insight_config,
     validate_and_explain_config,
 )
 from goodomics.server.rate_limits import principal_rate_key
@@ -359,7 +360,7 @@ class ReportRenderRequest(BaseModel):
     report_id: str | None = None
     run_id: str | None = None
     project_id: str | None = None
-    title: str = "Goodomics Report"
+    name: str = "Goodomics Report"
     refresh: bool = False
 
 
@@ -370,7 +371,7 @@ class RenderedReportRead(BaseModel):
     project_id: str | None = None
     run_id: str | None = None
     report_id: str | None = None
-    title: str
+    name: str
     html: str
     created_at: datetime
 
@@ -379,6 +380,8 @@ class InsightExecuteRequest(BaseModel):
     """Payload for executing an ad hoc or saved insight."""
 
     config: dict[str, JsonValue] | None = None
+    name: str | None = None
+    description: str | None = None
     project_id: str | None = None
     refresh: bool = False
 
@@ -1912,13 +1915,14 @@ async def create_insight(
         await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
     insight_id = payload.insight_id or _new_id("insight")
+    config = normalize_insight_config(payload.config)
     async with _session_context(request) as session:
         insight = InsightRecord(
             insight_id=insight_id,
             project_id=payload.project_id,
             name=payload.name,
             description=payload.description,
-            config=payload.config,
+            config=config,
             created_at=now,
             updated_at=now,
             created_by_user_id=getattr(request.state.principal, "user_pk", None),
@@ -1926,7 +1930,7 @@ async def create_insight(
         )
         revision = InsightRevisionRecord(
             insight_id=insight_id,
-            config=payload.config,
+            config=config,
             created_at=now,
         )
         session.add(insight)
@@ -1960,6 +1964,8 @@ async def patch_insight(
 ) -> SavedInsightRead:
     """Patch a saved insight and record a revision when config changes."""
     values = payload.model_dump(exclude_unset=True)
+    if isinstance(values.get("config"), dict):
+        values["config"] = normalize_insight_config(values["config"])
 
     if values:
         async with _session_context(request) as session:
@@ -2059,6 +2065,8 @@ async def execute_adhoc_insight(
                 analytics_store=analytics_store,
                 project_id=payload.project_id,
                 config=payload.config or {},
+                name=payload.name,
+                description=payload.description,
                 refresh=payload.refresh,
                 persist_results=await _may_persist_results(request, payload.project_id),
             )
@@ -2185,20 +2193,20 @@ async def render_standalone_report(
                 persist_results=await _may_persist_results(request, project_id),
             )
             html = render_report_result(result)
-            title = report.name
+            name = report.name
     else:
         # Standalone rendering preserves the older CLI-style path where a report
         # is rendered from a results directory instead of a saved report config.
         project_id = payload.project_id
-        html = render_report(payload.results, title=payload.title)
-        title = payload.title
+        html = render_report(payload.results, name=payload.name)
+        name = payload.name
 
     values = RenderedReportRecord(
         rendered_report_id=rendered_report_id,
         project_id=project_id,
         run_id=payload.run_id,
         report_id=payload.report_id,
-        title=title,
+        name=name,
         html=html,
         created_at=created_at,
     )
@@ -2216,7 +2224,7 @@ async def render_standalone_report(
         project_id=project_id,
         run_id=payload.run_id,
         report_id=payload.report_id,
-        title=title,
+        name=name,
         html=html,
         created_at=created_at,
     )

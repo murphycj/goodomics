@@ -917,11 +917,15 @@ export async function executeInsight({
   insightId,
   projectId,
   config,
+  name,
+  description,
   refresh,
 }: {
   insightId?: string;
   projectId: string;
   config?: Record<string, unknown>;
+  name?: string;
+  description?: string | null;
   refresh?: boolean;
 }) {
   const response = await apiFetch(
@@ -934,6 +938,8 @@ export async function executeInsight({
       body: JSON.stringify({
         project_id: projectId,
         config,
+        name,
+        description,
         refresh: Boolean(refresh),
       }),
     },

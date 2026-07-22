@@ -170,7 +170,6 @@ function normalizeEChartsOption({
     "y",
     displayOptions.yAxisScale,
   );
-  normalized.title = normalizeTitle(normalized.title);
   normalized.grid = {
     ...(isRecord(normalized.grid) ? normalized.grid : {}),
     left: 64,
@@ -187,17 +186,6 @@ function normalizeEChartsOption({
     visualization,
   );
   return normalized;
-}
-
-function normalizeTitle(title: unknown) {
-  // The dashboard cards already render insight titles above the chart. Hide
-  // ECharts titles so legends and chart content do not collide with duplicate
-  // headings inside the plot area.
-  if (Array.isArray(title)) {
-    return title.map((item) => (isRecord(item) ? { ...item, show: false } : item));
-  }
-  if (isRecord(title)) return { ...title, show: false };
-  return title;
 }
 
 function normalizeAxis(

@@ -293,7 +293,7 @@ export function ReportsPage({
           description={description}
           isSaving={saveReport.isPending}
           canSave={canSaveReport}
-          title={name}
+          name={name}
           onBack={() => {
             window.location.href = selectedReport?.url_slug
               ? `/project/${projectId}/reports/${encodeURIComponent(
@@ -304,7 +304,7 @@ export function ReportsPage({
           onDescriptionChange={setDescription}
           onSave={() => saveReport.mutate(false)}
           onSaveContinue={() => saveReport.mutate(true)}
-          onTitleChange={setName}
+          onNameChange={setName}
         />
       ) : (
         <ReportReadHeader
@@ -313,7 +313,7 @@ export function ReportsPage({
           isLayoutEditing={editMode}
           projectName={project.data?.name ?? projectId}
           report={selectedReport}
-          title={name}
+          name={name}
           onBack={() => {
             window.location.href = `/project/${projectId}/reports`;
           }}
@@ -525,7 +525,7 @@ export function ReportsPage({
 }
 
 function ReportBuilderHeader({
-  title,
+  name,
   description,
   isSaving,
   canSave,
@@ -533,9 +533,9 @@ function ReportBuilderHeader({
   onDescriptionChange,
   onSave,
   onSaveContinue,
-  onTitleChange,
+  onNameChange,
 }: {
-  title: string;
+  name: string;
   description: string;
   isSaving: boolean;
   canSave: boolean;
@@ -543,7 +543,7 @@ function ReportBuilderHeader({
   onDescriptionChange: (value: string) => void;
   onSave: () => void;
   onSaveContinue: () => void;
-  onTitleChange: (value: string) => void;
+  onNameChange: (value: string) => void;
 }) {
   const hasDescription = Boolean(description.trim());
   const [showDescription, setShowDescription] = useState(hasDescription);
@@ -561,8 +561,8 @@ function ReportBuilderHeader({
         <LayoutGrid className="h-5 w-5 text-[#16784a]" />
         <Input
           className="h-10 flex-1 text-lg font-semibold"
-          value={title}
-          onChange={(event) => onTitleChange(event.target.value)}
+          value={name}
+          onChange={(event) => onNameChange(event.target.value)}
         />
         <Button
           className="bg-[#eef2f6] text-[#526071] hover:bg-[#e3e9f0] hover:text-[#1f2937]"
@@ -637,7 +637,7 @@ function ReportReadHeader({
   isLayoutEditing,
   projectName,
   report,
-  title,
+  name,
   onBack,
   onChangeLayout,
   onDelete,
@@ -650,7 +650,7 @@ function ReportReadHeader({
   isLayoutEditing: boolean;
   projectName: string;
   report: SavedReport | undefined;
-  title: string;
+  name: string;
   onBack: () => void;
   onChangeLayout: () => void;
   onDelete: () => void;
@@ -667,7 +667,7 @@ function ReportReadHeader({
         <LayoutGrid className="mt-2 h-5 w-5 shrink-0 text-[#16784a]" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-semibold text-[#1d2430]">
-            {title}
+            {name}
           </h1>
           <div className="mt-1 text-xs font-medium uppercase text-[#657082]">
             {projectName}

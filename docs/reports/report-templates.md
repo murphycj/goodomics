@@ -108,11 +108,11 @@ goodomics report ./results --template report.yaml --out report.html
 ```
 
 The current standalone renderer loads a YAML or JSON mapping and reads
-`config.title` when present:
+`config.name` when present:
 
 ```yaml
 config:
-  title: RNA-seq QC Report
+  name: RNA-seq QC Report
 ```
 
 It records the scanned results path in the output and does not execute saved

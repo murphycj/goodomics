@@ -989,8 +989,8 @@ def test_contract_browser_and_contract_first_insight_execution(
             "/api/v1/insights/execute",
             json={
                 "refresh": True,
+                "name": "Average mapping",
                 "config": {
-                    "title": "Average mapping",
                     "visualization": "table",
                     "query": {
                         "source": {
@@ -1023,9 +1023,12 @@ def test_contract_browser_and_contract_first_insight_execution(
     assert field["value_type"] == "numeric"
     assert field["summary"]["non_null_count"] > 0
     assert result.status_code == 200
-    rows = result.json()["result"]["rows"]
+    result_body = result.json()["result"]
+    assert result_body["name"] == "Average mapping"
+    assert "title" not in result_body
+    rows = result_body["rows"]
     assert rows
-    assert result.json()["result"]["columns"] == ["sample_id", "average_mapped"]
+    assert result_body["columns"] == ["sample_id", "average_mapped"]
 
 
 def test_contract_series_charts_match_metadata_field_ids(
@@ -1048,7 +1051,6 @@ def test_contract_series_charts_match_metadata_field_ids(
     field_alias = "general_stats_salmon_percent_mapped"
     base_config = {
         "version": 1,
-        "title": "Salmon mapped",
         "context": {"kind": "sample_group"},
         "analysis_grain": "sample",
         "query": {
@@ -1328,8 +1330,8 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
             json={
                 "project_id": project_id,
                 "refresh": True,
+                "name": "Patients by sex",
                 "config": {
-                    "title": "Patients by sex",
                     "visualization": "pie",
                     "query": {
                         "source": {
@@ -1361,8 +1363,8 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
             json={
                 "project_id": project_id,
                 "refresh": True,
+                "name": "Mutations by genotype",
                 "config": {
-                    "title": "Mutations by genotype",
                     "visualization": "bar",
                     "query": {
                         "source": {
@@ -1387,9 +1389,9 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
             json={
                 "project_id": project_id,
                 "refresh": True,
+                "name": "Expression by feature",
                 "config": {
                     "version": 1,
-                    "title": "Expression by feature",
                     "analysis_grain": "feature",
                     "visualization": "table",
                     "query": {
@@ -1610,7 +1612,6 @@ def test_insight_and_report_round_trip_execute_and_cache(
 
     insight_config = {
         "version": 1,
-        "title": "Runs by kind",
         "visualization": "bar",
         "query": {
             "source": {"store": "metadata", "table": "runs"},
@@ -1640,6 +1641,8 @@ def test_insight_and_report_round_trip_execute_and_cache(
         json={"project_id": project_id},
     )
     assert first_result.status_code == 200
+    assert first_result.json()["result"]["name"] == "Runs by kind"
+    assert "title" not in first_result.json()["result"]
     assert first_result.json()["result"]["cached"] is False
     second_result = client.post(
         "/api/v1/insights/runs-by-kind/execute",
@@ -1679,6 +1682,8 @@ def test_insight_and_report_round_trip_execute_and_cache(
         json={"project_id": project_id, "refresh": True},
     )
     assert report_result.status_code == 200
+    assert report_result.json()["result"]["name"] == "Project overview"
+    assert "title" not in report_result.json()["result"]
     assert report_result.json()["result"]["insights"][0]["insight_id"] == "runs-by-kind"
 
     default_project = client.patch(
@@ -1728,7 +1733,6 @@ def test_insight_and_report_round_trip_execute_and_cache(
 def test_histogram_insight_compiles_numeric_bins() -> None:
     result = compile_insight_result(
         config={
-            "title": "Value distribution",
             "visualization": "histogram",
             "query": {"y": "value", "bins": 2},
             "display": {"colors": {"value": "#7c3aed"}},
@@ -1743,6 +1747,7 @@ def test_histogram_insight_compiles_numeric_bins() -> None:
         insight_id="value-distribution",
         computed_at=datetime.now(UTC),
         cached=False,
+        name="Value distribution",
     )
 
     assert result["visualization"] == "histogram"
@@ -1764,7 +1769,6 @@ def test_histogram_insight_compiles_numeric_bins() -> None:
 def test_histogram_insight_compiles_multiple_numeric_series() -> None:
     result = compile_insight_result(
         config={
-            "title": "Two distributions",
             "visualization": "histogram",
             "query": {"fields": ["age", "tmb"], "bins": 2},
             "display": {"colors": {"age": "#38bdf8", "tmb": "#7c3aed"}},
@@ -1779,6 +1783,7 @@ def test_histogram_insight_compiles_multiple_numeric_series() -> None:
         insight_id="two-distributions",
         computed_at=datetime.now(UTC),
         cached=False,
+        name="Two distributions",
     )
 
     series = result["echarts_options"]["series"]
@@ -2189,11 +2194,13 @@ def test_report_render_exports_standalone_html(client: TestClient) -> None:
         json={
             "rendered_report_id": "rendered-report-1",
             "results": "./examples/rnaseq",
-            "title": "RNA report",
+            "name": "RNA report",
         },
     )
 
     assert rendered.status_code == 201
+    assert rendered.json()["name"] == "RNA report"
+    assert "title" not in rendered.json()
     html_export = client.get("/api/v1/rendered-reports/rendered-report-1/export.html")
     assert html_export.status_code == 200
     assert "<h1>RNA report</h1>" in html_export.text

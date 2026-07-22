@@ -19,25 +19,25 @@ def load_report_template(path: Path | None) -> dict[str, Any]:
 def render_report(
     results: Path | str,
     *,
-    title: str = "Goodomics Report",
+    name: str = "Goodomics Report",
     template: dict[str, Any] | None = None,
 ) -> str:
     template = template or {}
     config = template.get("config")
-    if isinstance(config, dict) and isinstance(config.get("title"), str):
-        title = config["title"]
+    if isinstance(config, dict) and isinstance(config.get("name"), str):
+        name = config["name"]
     safe_results = escape(str(results))
-    safe_title = escape(title)
+    safe_name = escape(name)
     return (
         "<!doctype html>"
-        f"<title>{safe_title}</title>"
-        f"<h1>{safe_title}</h1>"
+        f"<title>{safe_name}</title>"
+        f"<h1>{safe_name}</h1>"
         f"<p>Scanned results: {safe_results}</p>"
     )
 
 
 def render_report_result(result: dict[str, Any]) -> str:
-    title = str(result.get("title") or "Goodomics Report")
+    name = str(result.get("name") or "Goodomics Report")
     insights = result.get("insights")
     insight_items = insights if isinstance(insights, list) else []
     payload_json = json.dumps(result, default=str)
@@ -45,7 +45,7 @@ def render_report_result(result: dict[str, Any]) -> str:
         "<!doctype html>"
         "<html><head>"
         '<meta charset="utf-8">'
-        f"<title>{escape(title)}</title>"
+        f"<title>{escape(name)}</title>"
         "<style>"
         "body{margin:0;font-family:Inter,system-ui,sans-serif;background:#f7f8fa;"
         "color:#1d2430;}"
@@ -62,7 +62,7 @@ def render_report_result(result: dict[str, Any]) -> str:
         "</style>"
         "</head><body>"
         "<main>"
-        f"<h1>{escape(title)}</h1>"
+        f"<h1>{escape(name)}</h1>"
         f"<p>Computed {escape(str(result.get('computed_at') or ''))}</p>"
         '<div class="report-grid">'
         + "".join(_render_insight_block(item) for item in insight_items)
@@ -79,7 +79,7 @@ def render_report_result(result: dict[str, Any]) -> str:
 def _render_insight_block(result: Any) -> str:
     if not isinstance(result, dict):
         return ""
-    title = escape(str(result.get("title") or "Untitled insight"))
+    name = escape(str(result.get("name") or "Untitled insight"))
     visualization = str(result.get("visualization") or "table")
     class_name = "insight insight-wide" if visualization == "table" else "insight"
     body = (
@@ -87,7 +87,7 @@ def _render_insight_block(result: Any) -> str:
         if visualization in {"metric", "stat", "number"}
         else _render_rows_table(result)
     )
-    return f'<section class="{class_name}"><h2>{title}</h2>{body}</section>'
+    return f'<section class="{class_name}"><h2>{name}</h2>{body}</section>'
 
 
 def _render_metric(result: dict[str, Any]) -> str:
@@ -127,10 +127,10 @@ def write_report(
     results: Path,
     out: Path,
     *,
-    title: str = "Goodomics Report",
+    name: str = "Goodomics Report",
     template: dict[str, Any] | None = None,
 ) -> Path:
     out.write_text(
-        render_report(results, title=title, template=template), encoding="utf-8"
+        render_report(results, name=name, template=template), encoding="utf-8"
     )
     return out

@@ -9,7 +9,7 @@ import {
 } from "../ui";
 
 export function InsightBuilderHeader({
-  title,
+  name,
   description,
   descriptionOpen,
   isSaving,
@@ -19,9 +19,9 @@ export function InsightBuilderHeader({
   onDescriptionOpenChange,
   onSave,
   onSaveContinue,
-  onTitleChange,
+  onNameChange,
 }: {
-  title: string;
+  name: string;
   description: string;
   descriptionOpen: boolean;
   isSaving: boolean;
@@ -31,7 +31,7 @@ export function InsightBuilderHeader({
   onDescriptionOpenChange: (value: boolean) => void;
   onSave: () => void;
   onSaveContinue: () => void;
-  onTitleChange: (value: string) => void;
+  onNameChange: (value: string) => void;
 }) {
   return (
     <section className="shrink-0 border-b border-[#dce3eb] pb-1">
@@ -42,8 +42,8 @@ export function InsightBuilderHeader({
         <BarChart3 className="h-5 w-5 text-[#16784a]" />
         <Input
           className="h-8 flex-1 px-2.5 text-base font-semibold"
-          value={title}
-          onChange={(event) => onTitleChange(event.target.value)}
+          value={name}
+          onChange={(event) => onNameChange(event.target.value)}
         />
         {canSave && <div className="flex overflow-hidden rounded-lg">
           <Button

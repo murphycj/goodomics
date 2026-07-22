@@ -74,7 +74,7 @@ StoreName = Literal["metadata", "analytics"]
 # Advanced SQL exists as an escape hatch, but the default UI/API path stays
 # constrained and easy to validate.
 AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
-RESULT_FORMAT_VERSION = 3
+RESULT_FORMAT_VERSION = 4
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -139,6 +139,8 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
     """Fill in default keys expected by insight execution."""
 
     normalized = dict(config)
+    normalized.pop("name", None)
+    normalized.pop("description", None)
     normalized.setdefault("version", 1)
     normalized.setdefault("context", {"kind": "sample_group"})
     normalized["analysis_grain"] = _normalize_analysis_grain(
@@ -201,6 +203,8 @@ async def execute_insight(
     project_id: str | None,
     insight: InsightRecord | None = None,
     config: Mapping[str, Any] | None = None,
+    name: str | None = None,
+    description: str | None = None,
     refresh: bool = False,
     persist_results: bool = True,
 ) -> JsonObject:
@@ -216,6 +220,10 @@ async def execute_insight(
         config if config is not None else (insight.config if insight else {})
     )
     insight_config = normalize_insight_config(source_config)
+    result_name = name or (insight.name if insight is not None else "Untitled insight")
+    result_description = description
+    if result_description is None and insight is not None:
+        result_description = insight.description
     validation = validate_and_explain_config(insight_config)
     if not validation["valid"]:
         first_error = next(
@@ -235,6 +243,8 @@ async def execute_insight(
     spec_hash = canonical_hash(
         {
             "config": insight_config,
+            "name": result_name,
+            "description": result_description,
             "project_id": project_id,
             "result_format_version": RESULT_FORMAT_VERSION,
             "source": source,
@@ -271,6 +281,8 @@ async def execute_insight(
     )
     result = compile_insight_result(
         config=insight_config,
+        name=result_name,
+        description=result_description,
         columns=columns,
         rows=policy_rows,
         insight_id=insight_id,
@@ -319,6 +331,7 @@ async def execute_report(
             "report": report_config,
             "insights": effective_insight_configs,
             "project_id": project_id,
+            "result_format_version": RESULT_FORMAT_VERSION,
         }
     )
     source_fingerprint = canonical_hash(
@@ -363,7 +376,7 @@ async def execute_report(
     result = {
         "kind": "report_result",
         "report_id": report_id,
-        "title": report_name,
+        "name": report_name,
         "description": report_description,
         "config": report_config,
         "insights": insight_results,
@@ -2090,6 +2103,8 @@ def compile_insight_result(
     insight_id: str | None,
     computed_at: datetime,
     cached: bool,
+    name: str = "Untitled insight",
+    description: str | None = None,
     result_policy_summary: Mapping[str, Any] | None = None,
 ) -> JsonObject:
     """Compile query rows into a dashboard/report insight payload."""
@@ -2112,8 +2127,8 @@ def compile_insight_result(
     result: JsonObject = {
         "kind": "insight_result",
         "insight_id": insight_id,
-        "title": config.get("title") or config.get("name") or "Untitled insight",
-        "description": config.get("description"),
+        "name": name,
+        "description": description,
         "context": (
             config.get("context") if isinstance(config.get("context"), dict) else {}
         ),
@@ -3229,11 +3244,9 @@ def _echarts_options(
     y_field = str(
         query.get("y") or _first_numeric_column(columns, rows, exclude={x_field})
     )
-    title = str(config.get("title") or config.get("name") or "Insight")
     label_for = column_labels.get
     if visualization in {"pie", "donut"}:
         return {
-            "title": {"text": title, "left": "center"},
             "color": CHART_COLORS,
             "tooltip": {"trigger": "item"},
             "series": [
@@ -3494,11 +3507,9 @@ def _boxplot_options(
     colors = _display_colors(config)
     column_labels = _result_column_labels(config, columns)
     label_for = column_labels.get
-    title = str(config.get("title") or config.get("name") or "Insight")
     group_field = x_field if x_field in columns else columns[0] if columns else "group"
     groups = list(dict.fromkeys(str(row.get(group_field)) for row in rows))
     return {
-        "title": {"text": title, "left": "center"},
         "tooltip": {"trigger": "item"},
         "legend": {"type": "scroll"},
         "grid": {
