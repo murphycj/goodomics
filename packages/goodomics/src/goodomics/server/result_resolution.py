@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
@@ -36,6 +36,19 @@ class ResultResolution:
     diagnostics: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SampleSelection:
+    """Resolved members of one semantic sample-filter clause.
+
+    Samples and sample-group members are alternatives within a clause. Multiple
+    clauses are applied together, which lets report and insight filters narrow
+    one another predictably.
+    """
+
+    sample_pks: frozenset[int] = frozenset()
+    run_sample_pks: frozenset[int] = frozenset()
+
+
 async def resolve_contract_results(
     *,
     session: AsyncSession,
@@ -43,6 +56,7 @@ async def resolve_contract_results(
     contract: DataContractRecord,
     analysis_grain: str,
     result_scope: Mapping[str, Any] | None,
+    sample_selections: Sequence[SampleSelection] = (),
 ) -> ResultResolution:
     """Resolve compatible produced results according to one series scope."""
 
@@ -110,6 +124,9 @@ async def resolve_contract_results(
     eligible_availability = [
         row for row in availability_rows if row[0].availability in ELIGIBLE_AVAILABILITY
     ]
+    eligible_availability = _apply_sample_selections(
+        eligible_availability, sample_selections
+    )
     by_occurrence = {int(row[0].id): row for row in rows if row[0].id is not None}
     selected_availability = eligible_availability
     superseded: list[dict[str, Any]] = []
@@ -141,7 +158,7 @@ async def resolve_contract_results(
 
     selected_occurrence_pks = (
         sorted({int(row[0].run_contract_id) for row in selected_availability})
-        if analysis_grain != "run"
+        if analysis_grain != "run" or sample_selections
         else occurrence_pks
     )
     selected_run_sample_pks = sorted(
@@ -155,13 +172,20 @@ async def resolve_contract_results(
         versions[version] = versions.get(version, 0) + 1
         methods[method.method_id] = methods.get(method.method_id, 0) + 1
 
-    candidate_sample_ids = {
-        row[2].sample_id
+    candidate_availability = [
+        row
         for row in await _availability_rows(
             session,
             [int(row[0].id) for row in all_compatible_rows if row[0].id is not None],
         )
         if row[0].availability in ELIGIBLE_AVAILABILITY
+    ]
+    candidate_availability = _apply_sample_selections(
+        candidate_availability, sample_selections
+    )
+    candidate_sample_ids = {
+        row[2].sample_id
+        for row in candidate_availability
     }
     selected_sample_ids = {row[2].sample_id for row in selected_availability}
     warnings: list[str] = []
@@ -189,6 +213,28 @@ async def resolve_contract_results(
         run_sample_pks=selected_run_sample_pks,
         diagnostics=diagnostics,
     )
+
+
+def _apply_sample_selections(
+    rows: list[Any], sample_selections: Sequence[SampleSelection]
+) -> list[Any]:
+    """Apply semantic sample clauses before occurrence ranking.
+
+    A row matches a clause when its biological sample or processed occurrence
+    belongs to that clause. It must match every clause.
+    """
+
+    selected = rows
+    for selection in sample_selections:
+        selected = [
+            row
+            for row in selected
+            if (
+                int(row[2].id) in selection.sample_pks
+                or int(row[1].id) in selection.run_sample_pks
+            )
+        ]
+    return selected
 
 
 def _apply_scope_filters(

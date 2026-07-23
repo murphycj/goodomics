@@ -1,3 +1,5 @@
+import { isRecord, stringValue } from "./valueUtils";
+
 export type DisplayOptions = {
   showValues: boolean;
   showTrendLines: boolean;
@@ -61,12 +63,4 @@ export function readDisplayOptions(
     yAxisScale:
       value.display.y_axis_scale === "log" ? "log" : fallback.yAxisScale,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringValue(value: unknown, fallback: string) {
-  return typeof value === "string" ? value : fallback;
 }

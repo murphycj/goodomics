@@ -61,7 +61,7 @@ items:
 ```
 
 During execution, Goodomics loads those insights in item order. Report-level
-`context`, `linker`, and `result_policy` values are inherited only when an
+`linker` and `result_policy` values are inherited only when an
 insight does not define its own value. Report filters are prepended to each
 insight's filters.
 

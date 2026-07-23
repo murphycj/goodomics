@@ -1,6 +1,7 @@
 import { type RefObject } from "react";
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { isRecord } from "../../lib/valueUtils";
 
 export type CellPreview = {
   column: string;
@@ -124,8 +125,4 @@ export function formatPreviewValue(value: unknown) {
   if (value === null || value === undefined) return "NULL";
   if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

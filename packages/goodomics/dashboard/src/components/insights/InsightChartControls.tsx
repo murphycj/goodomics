@@ -2,6 +2,7 @@ import { Settings2, X } from "lucide-react";
 import { useState } from "react";
 import type { DisplayOptions } from "../../lib/insightDisplayOptions";
 import { DISPLAY_OPTION_ITEMS } from "../../lib/insightDisplayOptions";
+import { numberValue, recordValue } from "../../lib/valueUtils";
 import {
   Button,
   Input,
@@ -84,9 +85,9 @@ function SettingsDrawerButton({
   onRowLimitChange: (value: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const diagnostics = readRecord(result?.linker_diagnostics);
+  const diagnostics = recordValue(result?.linker_diagnostics);
   const policy =
-    readRecord(result?.result_policy) ?? readRecord(config?.result_policy);
+    recordValue(result?.result_policy) ?? recordValue(config?.result_policy);
   return (
     <>
       <Button
@@ -325,16 +326,6 @@ function DiagnosticChip({
       <div className="font-semibold text-[#1f2937]">{value ?? "n/a"}</div>
     </div>
   );
-}
-
-function readRecord(value: unknown) {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function clampNumber(value: string, min: number, max: number) {

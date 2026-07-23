@@ -422,7 +422,7 @@ class InsightValidationRead(BaseModel):
 
 
 class SampleGroupRead(BaseModel):
-    """Canonical sample-group context option."""
+    """Canonical sample-group filter option."""
 
     sample_group_id: str
     url_slug: str

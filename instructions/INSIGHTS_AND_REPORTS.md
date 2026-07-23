@@ -4,7 +4,7 @@ This file is the source of truth for saved insight and report behavior.
 
 ## Builder model
 
-- The workflow is **Analyze by** → sample or sample-group context → **Choose data** →
+- The workflow is **Analyze by** → sample filters → **Choose data** →
   per-series filters and **Results from** → **Matched by** → **View as**.
 - Public grains are `sample`, `subject`, `run`, `feature`, `variant`, and `file`.
   `run_sample` is internal and must not appear in builder grains, templates,
@@ -14,7 +14,8 @@ This file is the source of truth for saved insight and report behavior.
   beneath their stable data contract.
 - Selecting a field determines compatible analysis types, methods, result
   defaults, aggregations, and chart choices.
-- Global context may restrict biological samples or canonical sample groups.
+- One global sample filter may combine biological samples and canonical sample
+  groups. Resolve it before result ranking; values within it are alternatives.
 - Table columns use raw values by default. Chart series own aggregation and
   field-level filters.
 
@@ -63,7 +64,7 @@ The server owns grains, templates, charts, linkers, result-size policies,
 validation, and explanations. Dashboard, API, report rendering, MCP, and AI
 consume these capabilities rather than duplicating rules.
 
-Saved configs include `analysis_grain`, `visualization`, `context`, `series`,
+Saved configs include `analysis_grain`, `visualization`, `series`,
 `table_columns`, `linker`, `filters`, `result_policy`, and `display`. Each series
 or column includes the selected contract/field and its result scope.
 

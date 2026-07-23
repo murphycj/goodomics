@@ -1,3 +1,5 @@
+import { isRecord } from "../../lib/valueUtils";
+
 /** Grid placement for a single insight inside a saved report config. */
 export type ReportItem = {
   insight_id: string;
@@ -20,9 +22,4 @@ export function readReportItems(config: Record<string, unknown>): ReportItem[] {
       h: Number(item.h ?? 5),
     }))
     .filter((item) => item.insight_id);
-}
-
-/** Type guard for plain object payloads from saved configs and API results. */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

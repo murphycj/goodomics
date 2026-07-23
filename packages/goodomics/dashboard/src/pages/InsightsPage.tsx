@@ -75,7 +75,7 @@ import {
   type SqlSourceSelection,
 } from "../components/insights/InsightSeriesEditor";
 import { InsightListTable } from "../components/reports/InsightListTable";
-import { isRecord, readReportItems } from "../components/reports/reportUtils";
+import { readReportItems } from "../components/reports/reportUtils";
 import {
   AsyncBlock,
   Button,
@@ -107,6 +107,11 @@ import {
   TabsList,
   TabsTrigger,
 } from "../components/ui";
+import {
+  isRecord,
+  numberValue,
+  stringValue as stringConfig,
+} from "../lib/valueUtils";
 import {
   DEFAULT_DISPLAY_OPTIONS,
   displayOptionsConfig,
@@ -197,7 +202,6 @@ export function InsightsPage({
   const [analysisGrain, setAnalysisGrain] = useState<AnalysisGrain>("sample");
   const [sampleGroupIds, setSampleGroupIds] = useState<string[]>([]);
   const [sampleIds, setSampleIds] = useState<string[]>([]);
-  const [runSampleIds, setRunSampleIds] = useState<string[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>("contract");
   const [contractId, setContractId] = useState("");
   const [fieldId, setFieldId] = useState("");
@@ -272,7 +276,6 @@ export function InsightsPage({
     setQueryMode("contract");
     setSampleGroupIds([]);
     setSampleIds([]);
-    setRunSampleIds([]);
     if (stringConfig(template?.label)) {
       setName(stringConfig(template?.label));
     }
@@ -368,7 +371,6 @@ export function InsightsPage({
       setAnalysisGrain("sample");
       setSampleGroupIds([]);
       setSampleIds([]);
-      setRunSampleIds([]);
       setVisualization("table");
       setLinkerKind("sample");
       setResultPolicyMode("preview");
@@ -501,7 +503,6 @@ export function InsightsPage({
     const config = selectedInsight.config;
     const query = isRecord(config.query) ? config.query : {};
     const source = parseSource(query.source);
-    const context = isRecord(config.context) ? config.context : {};
     const linker = isRecord(config.linker) ? config.linker : {};
     const resultPolicy = isRecord(config.result_policy)
       ? config.result_policy
@@ -511,14 +512,12 @@ export function InsightsPage({
     setDescriptionOpen(Boolean(selectedInsight.description?.trim()));
     setVisualization(String(config.visualization ?? "table"));
     setAnalysisGrain(parseAnalysisGrain(config.analysis_grain));
-    setSampleGroupIds(
-      stringArrayConfig(context.sample_group_ids, context.sample_group_id),
-    );
-    setSampleIds(stringArrayConfig(context.sample_ids, context.sample_id));
-    setRunSampleIds([]);
+    const sampleSelection = parseSampleSelection(config.filters);
+    setSampleGroupIds(sampleSelection.sampleGroupIds);
+    setSampleIds(sampleSelection.sampleIds);
     setLinkerKind(parseLinkerKind(linker.kind));
     setResultPolicyMode(parseResultPolicyMode(resultPolicy.mode));
-    setResultLimit(numberConfig(resultPolicy.limit, 5000));
+    setResultLimit(numberValue(resultPolicy.limit) ?? 5000);
     setRandomSeed(stringConfig(resultPolicy.seed) || "goodomics");
     setDisplayOptions(readDisplayOptions(config));
     setQueryMode(source.kind);
@@ -573,7 +572,6 @@ export function InsightsPage({
         analysisGrain,
         sampleGroupIds,
         sampleIds,
-        runSampleIds,
         queryMode,
         seriesItems: series,
         tableColumnItems: tableColumns,
@@ -611,7 +609,6 @@ export function InsightsPage({
       store,
       table,
       visualization,
-      runSampleIds,
       xField,
       yField,
     ],
@@ -825,10 +822,8 @@ export function InsightsPage({
               <CardContent>
                 <SampleFilterDropdown
                   projectId={projectId}
-                  runSampleIds={runSampleIds}
                   sampleGroupIds={sampleGroupIds}
                   sampleIds={sampleIds}
-                  onRunSampleIdsChange={setRunSampleIds}
                   onSampleGroupIdsChange={setSampleGroupIds}
                   onSampleIdsChange={setSampleIds}
                 />
@@ -973,30 +968,24 @@ function coerceFilterValue(value: string) {
 
 function SampleFilterDropdown({
   projectId,
-  runSampleIds,
   sampleGroupIds,
   sampleIds,
-  onRunSampleIdsChange,
   onSampleGroupIdsChange,
   onSampleIdsChange,
 }: {
   projectId: string;
-  runSampleIds: string[];
   sampleGroupIds: string[];
   sampleIds: string[];
-  onRunSampleIdsChange: (value: string[]) => void;
   onSampleGroupIdsChange: (value: string[]) => void;
   onSampleIdsChange: (value: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>(
-    filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }),
+    filterTabForSelection({ sampleGroupIds, sampleIds }),
   );
   const [pendingSampleGroupIds, setPendingSampleGroupIds] =
     useState<string[]>(sampleGroupIds);
   const [pendingSampleIds, setPendingSampleIds] = useState<string[]>(sampleIds);
-  const [pendingRunSampleIds, setPendingRunSampleIds] =
-    useState<string[]>(runSampleIds);
   const [sampleSearch, setSampleSearch] = useState("");
   const [sampleGroupSearch, setSampleGroupSearch] = useState("");
   const pageSize = 20;
@@ -1038,7 +1027,6 @@ function SampleFilterDropdown({
     sampleGroupIds.includes(sampleGroup.sample_group_id),
   );
   const summary = sampleFilterSummary({
-    runSampleIds,
     sampleGroup: selectedGroup,
     sampleGroupIds,
     sampleIds,
@@ -1047,35 +1035,28 @@ function SampleFilterDropdown({
   useEffect(() => {
     if (!open) {
       setActiveTab(
-        filterTabForSelection({ runSampleIds, sampleGroupIds, sampleIds }),
+        filterTabForSelection({ sampleGroupIds, sampleIds }),
       );
       return;
     }
     setPendingSampleGroupIds(sampleGroupIds);
     setPendingSampleIds(sampleIds);
-    setPendingRunSampleIds(runSampleIds);
-  }, [open, runSampleIds, sampleGroupIds, sampleIds]);
+  }, [open, sampleGroupIds, sampleIds]);
 
   const clearFilters = () => {
     setPendingSampleGroupIds([]);
     setPendingSampleIds([]);
-    setPendingRunSampleIds([]);
   };
   const commitFilters = () => {
     onSampleGroupIdsChange(pendingSampleGroupIds);
     onSampleIdsChange(pendingSampleIds);
-    onRunSampleIdsChange(pendingRunSampleIds);
     setOpen(false);
   };
   const selectSample = (value: string) => {
     setPendingSampleIds((current) => toggleString(current, value));
-    setPendingSampleGroupIds([]);
-    setPendingRunSampleIds([]);
   };
   const selectSampleGroup = (value: string) => {
     setPendingSampleGroupIds((current) => toggleString(current, value));
-    setPendingSampleIds([]);
-    setPendingRunSampleIds([]);
   };
 
   return (
@@ -1171,8 +1152,7 @@ function SampleFilterDropdown({
               className={[
                 "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
                 !pendingSampleGroupIds.length &&
-                !pendingSampleIds.length &&
-                !pendingRunSampleIds.length
+                !pendingSampleIds.length
                   ? "border-[#16784a] bg-[#e8f5ee] text-[#145c3a]"
                   : "border-[#d6dee8] bg-white text-[#1f2937] hover:bg-[#f8fafc]",
               ].join(" ")}
@@ -1480,7 +1460,6 @@ function filterTabForSelection({
   sampleGroupIds,
   sampleIds,
 }: {
-  runSampleIds: string[];
   sampleGroupIds: string[];
   sampleIds: string[];
 }): FilterTab {
@@ -1494,11 +1473,15 @@ function sampleFilterSummary({
   sampleGroupIds,
   sampleIds,
 }: {
-  runSampleIds: string[];
   sampleGroup: SampleGroup | undefined;
   sampleGroupIds: string[];
   sampleIds: string[];
 }) {
+  if (sampleIds.length && sampleGroupIds.length) {
+    const samples = `${sampleIds.length} sample${sampleIds.length === 1 ? "" : "s"}`;
+    const groups = `${sampleGroupIds.length} sample group${sampleGroupIds.length === 1 ? "" : "s"}`;
+    return `${samples} + ${groups}`;
+  }
   if (sampleIds.length === 1) return `Sample ${sampleIds[0]}`;
   if (sampleIds.length > 1) return `${sampleIds.length} samples`;
   if (sampleGroupIds.length === 1) {
@@ -2168,30 +2151,20 @@ function validationWarning(validation: InsightValidation | undefined) {
   return message ? stringConfig(message.message) : null;
 }
 
-function buildContext({
+function buildSampleFilter({
   sampleIds,
   sampleGroupIds,
 }: {
-  runSampleIds: string[];
   sampleIds: string[];
   sampleGroupIds: string[];
 }) {
   const cleanedSampleIds = uniqueNonEmpty(sampleIds);
   const cleanedSampleGroupIds = uniqueNonEmpty(sampleGroupIds);
-  if (cleanedSampleIds.length) {
-    return {
-      kind: "sample",
-      sample_id: cleanedSampleIds[0],
-      sample_ids: cleanedSampleIds.length ? cleanedSampleIds : undefined,
-    };
-  }
-  return {
-    kind: "sample_group",
-    sample_group_id: cleanedSampleGroupIds[0],
-    sample_group_ids: cleanedSampleGroupIds.length
-      ? cleanedSampleGroupIds
-      : undefined,
-  };
+  const value = [
+    ...cleanedSampleIds.map((id) => ({ kind: "sample", id })),
+    ...cleanedSampleGroupIds.map((id) => ({ kind: "sample_group", id })),
+  ];
+  return value.length ? { field: "sample", operator: "in", value } : null;
 }
 
 function buildResultPolicy({
@@ -2215,7 +2188,6 @@ function buildConfig({
   analysisGrain,
   sampleGroupIds,
   sampleIds,
-  runSampleIds,
   queryMode,
   seriesItems,
   tableColumnItems,
@@ -2236,7 +2208,6 @@ function buildConfig({
   analysisGrain: AnalysisGrain;
   sampleGroupIds: string[];
   sampleIds: string[];
-  runSampleIds: string[];
   queryMode: QueryMode;
   seriesItems: BuilderSeries[];
   tableColumnItems: BuilderSeries[];
@@ -2256,11 +2227,8 @@ function buildConfig({
 }) {
   // This is the main compiler from editable form state to the persisted
   // Goodomics insight template. Keep it in lockstep with server/insights.py.
-  const context = buildContext({
-    runSampleIds,
-    sampleIds,
-    sampleGroupIds,
-  });
+  const sampleFilter = buildSampleFilter({ sampleIds, sampleGroupIds });
+  const filters = sampleFilter ? [sampleFilter] : [];
   const resultPolicy = buildResultPolicy({
     mode: resultPolicyMode,
     randomSeed,
@@ -2300,7 +2268,6 @@ function buildConfig({
       return {
         version: 1,
         analysis_grain: analysisGrain,
-        context,
         visualization,
         query,
         series: [],
@@ -2323,7 +2290,7 @@ function buildConfig({
           })),
         ],
         linker: { kind: linkerKind },
-        filters: [],
+        filters,
         result_policy: resultPolicy,
         display: displayOptionsConfig(displayOptions),
       };
@@ -2392,7 +2359,6 @@ function buildConfig({
     return {
       version: 1,
       analysis_grain: analysisGrain,
-      context,
       visualization,
       query,
       series: activeSeries.map((item, index) => ({
@@ -2406,7 +2372,7 @@ function buildConfig({
         result_scope: serializeResultScope(item.resultScope, analysisGrain),
       })),
       linker: { kind: linkerKind },
-      filters: [],
+      filters,
       result_policy: resultPolicy,
       display: {
         colors: seriesColorMap(contracts, activeSeries),
@@ -2451,12 +2417,11 @@ function buildConfig({
   return {
     version: 1,
     analysis_grain: analysisGrain,
-    context,
     visualization,
     query,
     series: query.measures,
     linker: { kind: linkerKind },
-    filters: [],
+    filters,
     result_policy: resultPolicy,
     display: displayOptionsConfig(displayOptions),
   };
@@ -2583,10 +2548,6 @@ function isResultPolicyMode(value: string): value is ResultPolicyMode {
   ].includes(value);
 }
 
-function stringConfig(value: unknown) {
-  return typeof value === "string" ? value : "";
-}
-
 function stringArrayConfig(value: unknown, fallback?: unknown) {
   const values = Array.isArray(value) ? value : [fallback];
   return uniqueNonEmpty(
@@ -2594,14 +2555,29 @@ function stringArrayConfig(value: unknown, fallback?: unknown) {
   );
 }
 
+function parseSampleSelection(value: unknown) {
+  const sampleIds: string[] = [];
+  const sampleGroupIds: string[] = [];
+  if (!Array.isArray(value)) return { sampleIds, sampleGroupIds };
+  value.filter(isRecord).forEach((filter) => {
+    if (filter.field !== "sample" || !Array.isArray(filter.value)) return;
+    filter.value.filter(isRecord).forEach((reference) => {
+      const id = stringConfig(reference.id);
+      if (!id) return;
+      if (reference.kind === "sample") sampleIds.push(id);
+      if (reference.kind === "sample_group") sampleGroupIds.push(id);
+    });
+  });
+  return {
+    sampleIds: uniqueNonEmpty(sampleIds),
+    sampleGroupIds: uniqueNonEmpty(sampleGroupIds),
+  };
+}
+
 function uniqueNonEmpty(values: string[]) {
   return Array.from(
     new Set(values.map((value) => value.trim()).filter(Boolean)),
   );
-}
-
-function numberConfig(value: unknown, fallback: number) {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function filterInsights(insights: SavedInsight[], search: string) {

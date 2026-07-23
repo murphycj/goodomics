@@ -48,7 +48,7 @@ from goodomics.server.insight_capabilities import (
     normalize_result_policy,
     validate_config_shape,
 )
-from goodomics.server.result_resolution import resolve_contract_results
+from goodomics.server.result_resolution import SampleSelection, resolve_contract_results
 from goodomics.storage.duckdb import (
     INTEGER_KEYED_TABLES,
     SERIALIZERS_BY_TABLE,
@@ -74,7 +74,7 @@ StoreName = Literal["metadata", "analytics"]
 # Advanced SQL exists as an escape hatch, but the default UI/API path stays
 # constrained and easy to validate.
 AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
-RESULT_FORMAT_VERSION = 4
+RESULT_FORMAT_VERSION = 5
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -141,8 +141,8 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
     normalized = dict(config)
     normalized.pop("name", None)
     normalized.pop("description", None)
+    normalized.pop("context", None)
     normalized.setdefault("version", 1)
-    normalized.setdefault("context", {"kind": "sample_group"})
     normalized["analysis_grain"] = _normalize_analysis_grain(
         normalized.get("analysis_grain")
     )
@@ -324,7 +324,7 @@ async def execute_report(
     report_name = report.name
     report_description = report.description
     effective_insight_configs = [
-        _inherit_report_context(insight.config, report_config) for insight in insights
+        _inherit_report_config(insight.config, report_config) for insight in insights
     ]
     spec_hash = canonical_hash(
         {
@@ -400,12 +400,12 @@ async def execute_report(
     return result
 
 
-def _inherit_report_context(
+def _inherit_report_config(
     insight_config: Mapping[str, Any], report_config: Mapping[str, Any]
 ) -> JsonObject:
-    """Apply report-level context, filters, linkers, and policies to an insight."""
+    """Apply report-level filters, linkers, and policies to an insight."""
     inherited = dict(insight_config)
-    for key in ("context", "linker", "result_policy"):
+    for key in ("linker", "result_policy"):
         if key not in inherited and key in report_config:
             inherited[key] = report_config[key]
     report_filters = report_config.get("filters")
@@ -770,14 +770,6 @@ async def _execute_single_series_count_query(
     )
     if field is not None and "field_id" in columns:
         where_parts.append(_field_id_match_sql(parameters, field))
-    context_where = await _context_where_sql(
-        session=session,
-        project_id=project_id,
-        config=config,
-        columns=columns,
-        parameters=parameters,
-    )
-    where_parts.extend(context_where)
     where_parts.extend(
         _series_filters_sql(
             table=table,
@@ -867,14 +859,6 @@ async def _contract_series_sql(
     )
     if field is not None and "field_id" in columns:
         where_parts.append(_field_id_match_sql(parameters, field))
-    context_where = await _context_where_sql(
-        session=session,
-        project_id=project_id,
-        config=config,
-        columns=columns,
-        parameters=parameters,
-    )
-    where_parts.extend(context_where)
     where_parts.extend(
         _series_filters_sql(
             table=table,
@@ -905,8 +889,15 @@ async def _resolved_result_where_sql(
 ) -> list[str]:
     """Resolve and constrain one series to exact produced-result occurrences."""
 
+    sample_selections = await _resolve_sample_selections(
+        session=session, project_id=project_id, config=config
+    )
     if "run_contract_id" not in columns:
-        return []
+        return _sample_selection_where_sql(
+            selections=sample_selections,
+            columns=columns,
+            parameters=parameters,
+        )
     raw_scope = series_item.get("result_scope")
     result_scope = raw_scope if isinstance(raw_scope, Mapping) else {}
     resolution = await resolve_contract_results(
@@ -915,6 +906,7 @@ async def _resolved_result_where_sql(
         contract=contract,
         analysis_grain=_normalize_analysis_grain(config.get("analysis_grain")),
         result_scope=result_scope,
+        sample_selections=sample_selections,
     )
     diagnostics = _runtime_metadata(config).get("result_selection_diagnostics")
     collected = list(diagnostics) if isinstance(diagnostics, list) else []
@@ -1145,60 +1137,90 @@ def _chart_requires_linker(
     return False
 
 
-async def _context_where_sql(
+async def _resolve_sample_selections(
     *,
     session: AsyncSession,
     project_id: str | None,
     config: Mapping[str, Any],
+) -> list[SampleSelection]:
+    """Resolve each top-level semantic sample filter to internal identities."""
+
+    filters = config.get("filters")
+    if not isinstance(filters, Sequence) or isinstance(filters, str):
+        return []
+    selections: list[SampleSelection] = []
+    for filter_config in filters:
+        if not _is_semantic_sample_filter(filter_config):
+            continue
+        operator = str(filter_config.get("operator") or filter_config.get("op") or "")
+        if operator != "in":
+            raise ValueError("The sample filter requires operator: in.")
+        raw_values = filter_config.get("value")
+        if not isinstance(raw_values, Sequence) or isinstance(raw_values, str):
+            raise ValueError(
+                "The sample filter value must be a list of sample references."
+            )
+        sample_pks: set[int] = set()
+        run_sample_pks: set[int] = set()
+        for raw_value in raw_values:
+            if not isinstance(raw_value, Mapping):
+                raise ValueError("Each sample filter value must be an object.")
+            kind = str(raw_value.get("kind") or "")
+            public_id = str(raw_value.get("id") or "").strip()
+            if not public_id:
+                raise ValueError("Each sample filter value requires an id.")
+            if kind == "sample":
+                sample_pk = await _sample_pk(session, project_id, public_id)
+                if sample_pk is not None:
+                    sample_pks.add(int(sample_pk))
+            elif kind == "sample_group":
+                run_sample_pks.update(
+                    await _sample_group_run_sample_pks(session, project_id, public_id)
+                )
+            else:
+                raise ValueError(
+                    "Sample filter kinds must be sample or sample_group."
+                )
+        selections.append(
+            SampleSelection(
+                sample_pks=frozenset(sample_pks),
+                run_sample_pks=frozenset(run_sample_pks),
+            )
+        )
+    return selections
+
+
+def _sample_selection_where_sql(
+    *,
+    selections: Sequence[SampleSelection],
     columns: Sequence[str],
     parameters: list[Any],
 ) -> list[str]:
-    """Compile insight context into source-table-specific WHERE clauses."""
-    context = config.get("context")
-    if not isinstance(context, Mapping):
-        return []
-    kind = str(context.get("kind") or "sample_group")
-    where_parts: list[str] = []
-    if kind == "sample":
-        sample_ids = _context_string_values(context, "sample_ids", "sample_id")
-        if sample_ids and "sample_id" in columns:
-            sample_pks = [
-                await _sample_pk(session, project_id, sample_id)
-                for sample_id in sample_ids
-            ]
-            parameters.extend(sample_pks)
-            where_parts.append(f"sample_id IN ({', '.join('?' for _ in sample_pks)})")
-    elif kind == "sample_group":
-        sample_group_ids = _context_string_values(
-            context, "sample_group_ids", "sample_group_id"
-        )
-        if sample_group_ids and "run_sample_id" in columns:
-            run_sample_ids: list[int] = []
-            for sample_group_id in sample_group_ids:
-                run_sample_ids.extend(
-                    await _sample_group_run_sample_pks(
-                        session, project_id, sample_group_id
-                    )
-                )
-            if not run_sample_ids:
-                where_parts.append("1 = 0")
-            else:
-                parameters.extend(run_sample_ids)
-                where_parts.append(
-                    f"run_sample_id IN ({', '.join('?' for _ in run_sample_ids)})"
-                )
-    return where_parts
+    """Compile resolved semantic sample clauses for an integer-keyed source."""
+
+    clauses: list[str] = []
+    for selection in selections:
+        alternatives: list[str] = []
+        if selection.sample_pks and "sample_id" in columns:
+            values = sorted(selection.sample_pks)
+            parameters.extend(values)
+            alternatives.append(
+                f"sample_id IN ({', '.join('?' for _ in values)})"
+            )
+        if selection.run_sample_pks and "run_sample_id" in columns:
+            values = sorted(selection.run_sample_pks)
+            parameters.extend(values)
+            alternatives.append(
+                f"run_sample_id IN ({', '.join('?' for _ in values)})"
+            )
+        clauses.append(f"({' OR '.join(alternatives)})" if alternatives else "1 = 0")
+    return clauses
 
 
-def _context_string_values(
-    context: Mapping[str, Any], list_key: str, single_key: str
-) -> list[str]:
-    """Normalize singular and plural context IDs into a unique string list."""
-    values = _string_list(context.get(list_key))
-    fallback = context.get(single_key)
-    if isinstance(fallback, str):
-        values.append(fallback)
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+def _is_semantic_sample_filter(filter_config: Any) -> TypeGuard[Mapping[str, Any]]:
+    """Return whether a top-level filter is the semantic sample selector."""
+
+    return isinstance(filter_config, Mapping) and filter_config.get("field") == "sample"
 
 
 def _series_filters_sql(
@@ -1281,16 +1303,23 @@ def _combined_filters(
     config: Mapping[str, Any], series_item: Mapping[str, Any]
 ) -> list[Any]:
     """Merge global insight filters with per-series filters."""
-    query = _query_config(config)
     filters: list[Any] = []
     for value in (
-        config.get("filters"),
-        query.get("filters"),
+        _physical_global_filters(config),
         series_item.get("filters"),
     ):
         if isinstance(value, Sequence) and not isinstance(value, str):
             filters.extend(value)
     return filters
+
+
+def _physical_global_filters(config: Mapping[str, Any]) -> list[Any]:
+    """Return global filters that map directly to source-table fields."""
+
+    filters = config.get("filters")
+    if not isinstance(filters, Sequence) or isinstance(filters, str):
+        return []
+    return [item for item in filters if not _is_semantic_sample_filter(item)]
 
 
 def _align_series_rows(
@@ -1858,12 +1887,7 @@ async def _compile_contract_query(
     )
     if field is not None:
         where_parts.append(_field_id_match_sql(parameters, field))
-    for filter_config in [
-        *cast(Sequence[Any], query_config.get("filters") or []),
-        *cast(Sequence[Any], config.get("filters") or []),
-    ]:
-        # Filters can live either inside query or at top-level config. Supporting
-        # both keeps saved JSON compatible with dashboard and template shapes.
+    for filter_config in _physical_global_filters(config):
         where_parts.append(
             _contract_filter_sql(
                 columns=columns,
@@ -2007,14 +2031,13 @@ async def _compile_mixed_contract_table_query(
         # receive the same parameters list used to execute the final query.
         parameters.append(_record_pk(contract))
         where_parts = ["data_contract_id = ?", _field_id_match_sql(parameters, field)]
-        # Apply sample-group or sample context only when the source table has the needed
-        # identity columns. That lets the same preview combine, for example,
-        # sample metrics and result payloads without forcing unsupported filters.
+        # Mixed previews use raw integer-keyed tables, so semantic sample filters
+        # can be compiled directly against their identity columns.
         where_parts.extend(
-            await _context_where_sql(
-                session=session,
-                project_id=project_id,
-                config=config,
+            _sample_selection_where_sql(
+                selections=await _resolve_sample_selections(
+                    session=session, project_id=project_id, config=config
+                ),
                 columns=columns,
                 parameters=parameters,
             )
@@ -2129,9 +2152,6 @@ def compile_insight_result(
         "insight_id": insight_id,
         "name": name,
         "description": description,
-        "context": (
-            config.get("context") if isinstance(config.get("context"), dict) else {}
-        ),
         "analysis_grain": _normalize_analysis_grain(config.get("analysis_grain")),
         "linker": runtime.get("linker") or normalize_linker(config.get("linker")),
         "filters": (
@@ -2588,10 +2608,17 @@ async def _compile_builder_query(
     )
     if project_where:
         where_parts.append(project_where)
-    for filter_config in [
-        *cast(Sequence[Any], query_config.get("filters") or []),
-        *cast(Sequence[Any], config.get("filters") or []),
-    ]:
+    if store == "analytics" and table in INTEGER_KEYED_TABLES:
+        where_parts.extend(
+            _sample_selection_where_sql(
+                selections=await _resolve_sample_selections(
+                    session=session, project_id=project_id, config=config
+                ),
+                columns=columns,
+                parameters=parameters,
+            )
+        )
+    for filter_config in _physical_global_filters(config):
         where_parts.append(_filter_sql(columns, filter_config, parameters))
 
     sql = f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(table)}"

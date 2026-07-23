@@ -89,7 +89,7 @@ value column:
 5. Match the field using either its SQL integer ID or readable DuckDB dimension
    label.
 6. Add exact run-contract and run-sample predicates from the resolver.
-7. Add context, global, query, and per-series filters as bound parameters.
+7. Resolve sample filters, then add global and per-series filters as bound parameters.
 
 Supported contract-series tables include scalar metrics, attributes, numeric
 features, feature calls, copy-number segments, small and structural variants,
@@ -141,7 +141,7 @@ categorical value and returns counts.
 All executions produce a common envelope containing:
 
 ```text
-kind, insight_id, name, description, context, analysis_grain,
+kind, insight_id, name, description, analysis_grain,
 linker, filters, result_policy, linker_diagnostics,
 result_selection_diagnostics, visualization, display,
 columns, column_labels, rows, plot_table, computed_at, cached
@@ -179,7 +179,7 @@ not the analytical source of truth.
 ## Report execution
 
 `execute_report` loads the insight IDs in `report.config.items` order. It merges
-report context, linker, result policy, and filters into each effective insight
+report linker, result policy, and filters into each effective insight
 config, then fingerprints all insight sources.
 
 Each insight executes through the same pipeline described above. The final

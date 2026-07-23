@@ -154,7 +154,6 @@ TEMPLATES: dict[str, JsonObject] = {
         "analysis_grain": "sample",
         "visualization": "table",
         "linker": {"kind": "sample"},
-        "context": {"kind": "sample"},
         "result_policy": {"mode": "preview"},
     },
     "explore_feature": {
@@ -404,8 +403,6 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
     analysis_grain = str(config.get("analysis_grain") or "sample")
     grain = ANALYSIS_GRAINS.get(analysis_grain, ANALYSIS_GRAINS["sample"])
     chart = str(config.get("visualization") or "table")
-    raw_context = config.get("context")
-    context: Mapping[str, Any] = raw_context if isinstance(raw_context, Mapping) else {}
     linker = normalize_linker(config.get("linker"))
     policy = normalize_result_policy(config.get("result_policy"))
     value_labels = [
@@ -416,14 +413,15 @@ def explain_insight_config(config: Mapping[str, Any]) -> str:
         str(item.get("label") or item.get("field_id") or item.get("column") or "column")
         for item in _table_column_items(config)
     ]
-    context_label = str(context.get("kind") or "sample_group")
-    if context.get("sample_group_id"):
-        context_label += f" {context['sample_group_id']}"
-    if context.get("sample_id"):
-        context_label += f" {context['sample_id']}"
+    sample_refs = _sample_filter_refs(config)
+    selection_label = (
+        f"{len(sample_refs)} selected sample source(s)"
+        if sample_refs
+        else "all samples"
+    )
     return (
         f"{grain['label']} insight using "
-        f"{CHARTS.get(chart, CHARTS['table'])['label']} over {context_label}; "
+        f"{CHARTS.get(chart, CHARTS['table'])['label']} over {selection_label}; "
         f"values: {', '.join(value_labels) or 'none'}; "
         f"columns: {', '.join(table_labels) or 'default identity'}; "
         f"matched by {linker['kind']}; data size policy {policy['mode']}."
@@ -444,6 +442,35 @@ def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
                 "message": f"Unsupported analysis grain: {grain}.",
             }
         )
+    for filter_config in _filters(config):
+        if filter_config.get("field") != "sample":
+            continue
+        operator = str(
+            filter_config.get("operator") or filter_config.get("op") or ""
+        )
+        values = filter_config.get("value")
+        valid_values = (
+            isinstance(values, Sequence)
+            and not isinstance(values, str)
+            and all(
+                isinstance(value, Mapping)
+                and value.get("kind") in {"sample", "sample_group"}
+                and isinstance(value.get("id"), str)
+                and bool(value.get("id"))
+                for value in values
+            )
+        )
+        if operator != "in" or not valid_values:
+            messages.append(
+                {
+                    "level": "error",
+                    "code": "invalid_sample_filter",
+                    "message": (
+                        "Sample filters require operator 'in' and a list of "
+                        "sample or sample_group references."
+                    ),
+                }
+            )
     rule = chart_rule(chart)
     series_count = len(_series_items(config))
     series_rule = rule["series"]
@@ -477,6 +504,25 @@ def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
             }
         )
     return messages
+
+
+def _filters(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    raw = config.get("filters")
+    if not isinstance(raw, Sequence) or isinstance(raw, str):
+        return []
+    return [item for item in raw if isinstance(item, Mapping)]
+
+
+def _sample_filter_refs(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    references: list[Mapping[str, Any]] = []
+    for filter_config in _filters(config):
+        if filter_config.get("field") != "sample":
+            continue
+        values = filter_config.get("value")
+        if not isinstance(values, Sequence) or isinstance(values, str):
+            continue
+        references.extend(value for value in values if isinstance(value, Mapping))
+    return references
 
 
 def _series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:

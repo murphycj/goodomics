@@ -27,6 +27,7 @@ import {
   type DisplayOptions,
 } from "../../lib/insightDisplayOptions";
 import { cn } from "../../lib/utils";
+import { isRecord } from "../../lib/valueUtils";
 
 type InsightResult = Record<string, unknown>;
 type GridRow = Record<string, unknown> & { __rowId: string };
@@ -809,8 +810,4 @@ function formatCell(value: unknown) {
   if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString() : value.toPrecision(4);
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

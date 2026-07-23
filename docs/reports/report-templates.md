@@ -24,16 +24,18 @@ config:
   version: 1
   layout:
     columns: 12
-  context:
-    kind: sample_group
-    sample_group_id: production-rnaseq
   items:
     - insight_id: mapping-rate
       x: 0
       y: 0
       w: 6
       h: 4
-  filters: []
+  filters:
+    - field: sample
+      operator: in
+      value:
+        - kind: sample_group
+          id: production-rnaseq
   refresh_policy:
     mode: manual
 ```
@@ -117,5 +119,5 @@ config:
 
 It records the scanned results path in the output and does not execute saved
 insights against the server's SQL/DuckDB stores. Use a saved server report when
-you need contract selection, result scopes, sample group context, compiled charts,
+you need contract selection, result scopes, sample filters, compiled charts,
 cache behavior, or durable report history.

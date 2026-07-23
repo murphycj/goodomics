@@ -1,6 +1,5 @@
 import type { AnalyticsPayload, DataContractField } from "../api";
-
-type JsonRecord = Record<string, unknown>;
+import { nonEmptyStringValue, recordValue } from "./valueUtils";
 
 export function fieldTypeLabel(field: DataContractField) {
   if (field.field_role !== "payload") {
@@ -15,8 +14,10 @@ export function fieldShapeSummary(field: DataContractField) {
   if (!schema) return null;
   const x = recordValue(schema.x);
   const y = recordValue(schema.y);
-  const xLabel = stringValue(x?.label) ?? stringValue(x?.field);
-  const yLabel = stringValue(y?.label) ?? stringValue(y?.field);
+  const xLabel =
+    nonEmptyStringValue(x?.label) ?? nonEmptyStringValue(x?.field);
+  const yLabel =
+    nonEmptyStringValue(y?.label) ?? nonEmptyStringValue(y?.field);
   if (xLabel && yLabel) {
     return `${xLabel} vs ${yLabel}`;
   }
@@ -50,7 +51,7 @@ export function payloadShapeSummary(payload: AnalyticsPayload) {
 }
 
 function resultShapeLabel(value: unknown) {
-  const kind = stringValue(value);
+  const kind = nonEmptyStringValue(value);
   if (kind === "xy_series") return "Point series";
   if (kind === "matrix") return "Matrix";
   if (kind === "table") return "Table";
@@ -59,14 +60,4 @@ function resultShapeLabel(value: unknown) {
   if (kind?.includes("table")) return "Table";
   if (kind?.includes("matrix")) return "Matrix";
   return "Result payload";
-}
-
-function recordValue(value: unknown): JsonRecord | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : null;
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value : null;
 }

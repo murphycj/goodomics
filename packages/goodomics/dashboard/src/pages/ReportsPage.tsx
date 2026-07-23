@@ -34,7 +34,6 @@ import { InsightListTable } from "../components/reports/InsightListTable";
 import { InsightPreview } from "../components/reports/InsightPreview";
 import { ReportListTable } from "../components/reports/ReportListTable";
 import {
-  isRecord,
   readReportItems,
   type ReportItem,
 } from "../components/reports/reportUtils";
@@ -67,9 +66,9 @@ import {
 import { queryClient } from "../lib/queryClient";
 import { useAuth } from "../components/auth/AuthProvider";
 import { cn } from "../lib/utils";
+import { isRecord, stringValue } from "../lib/valueUtils";
 
 type ReportMode = "list" | "detail";
-type ReportContextKind = "sample_group" | "sample";
 type ReportTarget =
   | { mode: "list" }
   | { mode: "new" }
@@ -103,16 +102,15 @@ export function ReportsPage({
   });
   const mode: ReportMode = target.mode === "list" ? "list" : "detail";
   const isNewReport = target.mode === "new";
-  const canSaveReport = isNewReport
-    ? true
-    : can("report.edit", projectId);
+  const canSaveReport = isNewReport ? true : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
   const selectedReport = reports.data?.find(
     (report) =>
       target.mode !== "list" &&
       target.mode !== "new" &&
-      (report.report_id === target.reportRef || report.url_slug === target.reportRef),
+      (report.report_id === target.reportRef ||
+        report.url_slug === target.reportRef),
   );
   const selectedReportId = selectedReport?.report_id ?? null;
   const [editMode, setEditMode] = useState(false);
@@ -121,20 +119,16 @@ export function ReportsPage({
   const [addSearch, setAddSearch] = useState("");
   const [name, setName] = useState("Project report");
   const [description, setDescription] = useState("");
-  const [contextKind, setContextKind] =
-    useState<ReportContextKind>("sample_group");
   const [sampleGroupId, setSampleGroupId] = useState("");
-  const [sampleId, setSampleId] = useState("");
-  const [runSampleId, setRunSampleId] = useState("");
+  const [sampleIdsInput, setSampleIdsInput] = useState("");
   const [items, setItems] = useState<ReportItem[]>([]);
 
   useEffect(() => {
     if (isNewReport) {
       setName("Project report");
       setDescription("");
-      setContextKind("sample_group");
-      setSampleId("");
-      setRunSampleId("");
+      setSampleGroupId("");
+      setSampleIdsInput("");
       setItems([]);
       setEditMode(true);
       return;
@@ -142,21 +136,12 @@ export function ReportsPage({
     if (!selectedReport) return;
     setName(selectedReport.name);
     setDescription(selectedReport.description ?? "");
-    const context = isRecord(selectedReport.config.context)
-      ? selectedReport.config.context
-      : {};
-    setContextKind(context.kind === "sample" ? "sample" : "sample_group");
-    setSampleGroupId(stringValue(context.sample_group_id));
-    setSampleId(stringValue(context.sample_id));
-    setRunSampleId(stringValue(context.run_sample_id));
+    const selection = readReportSampleFilter(selectedReport.config.filters);
+    setSampleGroupId(selection.sampleGroupId);
+    setSampleIdsInput(selection.sampleIds.join(", "));
     setItems(readReportItems(selectedReport.config));
     setEditMode(target.mode === "edit");
   }, [isNewReport, selectedReport, target.mode]);
-
-  useEffect(() => {
-    if (sampleGroupId || (sampleGroups.data ?? []).length === 0) return;
-    setSampleGroupId(sampleGroups.data?.[0]?.sample_group_id ?? "");
-  }, [sampleGroupId, sampleGroups.data]);
 
   const result = useQuery({
     queryKey: ["report-result", projectId, selectedReportId],
@@ -168,17 +153,9 @@ export function ReportsPage({
     mutationFn: async (continueEditing: boolean) => {
       const config = {
         version: 1,
-        title: name,
-        description,
-        context: buildReportContext({
-          contextKind,
-          runSampleId,
-          sampleId,
-          sampleGroupId,
-        }),
         layout: { columns: 12 },
         items,
-        filters: [],
+        filters: buildReportFilters({ sampleIdsInput, sampleGroupId }),
         refresh_policy: { mode: "manual" },
       };
       if (selectedReportId) {
@@ -221,7 +198,9 @@ export function ReportsPage({
       })),
     [editMode, items],
   );
-  const insightResults = Array.isArray(result.data?.insights) ? result.data.insights : [];
+  const insightResults = Array.isArray(result.data?.insights)
+    ? result.data.insights
+    : [];
   const insightById = new Map(
     insightResults
       .filter(isRecord)
@@ -234,7 +213,10 @@ export function ReportsPage({
 
   if (mode === "list") {
     return (
-      <Page title="Reports" subtitle="Create and manage reusable project reports.">
+      <Page
+        title="Reports"
+        subtitle="Create and manage reusable project reports."
+      >
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="relative w-full max-w-[320px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
@@ -362,7 +344,8 @@ export function ReportsPage({
                         Create a new insight
                       </div>
                       <div className="mt-1 text-xs text-[#657082]">
-                        Build a chart, metric, or table, then add it to this report.
+                        Build a chart, metric, or table, then add it to this
+                        report.
                       </div>
                     </div>
                     <Button
@@ -393,7 +376,8 @@ export function ReportsPage({
                             setItems((current) => {
                               if (
                                 current.some(
-                                  (item) => item.insight_id === insight.insight_id,
+                                  (item) =>
+                                    item.insight_id === insight.insight_id,
                                 )
                               ) {
                                 return current;
@@ -421,7 +405,8 @@ export function ReportsPage({
               variant="secondary"
               onClick={() => setEditMode((value) => !value)}
             >
-              <LayoutGrid className="h-4 w-4" /> {editMode ? "View" : "Edit layout"}
+              <LayoutGrid className="h-4 w-4" />{" "}
+              {editMode ? "View" : "Edit layout"}
             </Button>
             {selectedReportId && isEditingDetails ? (
               <Button variant="outline" onClick={() => void result.refetch()}>
@@ -430,15 +415,11 @@ export function ReportsPage({
             ) : null}
           </div>
           {isEditingDetails ? (
-            <ReportContextControls
-              contextKind={contextKind}
-              runSampleId={runSampleId}
-              sampleId={sampleId}
+            <ReportSampleFilterControls
+              sampleIdsInput={sampleIdsInput}
               sampleGroupId={sampleGroupId}
               sampleGroups={sampleGroups.data ?? []}
-              onContextKindChange={setContextKind}
-              onRunSampleIdChange={setRunSampleId}
-              onSampleIdChange={setSampleId}
+              onSampleIdsInputChange={setSampleIdsInput}
               onSampleGroupIdChange={setSampleGroupId}
             />
           ) : null}
@@ -479,7 +460,13 @@ export function ReportsPage({
                         (layoutItem) => layoutItem.i === item.insight_id,
                       );
                       return next
-                        ? { ...item, x: next.x, y: next.y, w: next.w, h: next.h }
+                        ? {
+                            ...item,
+                            x: next.x,
+                            y: next.y,
+                            w: next.w,
+                            h: next.h,
+                          }
                         : item;
                     }),
                   );
@@ -504,14 +491,17 @@ export function ReportsPage({
                         onRemove={() =>
                           setItems((current) =>
                             current.filter(
-                              (candidate) => candidate.insight_id !== item.insight_id,
+                              (candidate) =>
+                                candidate.insight_id !== item.insight_id,
                             ),
                           )
                         }
                       />
                     </div>
                     <div className="h-[calc(100%-42px)] min-h-0 p-3">
-                      <InsightPreview result={insightById.get(item.insight_id)} />
+                      <InsightPreview
+                        result={insightById.get(item.insight_id)}
+                      />
                     </div>
                   </div>
                 ))}
@@ -580,31 +570,33 @@ function ReportBuilderHeader({
             </>
           )}
         </Button>
-        {canSave && <div className="flex overflow-hidden rounded-lg shadow-sm">
-          <Button
-            className="rounded-r-none"
-            disabled={isSaving}
-            onClick={onSave}
-          >
-            <Save className="h-4 w-4" /> Save
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                aria-label="Save options"
-                className="rounded-l-none border-l border-[#16864f] px-2.5"
-                disabled={isSaving}
-              >
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[240px]">
-              <DropdownMenuItem onClick={onSaveContinue}>
-                <Save className="h-4 w-4" /> Save & continue editing
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>}
+        {canSave && (
+          <div className="flex overflow-hidden rounded-lg shadow-sm">
+            <Button
+              className="rounded-r-none"
+              disabled={isSaving}
+              onClick={onSave}
+            >
+              <Save className="h-4 w-4" /> Save
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label="Save options"
+                  className="rounded-l-none border-l border-[#16864f] px-2.5"
+                  disabled={isSaving}
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[240px]">
+                <DropdownMenuItem onClick={onSaveContinue}>
+                  <Save className="h-4 w-4" /> Save & continue editing
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </div>
       {showDescription ? (
         <div className="mt-3 flex items-start gap-2">
@@ -773,110 +765,107 @@ function filterReports(reports: SavedReport[], search: string) {
   );
 }
 
-function ReportContextControls({
-  contextKind,
-  runSampleId,
-  sampleId,
+function ReportSampleFilterControls({
+  sampleIdsInput,
   sampleGroupId,
   sampleGroups,
-  onContextKindChange,
-  onRunSampleIdChange,
-  onSampleIdChange,
+  onSampleIdsInputChange,
   onSampleGroupIdChange,
 }: {
-  contextKind: ReportContextKind;
-  runSampleId: string;
-  sampleId: string;
+  sampleIdsInput: string;
   sampleGroupId: string;
   sampleGroups: SampleGroup[];
-  onContextKindChange: (value: ReportContextKind) => void;
-  onRunSampleIdChange: (value: string) => void;
-  onSampleIdChange: (value: string) => void;
+  onSampleIdsInputChange: (value: string) => void;
   onSampleGroupIdChange: (value: string) => void;
 }) {
   return (
-    <div className="mt-3 grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-      <div className="grid grid-cols-2 gap-2">
-        {(["sample_group", "sample"] as const).map((kind) => (
-          <Button
-            className="justify-center"
-            key={kind}
-            type="button"
-            variant={contextKind === kind ? "secondary" : "outline"}
-            onClick={() => onContextKindChange(kind)}
-          >
-            {kind === "sample_group" ? "Sample group" : "Sample"}
-          </Button>
-        ))}
+    <div className="mt-3 grid gap-3 md:grid-cols-2">
+      <div className="space-y-1.5">
+        <Label>Sample IDs</Label>
+        <Input
+          placeholder="S1, S2"
+          value={sampleIdsInput}
+          onChange={(event) => onSampleIdsInputChange(event.target.value)}
+        />
       </div>
-      {contextKind === "sample_group" ? (
-        <div className="space-y-1.5">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
           <Label>Sample group</Label>
-          <Select value={sampleGroupId} onValueChange={onSampleGroupIdChange}>
-            <SelectTrigger>
-              <SelectValue placeholder="All samples" />
-            </SelectTrigger>
-            <SelectContent>
-              {sampleGroups.map((sampleGroup) => (
-                <SelectItem
-                  key={sampleGroup.sample_group_id}
-                  value={sampleGroup.sample_group_id}
-                >
-                  {sampleGroup.name} ({sampleGroup.member_count})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {sampleGroupId ? (
+            <Button
+              className="h-auto px-1 py-0 text-xs"
+              type="button"
+              variant="ghost"
+              onClick={() => onSampleGroupIdChange("")}
+            >
+              Clear
+            </Button>
+          ) : null}
         </div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>Sample ID</Label>
-            <Input
-              placeholder="S1"
-              value={sampleId}
-              onChange={(event) => onSampleIdChange(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Run sample</Label>
-            <Input
-              placeholder="run:S1"
-              value={runSampleId}
-              onChange={(event) => onRunSampleIdChange(event.target.value)}
-            />
-          </div>
-        </div>
-      )}
+        <Select value={sampleGroupId} onValueChange={onSampleGroupIdChange}>
+          <SelectTrigger>
+            <SelectValue placeholder="All samples" />
+          </SelectTrigger>
+          <SelectContent>
+            {sampleGroups.map((sampleGroup) => (
+              <SelectItem
+                key={sampleGroup.sample_group_id}
+                value={sampleGroup.sample_group_id}
+              >
+                {sampleGroup.name} ({sampleGroup.member_count})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
 
-function buildReportContext({
-  contextKind,
-  runSampleId,
-  sampleId,
+// builds the report filters from the sample IDs and sample group ID
+function buildReportFilters({
+  sampleIdsInput,
   sampleGroupId,
 }: {
-  contextKind: ReportContextKind;
-  runSampleId: string;
-  sampleId: string;
+  sampleIdsInput: string;
   sampleGroupId: string;
 }) {
-  return contextKind === "sample"
-    ? {
-        kind: "sample",
-        sample_id: sampleId.trim() || undefined,
-        run_sample_id: runSampleId.trim() || undefined,
-      }
-    : {
-        kind: "sample_group",
-        sample_group_id: sampleGroupId || undefined,
-      };
+  // parse the sample IDs from the text input, trimming whitespace and filtering out empty values
+  const sampleIds = sampleIdsInput
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const value = [
+    ...sampleIds.map((id) => ({ kind: "sample", id })),
+    ...(sampleGroupId ? [{ kind: "sample_group", id: sampleGroupId }] : []),
+  ];
+  return value.length ? [{ field: "sample", operator: "in", value }] : [];
 }
 
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value : "";
+// reads the report filters and returns the sample IDs and sample group ID
+function readReportSampleFilter(value: unknown) {
+  const references = Array.isArray(value)
+    ? value
+        .filter(isRecord)
+        .filter((filter) => filter.field === "sample")
+        .flatMap((filter) =>
+          Array.isArray(filter.value) ? filter.value.filter(isRecord) : [],
+        )
+    : [];
+
+  // return the sample IDs and sample group ID, filtering out any non-string values
+  return {
+    sampleIds: references
+      .filter((reference) => reference.kind === "sample")
+      .map((reference) => stringValue(reference.id))
+      .filter(Boolean),
+    sampleGroupId:
+      references
+        .filter((reference) => reference.kind === "sample_group")
+        .map((reference) => stringValue(reference.id))
+        .find(Boolean) ?? "",
+  };
 }
 
 function filterInsights(insights: SavedInsight[], search: string) {
@@ -890,5 +879,8 @@ function filterInsights(insights: SavedInsight[], search: string) {
 }
 
 function insightTitle(insights: SavedInsight[], insightId: string) {
-  return insights.find((insight) => insight.insight_id === insightId)?.name ?? insightId;
+  return (
+    insights.find((insight) => insight.insight_id === insightId)?.name ??
+    insightId
+  );
 }

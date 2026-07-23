@@ -12,7 +12,7 @@ import {
   TableRow,
   TableWrap,
 } from "../ui";
-import { isRecord } from "./reportUtils";
+import { isRecord } from "../../lib/valueUtils";
 
 type Store = "metadata" | "analytics";
 

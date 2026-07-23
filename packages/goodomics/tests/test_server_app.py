@@ -1051,7 +1051,6 @@ def test_contract_series_charts_match_metadata_field_ids(
     field_alias = "general_stats_salmon_percent_mapped"
     base_config = {
         "version": 1,
-        "context": {"kind": "sample_group"},
         "analysis_grain": "sample",
         "query": {
             "source": {
@@ -1084,6 +1083,16 @@ def test_contract_series_charts_match_metadata_field_ids(
         table_config = {
             **base_config,
             "visualization": "table",
+            "filters": [
+                {
+                    "field": "sample",
+                    "operator": "in",
+                    "value": [
+                        {"kind": "sample", "id": "S1"},
+                        {"kind": "sample_group", "id": "missing-group"},
+                    ],
+                }
+            ],
             "series": [],
             "table_columns": [
                 {"kind": "identity", "column": "sample_id"},
@@ -1124,6 +1133,11 @@ def test_contract_series_charts_match_metadata_field_ids(
     assert table_response.status_code == 200
     table_result = table_response.json()["result"]
     assert table_result["rows"]
+    assert "context" not in table_result
+    assert table_result["filters"][0]["value"] == [
+        {"kind": "sample", "id": "S1"},
+        {"kind": "sample_group", "id": "missing-group"},
+    ]
     assert table_result["analysis_grain"] == "sample"
     assert table_result["columns"] == [
         "sample_id",
@@ -1442,7 +1456,6 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "config": {
                     "version": 1,
                     "analysis_grain": "feature",
-                    "context": {"kind": "sample_group"},
                     "visualization": "histogram",
                     "query": {
                         "source": {
@@ -1813,6 +1826,16 @@ def test_insight_capabilities_and_validator_explain_new_config(
                     },
                 ],
                 "linker": {"kind": "sample"},
+                "filters": [
+                    {
+                        "field": "sample",
+                        "operator": "in",
+                        "value": [
+                            {"kind": "sample", "id": "S1"},
+                            {"kind": "sample_group", "id": "production"},
+                        ],
+                    }
+                ],
                 "result_policy": {"mode": "preview"},
             }
         },
@@ -1833,6 +1856,7 @@ def test_insight_capabilities_and_validator_explain_new_config(
     assert validation.status_code == 200
     validation_body = validation.json()
     assert validation_body["valid"] is True
+    assert "2 selected sample source(s)" in validation_body["explanation"]
     assert "matched by sample" in validation_body["explanation"]
 
 
@@ -2011,7 +2035,7 @@ def test_plot_table_and_result_size_policies(client: TestClient) -> None:
     assert Path(artifact["path"]).exists()
 
 
-def test_sample_group_context_endpoint_uses_canonical_model(
+def test_sample_group_filter_endpoint_uses_canonical_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,5 +1,10 @@
 import { Card, CardContent } from "../ui";
 import { InsightPreview } from "../reports/InsightPreview";
+import {
+  numberValue,
+  recordValue,
+  stringValue,
+} from "../../lib/valueUtils";
 
 export function InsightPreviewPanel({
   error,
@@ -48,20 +53,20 @@ function PreviewAuditBar({
   config: Record<string, unknown>;
   result: Record<string, unknown> | null | undefined;
 }) {
-  const context = readRecord(result?.context) ?? readRecord(config.context);
-  const linker = readRecord(result?.linker) ?? readRecord(config.linker);
-  const diagnostics = readRecord(result?.linker_diagnostics);
+  const linker = recordValue(result?.linker) ?? recordValue(config.linker);
+  const diagnostics = recordValue(result?.linker_diagnostics);
   const resultDiagnostics = Array.isArray(result?.result_selection_diagnostics)
-    ? result.result_selection_diagnostics.map(readRecord).filter(Boolean)
+    ? result.result_selection_diagnostics.map(recordValue).filter(Boolean)
     : [];
-  const policy = readRecord(result?.result_policy) ?? readRecord(config.result_policy);
+  const policy =
+    recordValue(result?.result_policy) ?? recordValue(config.result_policy);
   const filters = Array.isArray(result?.filters)
     ? result.filters
     : Array.isArray(config.filters)
       ? config.filters
       : [];
   const chips = [
-    contextLabel(context),
+    sampleSelectionLabel(filters),
     linkerLabel(linker),
     filters.length ? `${filters.length} filters` : "No filters",
     policyLabel(policy),
@@ -83,17 +88,35 @@ function PreviewAuditBar({
   );
 }
 
-function contextLabel(context: Record<string, unknown> | null) {
-  const kind = stringValue(context?.kind) || "sample_group";
-  const sampleGroup = stringValue(context?.sample_group_id);
-  const sample = stringValue(context?.sample_id);
-  const sampleGroups = stringArrayValue(context?.sample_group_ids);
-  const samples = stringArrayValue(context?.sample_ids);
-  if (samples.length > 1) return `${samples.length} samples`;
-  if (sampleGroups.length > 1) return `${sampleGroups.length} sample groups`;
-  if (sample) return `Sample ${sample}`;
-  if (sampleGroup) return `Sample group ${sampleGroup}`;
-  return kind === "sample" ? "Sample context" : "All samples";
+// reads the filters and returns a label describing the sample selection
+function sampleSelectionLabel(filters: unknown[]) {
+  // read the filters and extract the sample references
+  const references = filters
+    .map(recordValue)
+    .filter((filter) => filter?.field === "sample")
+    .flatMap((filter) =>
+      Array.isArray(filter?.value)
+        ? filter.value.map(recordValue).filter(Boolean)
+        : [],
+    );
+
+  const samples = references.filter(
+    (reference) => reference?.kind === "sample",
+  );
+  const groups = references.filter(
+    (reference) => reference?.kind === "sample_group",
+  );
+
+  if (!samples.length && !groups.length) return "All samples";
+
+  const labels = [];
+  if (samples.length)
+    labels.push(`${samples.length} sample${samples.length === 1 ? "" : "s"}`);
+  if (groups.length)
+    labels.push(
+      `${groups.length} sample group${groups.length === 1 ? "" : "s"}`,
+    );
+  return labels.join(" + ");
 }
 
 function resultDiagnosticLabels(diagnostics: Record<string, unknown> | null) {
@@ -102,7 +125,7 @@ function resultDiagnosticLabels(diagnostics: Record<string, unknown> | null) {
   const selection = stringValue(diagnostics.selection);
   const missing = stringArrayValue(diagnostics.missing_samples);
   const warnings = stringArrayValue(diagnostics.warnings);
-  const versions = readRecord(diagnostics.versions);
+  const versions = recordValue(diagnostics.versions);
   if (selection) labels.push(`Results ${selection.replaceAll("_", " ")}`);
   if (versions) labels.push(`${Object.keys(versions).length} method versions`);
   if (missing.length) labels.push(`${missing.length} samples missing`);
@@ -112,7 +135,9 @@ function resultDiagnosticLabels(diagnostics: Record<string, unknown> | null) {
 
 function stringArrayValue(value: unknown) {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && Boolean(item))
+    ? value.filter(
+        (item): item is string => typeof item === "string" && Boolean(item),
+      )
     : [];
 }
 
@@ -126,7 +151,9 @@ function policyLabel(policy: Record<string, unknown> | null) {
   const mode = stringValue(policy?.mode);
   const count = numberValue(policy?.embedded_row_count);
   if (!mode) return null;
-  return count === null ? `Data size ${mode}` : `Data size ${mode}: ${count} rows`;
+  return count === null
+    ? `Data size ${mode}`
+    : `Data size ${mode}: ${count} rows`;
 }
 
 function diagnosticsLabel(diagnostics: Record<string, unknown> | null) {
@@ -135,18 +162,4 @@ function diagnosticsLabel(diagnostics: Record<string, unknown> | null) {
   const unmatched = numberValue(diagnostics?.unmatched_count) ?? 0;
   const conflicts = numberValue(diagnostics?.duplicate_conflict_count) ?? 0;
   return `Matched ${matched}; unmatched ${unmatched}; conflicts ${conflicts}`;
-}
-
-function readRecord(value: unknown) {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value : "";
-}
-
-function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

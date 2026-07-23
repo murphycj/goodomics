@@ -61,7 +61,6 @@ field_id = "general_stats.salmon_percent_mapped"
 config = {
     "version": 1,
     "analysis_grain": "sample",
-    "context": {"kind": "sample_group"},
     "visualization": "table",
     "query": {
         "source": {
