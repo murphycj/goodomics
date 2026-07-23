@@ -89,9 +89,9 @@ config = {
 response = client.post(
     "/insights/execute",
     json={
+        **config,
         "project_id": project_id,
         "name": "Mapping rate by sample",
-        "config": config,
         "refresh": True,
     },
 )
@@ -157,17 +157,17 @@ Use the shared validator to normalize defaults and catch config errors:
 ```python
 validation = client.post(
     "/insights/validate",
-    json={"config": scatter_config},
+    json=scatter_config,
 ).raise_for_status().json()
 
 if not validation["valid"]:
     raise ValueError(validation["messages"])
 
 print(validation["explanation"])
-normalized = validation["normalized_config"]
+normalized = validation["normalized_definition"]
 ```
 
-The validation endpoint checks config shape and chart series counts. Execution
+The validation endpoint checks definition shape and chart series counts. Execution
 adds data-specific checks, such as field existence, value types, valid linkers,
 and available produced results.
 
@@ -177,11 +177,11 @@ and available produced results.
 saved = client.post(
     "/insights",
     json={
+        **scatter_config,
         "insight_id": "mapping-vs-gc",
         "project_id": project_id,
         "name": "Mapping versus GC",
         "description": "Latest successful results matched by sample.",
-        "config": scatter_config,
     },
 ).raise_for_status().json()
 
@@ -205,20 +205,18 @@ report = client.post(
         "report_id": "rnaseq-qc",
         "project_id": project_id,
         "name": "RNA-seq QC",
-        "config": {
-            "version": 1,
-            "layout": {"columns": 12},
-            "items": [
-                {
-                    "insight_id": "mapping-vs-gc",
-                    "x": 0,
-                    "y": 0,
-                    "w": 6,
-                    "h": 4,
-                }
-            ],
-            "refresh_policy": {"mode": "manual"},
-        },
+        "version": 1,
+        "layout": {"columns": 12},
+        "items": [
+            {
+                "insight_id": "mapping-vs-gc",
+                "x": 0,
+                "y": 0,
+                "w": 6,
+                "h": 4,
+            }
+        ],
+        "refresh_policy": {"mode": "manual"},
     },
 ).raise_for_status().json()
 

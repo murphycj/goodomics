@@ -64,9 +64,17 @@ The server owns grains, templates, charts, linkers, result-size policies,
 validation, and explanations. Dashboard, API, report rendering, MCP, and AI
 consume these capabilities rather than duplicating rules.
 
-Saved configs include `analysis_grain`, `visualization`, `series`,
-`table_columns`, `linker`, `filters`, `result_policy`, and `display`. Each series
-or column includes the selected contract/field and its result scope.
+User-facing insight and report definitions are flat documents. `name` and
+`description` are indexed SQL columns; executable fields are stored in a JSON
+column. The current definition lives only on the insight/report row. Updating
+executable fields archives the previous executable definition; creation and
+metadata-only changes do not add revisions. List endpoints return lightweight
+summaries, while detail, export, validation, and execution boundaries accept or
+return full flat definitions.
+
+Executable insight fields include `analysis_grain`, `visualization`, `series`,
+`table_columns`, `linker`, `filters`, `result_policy`, and `display`. Each
+series or column includes the selected contract/field and its result scope.
 
 ECharts is an implementation detail. Goodomics configs describe chart intent.
 

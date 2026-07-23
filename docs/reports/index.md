@@ -25,14 +25,15 @@ format.
 
 ## Saved versus ad hoc insights
 
-An ad hoc insight is a config sent directly to
+An ad hoc insight is a flat definition sent directly to
 `POST /api/v1/insights/execute`. It is useful for previews, notebooks, and code
 that does not need a durable builder object.
 
-A saved insight stores a stable ID, project, name, description, and config in
-the SQL metadata store. Creating or updating its config records an immutable
-revision. Saved insights can be exported as YAML or JSON and referenced by
-reports.
+A saved insight stores its stable ID, project, name, and description in indexed
+SQL columns and its executable fields in a JSON column. Updating the executable
+fields archives the previous definition as an immutable analytical revision;
+creation and metadata-only changes do not add revisions. Saved insights can be
+exported as flat YAML or JSON documents and referenced by reports.
 
 Saved insight configs are dynamic: the default result resolver can select newer
 compatible results when data arrives. An executed result includes the exact
@@ -65,9 +66,9 @@ During execution, Goodomics loads those insights in item order. Report-level
 insight does not define its own value. Report filters are prepended to each
 insight's filters.
 
-The structured report result contains the normalized report config plus each
-compiled insight result. Rendering produces HTML and can persist the snapshot
-in `rendered_reports`.
+The structured report result contains the normalized report definition as flat
+top-level fields plus each compiled insight result. Rendering produces HTML and
+can persist the snapshot in `rendered_reports`.
 
 ## Result selection is explicit
 

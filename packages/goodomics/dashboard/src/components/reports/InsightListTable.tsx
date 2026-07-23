@@ -1,5 +1,5 @@
 import { Check, Plus } from "lucide-react";
-import type { SavedInsight } from "../../api";
+import type { InsightSummary } from "../../api";
 import { cn, formatDate } from "../../lib/utils";
 import {
   Badge,
@@ -12,9 +12,6 @@ import {
   TableRow,
   TableWrap,
 } from "../ui";
-import { isRecord } from "../../lib/valueUtils";
-
-type Store = "metadata" | "analytics";
 
 /** Reusable table for browsing insights and optionally adding them to a report. */
 export function InsightListTable({
@@ -24,9 +21,9 @@ export function InsightListTable({
   reportCounts,
   selectedInsightIds,
 }: {
-  insights: SavedInsight[];
-  onAdd?: (insight: SavedInsight) => void;
-  onOpen?: (insight: SavedInsight) => void;
+  insights: InsightSummary[];
+  onAdd?: (insight: InsightSummary) => void;
+  onOpen?: (insight: InsightSummary) => void;
   reportCounts?: Map<string, number>;
   selectedInsightIds?: Set<string>;
 }) {
@@ -49,8 +46,6 @@ export function InsightListTable({
         </TableHeader>
         <TableBody>
           {insights.map((insight) => {
-            const query = isRecord(insight.config.query) ? insight.config.query : {};
-            const source = parseSource(query.source);
             const isSelected = selectedInsightIds?.has(insight.insight_id) ?? false;
             return (
               <TableRow
@@ -73,11 +68,11 @@ export function InsightListTable({
                 </TableCell>
                 <TableCell>
                   <Badge variant="secondary">
-                    {String(insight.config.visualization ?? "table")}
+                    {insight.visualization}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-[#657082]">
-                  {source.store}.{source.table || "query"}
+                  {insight.source_store}.{insight.source_table}
                 </TableCell>
                 <TableCell className="text-[#657082]">
                   {(reportCounts?.get(insight.insight_id) ?? 0).toLocaleString()}
@@ -119,18 +114,4 @@ export function InsightListTable({
       </Table>
     </TableWrap>
   );
-}
-
-function parseSource(value: unknown): { store: Store; table: string } {
-  if (isRecord(value)) {
-    return {
-      store: value.store === "metadata" ? "metadata" : "analytics",
-      table: typeof value.table === "string" ? value.table : "",
-    };
-  }
-  if (typeof value === "string" && value.includes(".")) {
-    const [store, table] = value.split(".", 2);
-    return { store: store === "metadata" ? "metadata" : "analytics", table };
-  }
-  return { store: "analytics", table: typeof value === "string" ? value : "" };
 }

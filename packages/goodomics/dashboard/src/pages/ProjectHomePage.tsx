@@ -16,8 +16,8 @@ import {
   getProject,
   listInsights,
   listReports,
-  type SavedInsight,
-  type SavedReport,
+  type InsightSummary,
+  type ReportSummary,
 } from "../api";
 import { useSearch } from "../components/search/SearchProvider";
 import { Card, CardContent } from "../components/ui";
@@ -265,10 +265,10 @@ function buildRecentViews({
   reports,
   storedViews,
 }: {
-  insights: SavedInsight[];
+  insights: InsightSummary[];
   latestActivityAt: string | null;
   projectId: string;
-  reports: SavedReport[];
+  reports: ReportSummary[];
   storedViews: ProjectRecentView[];
 }): HomeView[] {
   const stored = storedViews.map((view) => ({

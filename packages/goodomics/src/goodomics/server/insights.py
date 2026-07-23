@@ -74,7 +74,7 @@ StoreName = Literal["metadata", "analytics"]
 # Advanced SQL exists as an escape hatch, but the default UI/API path stays
 # constrained and easy to validate.
 AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
-RESULT_FORMAT_VERSION = 5
+RESULT_FORMAT_VERSION = 6
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -374,11 +374,11 @@ async def execute_report(
         for insight, config in zip(insights, effective_insight_configs, strict=True)
     ]
     result = {
+        **report_config,
         "kind": "report_result",
         "report_id": report_id,
         "name": report_name,
         "description": report_description,
-        "config": report_config,
         "insights": insight_results,
         "computed_at": datetime.now(UTC).isoformat(),
         "cached": False,

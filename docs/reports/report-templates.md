@@ -13,31 +13,30 @@ compatible, but they enter different execution paths today.
 
 ## Saved report document
 
-A saved report API document wraps identity and display fields around its config:
+A saved report API document is flat:
 
 ```yaml
 report_id: rnaseq-qc
 project_id: rnaseq-core
 name: RNA-seq QC
 description: Latest compatible QC results for the production sample group.
-config:
-  version: 1
-  layout:
-    columns: 12
-  items:
-    - insight_id: mapping-rate
-      x: 0
-      y: 0
-      w: 6
-      h: 4
-  filters:
-    - field: sample
-      operator: in
-      value:
-        - kind: sample_group
-          id: production-rnaseq
-  refresh_policy:
-    mode: manual
+version: 1
+layout:
+  columns: 12
+items:
+  - insight_id: mapping-rate
+    x: 0
+    y: 0
+    w: 6
+    h: 4
+filters:
+  - field: sample
+    operator: in
+    value:
+      - kind: sample_group
+        id: production-rnaseq
+refresh_policy:
+  mode: manual
 ```
 
 Create the component insights before creating the report. At execution time,
@@ -48,8 +47,8 @@ Use these routes for the saved-report lifecycle:
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/v1/reports` | Save a report and its initial revision |
-| `PATCH /api/v1/reports/{report}` | Update metadata/config and record a config revision |
+| `POST /api/v1/reports` | Save a report as the current definition |
+| `PATCH /api/v1/reports/{report}` | Update metadata or executable fields; executable changes record a revision |
 | `GET /api/v1/reports/{report}/export.yaml` | Export a portable YAML document |
 | `GET /api/v1/reports/{report}/export.json` | Export a portable JSON document |
 | `POST /api/v1/reports/{report}/execute` | Return a structured report result |
@@ -78,18 +77,17 @@ insight_id: mapping-rate
 project_id: rnaseq-core
 name: Mapping rate
 description: Percent mapped for the latest successful result per sample.
-config:
-  version: 1
-  analysis_grain: sample
-  visualization: table
-  # Remaining insight config omitted here.
+version: 1
+analysis_grain: sample
+visualization: table
+# Remaining executable fields omitted here.
 ```
 
 ## Structured results versus rendered HTML
 
-Executing a report returns a JSON object with the normalized report config and
-one result object per insight. This form is appropriate for Python, notebooks,
-MCP tools, and clients that render their own UI.
+Executing a report returns a flat JSON object with the normalized report
+definition and one result object per insight. This form is appropriate for
+Python, notebooks, MCP tools, and clients that render their own UI.
 
 Rendering a saved report runs the same insight execution first, converts the
 result to HTML, and stores the snapshot in `rendered_reports`. The HTML embeds

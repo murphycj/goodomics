@@ -1,4 +1,4 @@
-import type { SavedReport } from "../../api";
+import type { ReportSummary } from "../../api";
 import { formatDate } from "../../lib/utils";
 import {
   Badge,
@@ -10,7 +10,6 @@ import {
   TableRow,
   TableWrap,
 } from "../ui";
-import { readReportItems } from "./reportUtils";
 
 /** Reusable table for browsing saved project reports. */
 export function ReportListTable({
@@ -19,8 +18,8 @@ export function ReportListTable({
   reports,
 }: {
   defaultReportId: string | null;
-  onOpen: (report: SavedReport) => void;
-  reports: SavedReport[];
+  onOpen: (report: ReportSummary) => void;
+  reports: ReportSummary[];
 }) {
   return (
     <TableWrap className="mt-0">
@@ -50,7 +49,7 @@ export function ReportListTable({
                 ) : null}
               </TableCell>
               <TableCell className="text-[#657082]">
-                {readReportItems(report.config).length.toLocaleString()}
+                {report.insight_count.toLocaleString()}
               </TableCell>
               <TableCell>
                 {report.report_id === defaultReportId ? (

@@ -235,27 +235,40 @@ const contractResultOptionsSchema = z.object({
   statuses: z.array(z.string()).default([]),
 });
 
-const insightSchema = z.object({
+const insightMetadataSchema = z.object({
   insight_id: z.string(),
   url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
-  config: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   updated_at: z.string(),
 });
 
-const reportSchema = z.object({
+const insightSummarySchema = insightMetadataSchema.extend({
+  visualization: z.string(),
+  source_store: z.string(),
+  source_table: z.string(),
+});
+
+const insightSchema = insightMetadataSchema.catchall(z.unknown());
+
+const reportMetadataSchema = z.object({
   report_id: z.string(),
   url_slug: z.string(),
   project_id: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
-  config: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   updated_at: z.string(),
 });
+
+const reportSummarySchema = reportMetadataSchema.extend({
+  insight_count: z.number(),
+  insight_ids: z.array(z.string()),
+});
+
+const reportSchema = reportMetadataSchema.catchall(z.unknown());
 
 const insightResultSchema = z.object({
   result: z.record(z.string(), z.unknown()),
@@ -278,7 +291,7 @@ const insightCapabilitiesSchema = z.object({
 const insightValidationSchema = z.object({
   valid: z.boolean(),
   messages: z.array(z.record(z.string(), z.unknown())).default([]),
-  normalized_config: z.record(z.string(), z.unknown()),
+  normalized_definition: z.record(z.string(), z.unknown()),
   explanation: z.string(),
   capabilities_version: z.number(),
 });
@@ -388,7 +401,9 @@ export type DatabaseTablePage = z.infer<typeof databaseTablePageSchema>;
 export type DataContract = z.infer<typeof dataContractSchema>;
 export type DataContractField = z.infer<typeof dataContractFieldSchema>;
 export type SavedInsight = z.infer<typeof insightSchema>;
+export type InsightSummary = z.infer<typeof insightSummarySchema>;
 export type SavedReport = z.infer<typeof reportSchema>;
+export type ReportSummary = z.infer<typeof reportSummarySchema>;
 export type InsightResult = z.infer<typeof insightResultSchema>['result'];
 export type ReportResult = z.infer<typeof reportResultSchema>['result'];
 export type InsightCapabilities = z.infer<typeof insightCapabilitiesSchema>;
@@ -688,7 +703,7 @@ export async function validateInsightConfig(config: Record<string, unknown>) {
   const response = await apiFetch('/api/v1/insights/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config }),
+    body: JSON.stringify(config),
   });
   if (!response.ok) throw await responseError(response);
   return insightValidationSchema.parse(await response.json());
@@ -870,7 +885,7 @@ export function previewProjectDatabaseTable({
 
 export function listInsights(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
-  return getJson(`/api/v1/insights?${params.toString()}`, z.array(insightSchema));
+  return getJson(`/api/v1/insights?${params.toString()}`, z.array(insightSummarySchema));
 }
 
 export function getInsight(insightId: string) {
@@ -882,8 +897,7 @@ export async function createInsight(payload: {
   project_id: string;
   name: string;
   description?: string | null;
-  config: Record<string, unknown>;
-}) {
+} & Record<string, unknown>) {
   const response = await apiFetch('/api/v1/insights', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -895,7 +909,10 @@ export async function createInsight(payload: {
 
 export async function patchInsight(
   insightId: string,
-  payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
+  payload: {
+    name?: string;
+    description?: string | null;
+  } & Record<string, unknown>,
 ) {
   const response = await apiFetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
     method: 'PATCH',
@@ -936,8 +953,8 @@ export async function executeInsight({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ...config,
         project_id: projectId,
-        config,
         name,
         description,
         refresh: Boolean(refresh),
@@ -957,7 +974,7 @@ export async function executeInsight({
 
 export function listReports(projectId: string) {
   const params = new URLSearchParams({ project_id: projectId });
-  return getJson(`/api/v1/reports?${params.toString()}`, z.array(reportSchema));
+  return getJson(`/api/v1/reports?${params.toString()}`, z.array(reportSummarySchema));
 }
 
 export function getReport(reportId: string) {
@@ -969,8 +986,7 @@ export async function createReport(payload: {
   project_id: string;
   name: string;
   description?: string | null;
-  config: Record<string, unknown>;
-}) {
+} & Record<string, unknown>) {
   const response = await apiFetch('/api/v1/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -982,7 +998,10 @@ export async function createReport(payload: {
 
 export async function patchReport(
   reportId: string,
-  payload: { name?: string; description?: string | null; config?: Record<string, unknown> },
+  payload: {
+    name?: string;
+    description?: string | null;
+  } & Record<string, unknown>,
 ) {
   const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
     method: 'PATCH',

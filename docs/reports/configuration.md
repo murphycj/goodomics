@@ -1,62 +1,66 @@
 # Insight and report configuration
 
-The configuration is a declarative description of the analytical intent for a single insight or a report. It describes the data source, filters, and visualization hints. Goodomics compiles the config into SQL, result rows, chart options, caches, and rendered HTML. Goodomics validates the config against the server capabilities and data contracts. It may also fill in missing values with defaults, normalize aliases, and report warnings or errors. It is a portable and shareable artifact that can be stored in a project, a Git repository, or a database.
+An insight or report definition is a declarative description of analytical
+intent. It describes the data source, filters, and visualization hints.
+Goodomics validates the definition against server capabilities and data
+contracts, then compiles its executable fields into SQL, result rows, chart
+options, caches, and rendered HTML. Validation may fill in defaults, normalize
+aliases, and report warnings or errors.
 
 ## Example saved insight
 
 This example defines a sample-level table of Salmon mapping rates for selected
 samples and a sample group. `name` and `description` identify the saved insight,
-while `config` contains only its executable analytical definition.
+followed by its executable analytical fields.
 
 ```yaml
 name: Salmon mapping rates
 description: Percent mapped for the production RNA-seq sample group.
-config:
-  analysis_grain: sample
-  visualization: table
-  query:
-    source:
-      kind: data_contract
-      data_contract_id: salmon:results
-    fields:
-      - general_stats.salmon_percent_mapped
-    dimensions: [sample_id]
-    order_by: sample_id
-    limit: 1000
-  series: []
-  table_columns:
-    - kind: identity
-      column: sample_id
-      label: Sample
-    - kind: contract_field
-      contract_id: salmon:results
-      field_id: general_stats.salmon_percent_mapped
-      label: Percent mapped
-      value_mode: raw
-      result_scope:
-        selection: latest_successful_per_sample
-  linker:
-    kind: sample
-  filters:
-    - field: sample
-      operator: in
-      value:
-        - kind: sample
-          id: control-01
-        - kind: sample
-          id: control-02
-        - kind: sample_group
-          id: production-rnaseq
-    - field: general_stats.salmon_percent_mapped
-      operator: gte
-      value: 90
-  result_policy:
-    mode: preview
-    limit: 1000
-  display: {}
+analysis_grain: sample
+visualization: table
+query:
+  source:
+    kind: data_contract
+    data_contract_id: salmon:results
+  fields:
+    - general_stats.salmon_percent_mapped
+  dimensions: [sample_id]
+  order_by: sample_id
+  limit: 1000
+series: []
+table_columns:
+  - kind: identity
+    column: sample_id
+    label: Sample
+  - kind: contract_field
+    contract_id: salmon:results
+    field_id: general_stats.salmon_percent_mapped
+    label: Percent mapped
+    value_mode: raw
+    result_scope:
+      selection: latest_successful_per_sample
+linker:
+  kind: sample
+filters:
+  - field: sample
+    operator: in
+    value:
+      - kind: sample
+        id: control-01
+      - kind: sample
+        id: control-02
+      - kind: sample_group
+        id: production-rnaseq
+  - field: general_stats.salmon_percent_mapped
+    operator: gte
+    value: 90
+result_policy:
+  mode: preview
+  limit: 1000
+display: {}
 ```
 
-The saved insight fields and config keys map to the reference sections below:
+The saved insight fields map to the reference sections below:
 
 | Key              | Purpose                                                | Details                                         |
 | ---------------- | ------------------------------------------------------ | ----------------------------------------------- |

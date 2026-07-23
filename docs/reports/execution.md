@@ -178,14 +178,15 @@ not the analytical source of truth.
 
 ## Report execution
 
-`execute_report` loads the insight IDs in `report.config.items` order. It merges
-report linker, result policy, and filters into each effective insight
-config, then fingerprints all insight sources.
+Internally, `execute_report` loads the insight IDs from the report's stored
+`items` field in order. It merges report linker, result policy, and filters into
+each effective insight definition, then fingerprints all insight sources.
 
 Each insight executes through the same pipeline described above. The final
-report result contains report identity/config plus the ordered insight results.
-Report caching uses a hash of the report config, effective insight configs,
-project, and all source fingerprints.
+report result contains report identity and normalized executable fields in one
+flat object plus the ordered insight results. Report caching uses a hash of the
+report definition, effective insight definitions, project, and all source
+fingerprints.
 
 The HTML renderer embeds the structured report payload and produces fallback
 tables for insight rows. `POST /api/v1/reports/render` can persist that HTML as

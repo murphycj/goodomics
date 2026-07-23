@@ -22,11 +22,13 @@ import {
   deleteReport,
   executeReport,
   getProject,
+  getReport,
   listInsights,
   listReports,
   listSampleGroups,
   patchReport,
-  type SavedInsight,
+  type InsightSummary,
+  type ReportSummary,
   type SavedReport,
   type SampleGroup,
 } from "../api";
@@ -105,14 +107,25 @@ export function ReportsPage({
   const canSaveReport = isNewReport ? true : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
-  const selectedReport = reports.data?.find(
+  const selectedReportSummary = reports.data?.find(
     (report) =>
       target.mode !== "list" &&
       target.mode !== "new" &&
       (report.report_id === target.reportRef ||
         report.url_slug === target.reportRef),
   );
-  const selectedReportId = selectedReport?.report_id ?? null;
+  const selectedReportRef =
+    target.mode === "view" || target.mode === "edit"
+      ? target.reportRef
+      : selectedReportSummary?.report_id;
+  const reportDetail = useQuery({
+    queryKey: ["report", selectedReportRef],
+    queryFn: () => getReport(selectedReportRef!),
+    enabled: Boolean(selectedReportRef),
+  });
+  const selectedReport = reportDetail.data;
+  const selectedReportId =
+    selectedReportSummary?.report_id ?? selectedReport?.report_id ?? null;
   const [editMode, setEditMode] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -136,10 +149,10 @@ export function ReportsPage({
     if (!selectedReport) return;
     setName(selectedReport.name);
     setDescription(selectedReport.description ?? "");
-    const selection = readReportSampleFilter(selectedReport.config.filters);
+    const selection = readReportSampleFilter(selectedReport.filters);
     setSampleGroupId(selection.sampleGroupId);
     setSampleIdsInput(selection.sampleIds.join(", "));
-    setItems(readReportItems(selectedReport.config));
+    setItems(readReportItems(selectedReport));
     setEditMode(target.mode === "edit");
   }, [isNewReport, selectedReport, target.mode]);
 
@@ -159,9 +172,14 @@ export function ReportsPage({
         refresh_policy: { mode: "manual" },
       };
       if (selectedReportId) {
-        return patchReport(selectedReportId, { name, description, config });
+        return patchReport(selectedReportId, { ...config, name, description });
       }
-      return createReport({ project_id: projectId, name, description, config });
+      return createReport({
+        ...config,
+        project_id: projectId,
+        name,
+        description,
+      });
     },
     onSuccess: (saved, continueEditing) => {
       void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
@@ -755,7 +773,7 @@ function InsightCardMenu({
   );
 }
 
-function filterReports(reports: SavedReport[], search: string) {
+function filterReports(reports: ReportSummary[], search: string) {
   const normalized = search.trim().toLowerCase();
   if (!normalized) return reports;
   return reports.filter((report) =>
@@ -868,7 +886,7 @@ function readReportSampleFilter(value: unknown) {
   };
 }
 
-function filterInsights(insights: SavedInsight[], search: string) {
+function filterInsights(insights: InsightSummary[], search: string) {
   const normalized = search.trim().toLowerCase();
   if (!normalized) return insights;
   return insights.filter((insight) =>
@@ -878,7 +896,7 @@ function filterInsights(insights: SavedInsight[], search: string) {
   );
 }
 
-function insightTitle(insights: SavedInsight[], insightId: string) {
+function insightTitle(insights: InsightSummary[], insightId: string) {
   return (
     insights.find((insight) => insight.insight_id === insightId)?.name ??
     insightId

@@ -36,7 +36,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlmodel import SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -108,6 +108,24 @@ from goodomics.storage.sqlalchemy import (
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(authorize_api_request)])
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
+_PUBLIC_PROJECT_ID_TABLES = {
+    "insights",
+    "reports",
+    "rendered_reports",
+    "insight_result_cache",
+    "report_result_cache",
+}
+_DEFINITION_METADATA_FIELDS = {
+    "insight_id",
+    "report_id",
+    "project_id",
+    "url_slug",
+    "created_at",
+    "updated_at",
+    "name",
+    "description",
+    "refresh",
+}
 UPLOAD_FILE = File(...)
 
 
@@ -286,70 +304,105 @@ class FileRead(BaseModel):
     created_at: datetime | None = None
 
 
-class SavedInsightBase(BaseModel):
-    """Shared fields for saved insight create/read payloads."""
+class FlatDefinitionModel(BaseModel):
+    """Accept executable definition fields beside declared metadata fields."""
 
-    name: str
-    description: str | None = None
-    config: dict[str, JsonValue] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="allow")
+
+    def executable_fields(self) -> dict[str, JsonValue]:
+        """Return the undeclared fields that form the executable definition."""
+
+        return cast(
+            dict[str, JsonValue],
+            {
+                key: value
+                for key, value in (self.model_extra or {}).items()
+                if key not in _DEFINITION_METADATA_FIELDS
+            },
+        )
 
 
-class SavedInsightCreate(SavedInsightBase):
-    """Payload for creating a saved insight."""
+class SavedInsightCreate(FlatDefinitionModel):
+    """Flat payload for creating a saved insight."""
 
     insight_id: str | None = None
     project_id: str | None = None
+    name: str
+    description: str | None = None
 
 
-class SavedInsightPatch(BaseModel):
-    """Fields that can be patched on an existing saved insight."""
+class SavedInsightPatch(FlatDefinitionModel):
+    """Flat fields that can be patched on an existing saved insight."""
 
     name: str | None = None
     description: str | None = None
-    config: dict[str, JsonValue] | None = None
 
 
-class SavedInsightRead(SavedInsightBase):
-    """Saved insight response with stable ID and timestamps."""
+class SavedInsightMetadata(BaseModel):
+    """Shared persisted insight metadata."""
 
     insight_id: str
     url_slug: str
     project_id: str | None = None
+    name: str
+    description: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
-class SavedReportBase(BaseModel):
-    """Shared fields for saved report create/read payloads."""
+class SavedInsightSummary(SavedInsightMetadata):
+    """Lightweight insight row returned by list endpoints."""
 
-    name: str
-    description: str | None = None
-    config: dict[str, JsonValue] = Field(default_factory=dict)
+    visualization: str
+    source_store: str
+    source_table: str
 
 
-class SavedReportCreate(SavedReportBase):
-    """Payload for creating a saved report."""
+class SavedInsightRead(SavedInsightMetadata):
+    """Saved insight metadata plus its flat executable definition."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class SavedReportCreate(FlatDefinitionModel):
+    """Flat payload for creating a saved report."""
 
     report_id: str | None = None
     project_id: str | None = None
+    name: str
+    description: str | None = None
 
 
-class SavedReportPatch(BaseModel):
-    """Fields that can be patched on an existing saved report."""
+class SavedReportPatch(FlatDefinitionModel):
+    """Flat fields that can be patched on an existing saved report."""
 
     name: str | None = None
     description: str | None = None
-    config: dict[str, JsonValue] | None = None
 
 
-class SavedReportRead(SavedReportBase):
-    """Saved report response with stable ID and timestamps."""
+class SavedReportMetadata(BaseModel):
+    """Shared persisted report metadata."""
 
     report_id: str
     url_slug: str
     project_id: str | None = None
+    name: str
+    description: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class SavedReportSummary(SavedReportMetadata):
+    """Lightweight report row returned by list endpoints."""
+
+    insight_count: int
+    insight_ids: list[str]
+
+
+class SavedReportRead(SavedReportMetadata):
+    """Saved report metadata plus its flat executable definition."""
+
+    model_config = ConfigDict(extra="allow")
 
 
 class ReportRenderRequest(BaseModel):
@@ -376,10 +429,9 @@ class RenderedReportRead(BaseModel):
     created_at: datetime
 
 
-class InsightExecuteRequest(BaseModel):
-    """Payload for executing an ad hoc or saved insight."""
+class InsightExecuteRequest(FlatDefinitionModel):
+    """Flat payload for executing an ad hoc or saved insight."""
 
-    config: dict[str, JsonValue] | None = None
     name: str | None = None
     description: str | None = None
     project_id: str | None = None
@@ -405,10 +457,11 @@ class ReportResultRead(BaseModel):
     result: dict[str, JsonValue]
 
 
-class InsightValidationRequest(BaseModel):
-    """Payload for validating and explaining a draft insight config."""
+class InsightValidationRequest(FlatDefinitionModel):
+    """Flat insight definition to validate and explain."""
 
-    config: dict[str, JsonValue] = Field(default_factory=dict)
+    name: str | None = None
+    description: str | None = None
 
 
 class InsightValidationRead(BaseModel):
@@ -416,7 +469,7 @@ class InsightValidationRead(BaseModel):
 
     valid: bool
     messages: list[dict[str, JsonValue]]
-    normalized_config: dict[str, JsonValue]
+    normalized_definition: dict[str, JsonValue]
     explanation: str
     capabilities_version: int = 1
 
@@ -1863,11 +1916,11 @@ async def _file_content_response(
     return FileResponse(path)
 
 
-@router.get("/insights", response_model=list[SavedInsightRead])
+@router.get("/insights", response_model=list[SavedInsightSummary])
 async def list_insights(
     request: Request,
     project_id: str | None = Query(default=None),
-) -> list[SavedInsightRead]:
+) -> list[SavedInsightSummary]:
     """List saved insights globally or for one project."""
 
     if project_id is not None:
@@ -1885,7 +1938,7 @@ async def list_insights(
                 )
         rows = (await session.exec(statement)).all()
 
-    return [_saved_insight_read(row) for row in rows]
+    return [_saved_insight_summary(row) for row in rows]
 
 
 @router.get("/insights/capabilities")
@@ -1901,8 +1954,15 @@ async def validate_insight_config(
 ) -> InsightValidationRead:
     """Validate and explain a draft insight config without executing it."""
 
+    validation = validate_and_explain_config(payload.executable_fields())
+    normalized_definition: dict[str, JsonValue] = {}
+    if payload.name is not None:
+        normalized_definition["name"] = payload.name
+    if payload.description is not None:
+        normalized_definition["description"] = payload.description
+    normalized_definition.update(validation.pop("normalized_config"))
     return InsightValidationRead.model_validate(
-        validate_and_explain_config(payload.config)
+        {**validation, "normalized_definition": normalized_definition}
     )
 
 
@@ -1910,12 +1970,12 @@ async def validate_insight_config(
 async def create_insight(
     payload: SavedInsightCreate, request: Request
 ) -> SavedInsightRead:
-    """Create a saved insight and its initial revision."""
+    """Create a saved insight as the current definition."""
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
     insight_id = payload.insight_id or _new_id("insight")
-    config = normalize_insight_config(payload.config)
+    config = normalize_insight_config(payload.executable_fields())
     async with _session_context(request) as session:
         insight = InsightRecord(
             insight_id=insight_id,
@@ -1928,13 +1988,7 @@ async def create_insight(
             created_by_user_id=getattr(request.state.principal, "user_pk", None),
             updated_by_user_id=getattr(request.state.principal, "user_pk", None),
         )
-        revision = InsightRevisionRecord(
-            insight_id=insight_id,
-            config=config,
-            created_at=now,
-        )
         session.add(insight)
-        session.add(revision)
         await session.commit()
     return await get_insight(insight_id, request)
 
@@ -1963,9 +2017,14 @@ async def patch_insight(
     insight_ref: str, payload: SavedInsightPatch, request: Request
 ) -> SavedInsightRead:
     """Patch a saved insight and record a revision when config changes."""
-    values = payload.model_dump(exclude_unset=True)
-    if isinstance(values.get("config"), dict):
-        values["config"] = normalize_insight_config(values["config"])
+    values: dict[str, Any] = {}
+    if "name" in payload.model_fields_set:
+        values["name"] = payload.name
+    if "description" in payload.model_fields_set:
+        values["description"] = payload.description
+    executable_fields = payload.executable_fields()
+    if executable_fields:
+        values["config"] = normalize_insight_config(executable_fields)
 
     if values:
         async with _session_context(request) as session:
@@ -1982,6 +2041,7 @@ async def patch_insight(
 
             insight_id = insight.insight_id
             updated_at = datetime.now(UTC)
+            previous_config = insight.config
             for key, value in values.items():
                 setattr(insight, key, value)
             insight.updated_at = updated_at
@@ -1994,7 +2054,7 @@ async def patch_insight(
                 session.add(
                     InsightRevisionRecord(
                         insight_id=insight_id,
-                        config=values["config"],
+                        config=previous_config,
                         created_at=updated_at,
                     )
                 )
@@ -2064,7 +2124,7 @@ async def execute_adhoc_insight(
                 session=session,
                 analytics_store=analytics_store,
                 project_id=payload.project_id,
-                config=payload.config or {},
+                config=payload.executable_fields(),
                 name=payload.name,
                 description=payload.description,
                 refresh=payload.refresh,
@@ -2096,7 +2156,7 @@ async def execute_saved_insight(
                 analytics_store=analytics_store,
                 project_id=project_id,
                 insight=insight,
-                config=payload.config,
+                config=payload.executable_fields() or None,
                 refresh=payload.refresh,
                 persist_results=await _may_persist_results(request, project_id),
             )
@@ -2105,11 +2165,11 @@ async def execute_saved_insight(
     return InsightResultRead(result=result)
 
 
-@router.get("/reports", response_model=list[SavedReportRead])
+@router.get("/reports", response_model=list[SavedReportSummary])
 async def list_reports(
     request: Request,
     project_id: str | None = Query(default=None),
-) -> list[SavedReportRead]:
+) -> list[SavedReportSummary]:
     """List saved reports globally or for one project."""
     if project_id is not None:
         await _require_project(request, project_id)
@@ -2127,37 +2187,32 @@ async def list_reports(
                     cast(Any, ReportRecord.project_id).in_(visible)
                 )
         rows = (await session.exec(statement)).all()
-    return [_saved_report_read(row) for row in rows]
+    return [_saved_report_summary(row) for row in rows]
 
 
 @router.post("/reports", response_model=SavedReportRead, status_code=201)
 async def create_report(
     payload: SavedReportCreate, request: Request
 ) -> SavedReportRead:
-    """Create a saved report and its initial revision."""
+    """Create a saved report as the current definition."""
     if payload.project_id is not None:
         await _require_project(request, payload.project_id)
     now = datetime.now(UTC)
     report_id = payload.report_id or _new_id("report")
+    config = payload.executable_fields()
     async with _session_context(request) as session:
         report = ReportRecord(
             report_id=report_id,
             project_id=payload.project_id,
             name=payload.name,
             description=payload.description,
-            config=payload.config,
+            config=config,
             created_at=now,
             updated_at=now,
             created_by_user_id=getattr(request.state.principal, "user_pk", None),
             updated_by_user_id=getattr(request.state.principal, "user_pk", None),
         )
-        revision = ReportRevisionRecord(
-            report_id=report_id,
-            config=payload.config,
-            created_at=now,
-        )
         session.add(report)
-        session.add(revision)
         await session.commit()
     return await get_saved_report(report_id, request)
 
@@ -2253,7 +2308,14 @@ async def patch_report(
     report_ref: str, payload: SavedReportPatch, request: Request
 ) -> SavedReportRead:
     """Patch a saved report and record a revision when config changes."""
-    values = payload.model_dump(exclude_unset=True)
+    values: dict[str, Any] = {}
+    if "name" in payload.model_fields_set:
+        values["name"] = payload.name
+    if "description" in payload.model_fields_set:
+        values["description"] = payload.description
+    executable_fields = payload.executable_fields()
+    if executable_fields:
+        values["config"] = executable_fields
 
     if values:
         async with _session_context(request) as session:
@@ -2270,6 +2332,7 @@ async def patch_report(
 
             report_id = report.report_id
             updated_at = datetime.now(UTC)
+            previous_config = report.config
             for key, value in values.items():
                 setattr(report, key, value)
             report.updated_at = updated_at
@@ -2282,7 +2345,7 @@ async def patch_report(
                 session.add(
                     ReportRevisionRecord(
                         report_id=report_id,
-                        config=values["config"],
+                        config=previous_config,
                         created_at=updated_at,
                     )
                 )
@@ -3194,25 +3257,100 @@ async def _get_project_sample_group_by_ref(
 
 
 def _saved_insight_read(row: InsightRecord) -> SavedInsightRead:
-    values = row.model_dump()
-    values["url_slug"] = _saved_entity_url_slug(
-        row.insight_id,
-        row.name,
-        prefix="ins",
-        fallback="insight",
-    )
+    """Return a saved insight with executable fields flattened into the document."""
+
+    values = {
+        **row.config,
+        **row.model_dump(exclude={"config"}),
+        "url_slug": _saved_entity_url_slug(
+            row.insight_id,
+            row.name,
+            prefix="ins",
+            fallback="insight",
+        ),
+    }
     return SavedInsightRead.model_validate(values)
 
 
+def _saved_insight_summary(row: InsightRecord) -> SavedInsightSummary:
+    """Return list-safe insight metadata without the full executable definition."""
+
+    query = row.config.get("query")
+    query = query if isinstance(query, dict) else {}
+    source = query.get("source")
+    source_store = "analytics"
+    source_table = "query"
+    if isinstance(source, dict):
+        if source.get("kind") == "data_contract":
+            source_store = "contracts"
+            source_table = str(source.get("data_contract_id") or "query")
+        else:
+            source_store = (
+                "metadata" if source.get("store") == "metadata" else "analytics"
+            )
+            source_table = str(source.get("table") or "query")
+    elif isinstance(source, str):
+        if "." in source:
+            store, source_table = source.split(".", 1)
+            source_store = "metadata" if store == "metadata" else "analytics"
+        else:
+            source_table = source or "query"
+    values = {
+        **row.model_dump(exclude={"config"}),
+        "url_slug": _saved_entity_url_slug(
+            row.insight_id,
+            row.name,
+            prefix="ins",
+            fallback="insight",
+        ),
+        "visualization": str(row.config.get("visualization") or "table"),
+        "source_store": source_store,
+        "source_table": source_table,
+    }
+    return SavedInsightSummary.model_validate(values)
+
+
 def _saved_report_read(row: ReportRecord) -> SavedReportRead:
-    values = row.model_dump()
-    values["url_slug"] = _saved_entity_url_slug(
-        row.report_id,
-        row.name,
-        prefix="rep",
-        fallback="report",
-    )
+    """Return a saved report with executable fields flattened into the document."""
+
+    values = {
+        **row.config,
+        **row.model_dump(exclude={"config"}),
+        "url_slug": _saved_entity_url_slug(
+            row.report_id,
+            row.name,
+            prefix="rep",
+            fallback="report",
+        ),
+    }
     return SavedReportRead.model_validate(values)
+
+
+def _saved_report_summary(row: ReportRecord) -> SavedReportSummary:
+    """Return list-safe report metadata and compact insight references."""
+
+    items = row.config.get("items")
+    insight_ids = (
+        [
+            str(item["insight_id"])
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("insight_id"), str)
+        ]
+        if isinstance(items, list)
+        else []
+    )
+    values = {
+        **row.model_dump(exclude={"config"}),
+        "url_slug": _saved_entity_url_slug(
+            row.report_id,
+            row.name,
+            prefix="rep",
+            fallback="report",
+        ),
+        "insight_count": len(insight_ids),
+        "insight_ids": insight_ids,
+    }
+    return SavedReportSummary.model_validate(values)
 
 
 async def _get_insight_by_ref(
@@ -4178,25 +4316,13 @@ def _payload_source_hash(metadata_json: dict[str, Any]) -> str | None:
 def _saved_insight_export(insight: SavedInsightRead) -> dict[str, Any]:
     """Build the portable saved-insight export document."""
 
-    return {
-        "insight_id": insight.insight_id,
-        "project_id": insight.project_id,
-        "name": insight.name,
-        "description": insight.description,
-        "config": insight.config,
-    }
+    return insight.model_dump(exclude={"url_slug", "created_at", "updated_at"})
 
 
 def _saved_report_export(report: SavedReportRead) -> dict[str, Any]:
     """Build the portable saved-report export document."""
 
-    return {
-        "report_id": report.report_id,
-        "project_id": report.project_id,
-        "name": report.name,
-        "description": report.description,
-        "config": report.config,
-    }
+    return report.model_dump(exclude={"url_slug", "created_at", "updated_at"})
 
 
 async def _report_insights(
@@ -4252,6 +4378,9 @@ async def _metadata_table_page(
         )
     project_pk = await _project_pk(request, project_id)
     project_run_ids = await _project_run_ids(request, project_id)
+    project_scope = (
+        project_id if table_name in _PUBLIC_PROJECT_ID_TABLES else project_pk
+    )
     model_any = cast(Any, model)
     count_statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
     row_statement = select(model)
@@ -4269,9 +4398,9 @@ async def _metadata_table_page(
         row_statement = row_statement.where(
             or_(model_any.project_id == project_pk, model_any.project_id.is_(None))
         )
-    elif project_pk is not None and "project_id" in model.model_fields:
-        count_statement = count_statement.where(model_any.project_id == project_pk)
-        row_statement = row_statement.where(model_any.project_id == project_pk)
+    elif project_scope is not None and "project_id" in model.model_fields:
+        count_statement = count_statement.where(model_any.project_id == project_scope)
+        row_statement = row_statement.where(model_any.project_id == project_scope)
     elif project_run_ids is not None and "run_id" in model.model_fields:
         count_statement = count_statement.where(model_any.run_id.in_(project_run_ids))
         row_statement = row_statement.where(model_any.run_id.in_(project_run_ids))
@@ -4306,6 +4435,9 @@ async def _metadata_table_counts(
         for name, (model, _) in METADATA_TABLES.items():
             statement = select(func.count()).select_from(model)  # type: ignore[arg-type]
             model_any = cast(Any, model)
+            project_scope = (
+                project_id if name in _PUBLIC_PROJECT_ID_TABLES else project_pk
+            )
             # Count with the same scoping rules used by table previews so the
             # database summary and browser rows agree.
             if (
@@ -4319,8 +4451,8 @@ async def _metadata_table_counts(
                         model_any.project_id.is_(None),
                     )
                 )
-            elif project_pk is not None and "project_id" in model.model_fields:
-                statement = statement.where(model_any.project_id == project_pk)
+            elif project_scope is not None and "project_id" in model.model_fields:
+                statement = statement.where(model_any.project_id == project_scope)
             elif project_run_ids is not None and "run_id" in model.model_fields:
                 statement = statement.where(model_any.run_id.in_(project_run_ids))
             counts[name] = int((await session.exec(statement)).one())

@@ -38,6 +38,7 @@ import {
 import {
   createInsight,
   executeInsight,
+  getInsight,
   getInsightCapabilities,
   listInsights,
   listProjectDatabaseTables,
@@ -54,7 +55,7 @@ import {
   type InsightValidation,
   type SampleGroup,
   type SampleListItem,
-  type SavedInsight,
+  type InsightSummary,
 } from "../api";
 import { InsightBuilderHeader } from "../components/insights/InsightBuilderHeader";
 import { useAuth } from "../components/auth/AuthProvider";
@@ -186,15 +187,27 @@ export function InsightsPage({
     selectedInsightId || target.mode === "edit"
       ? can("insight.edit", projectId)
       : true;
-  const selectedInsight = insights.data?.find(
+  const selectedInsightSummary = insights.data?.find(
     (insight) =>
       (target.mode === "edit" &&
         (insight.insight_id === target.insightRef ||
           insight.url_slug === target.insightRef)) ||
       insight.insight_id === selectedInsightId,
   );
+  const selectedInsightRef =
+    target.mode === "edit"
+      ? target.insightRef
+      : selectedInsightSummary?.insight_id ?? selectedInsightId;
+  const insightDetail = useQuery({
+    queryKey: ["insight", selectedInsightRef],
+    queryFn: () => getInsight(selectedInsightRef!),
+    enabled: mode === "detail" && Boolean(selectedInsightRef),
+  });
+  const selectedInsight = insightDetail.data;
   const effectiveSelectedInsightId =
-    selectedInsight?.insight_id ?? selectedInsightId;
+    selectedInsightSummary?.insight_id ??
+    selectedInsight?.insight_id ??
+    selectedInsightId;
   const [name, setName] = useState("New insight");
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
@@ -237,7 +250,7 @@ export function InsightsPage({
     const counts = new Map<string, number>();
     for (const report of reports.data ?? []) {
       const insightIds = new Set(
-        readReportItems(report.config).map((item) => item.insight_id),
+        report.insight_ids,
       );
       for (const insightId of insightIds) {
         counts.set(insightId, (counts.get(insightId) ?? 0) + 1);
@@ -500,7 +513,7 @@ export function InsightsPage({
     // Opening a saved insight is the inverse of buildConfig(): parse the saved
     // query source back into editable builder state.
     if (!selectedInsight) return;
-    const config = selectedInsight.config;
+    const config = selectedInsight;
     const query = isRecord(config.query) ? config.query : {};
     const source = parseSource(query.source);
     const linker = isRecord(config.linker) ? config.linker : {};
@@ -659,15 +672,15 @@ export function InsightsPage({
     mutationFn: (continueEditing: boolean) =>
       effectiveSelectedInsightId
         ? patchInsight(effectiveSelectedInsightId, {
+            ...config,
             name,
             description,
-            config,
           })
         : createInsight({
+            ...config,
             project_id: projectId,
             name,
             description,
-            config,
           }),
     onSuccess: (saved, continueEditing) => {
       setSelectedInsightId(saved.insight_id);
@@ -2580,7 +2593,7 @@ function uniqueNonEmpty(values: string[]) {
   );
 }
 
-function filterInsights(insights: SavedInsight[], search: string) {
+function filterInsights(insights: InsightSummary[], search: string) {
   // Search stays client-side because the insight list is small and already
   // loaded for the page.
   const normalized = search.trim().toLowerCase();
