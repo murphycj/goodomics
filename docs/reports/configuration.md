@@ -1,6 +1,6 @@
 # Insight and report configuration
 
-The configuration is a declarative description of the analytical intent for a single insight or a report. It is a portable and shareable artifact that can be stored in a project, a Git repository, or a database. The executor compiles the config into SQL, result rows, chart options, caches, and rendered HTML. The executor also validates the config against the server capabilities and the contract schema. The executor may fill in missing values with defaults, normalize aliases, and report warnings or errors. The executor may also apply a result policy to limit the number of rows returned.
+The configuration is a declarative description of the analytical intent for a single insight or a report. It describes the data source, filters, and visualization hints. Goodomics compiles the config into SQL, result rows, chart options, caches, and rendered HTML. Goodomics validates the config against the server capabilities and data contracts. It may also fill in missing values with defaults, normalize aliases, and report warnings or errors. It is a portable and shareable artifact that can be stored in a project, a Git repository, or a database.
 
 ## Example saved insight
 
@@ -58,19 +58,19 @@ config:
 
 The saved insight fields and config keys map to the reference sections below:
 
-| Key              | Purpose                                                       | Details                                         |
-| ---------------- | ------------------------------------------------------------- | ----------------------------------------------- |
-| `name`           | Saved insight and rendered result name                         | [Name](#name)                                   |
-| `description`    | Optional explanatory text returned with the result            | [Description](#description)                     |
-| `analysis_grain` | What each row or plotted point represents                     | [Analysis grain](#analysis-grain)               |
-| `visualization`  | Table, metric, or chart ID                                    | [Visualizations](#visualizations)               |
-| `query`          | Source, fields, dimensions, measures, and chart axes          | [Query and data source](#query-and-data-source) |
-| `series`         | Contract-backed chart values                                  | [Series](#series)                               |
-| `table_columns`  | Identity and contract-field columns for table previews        | [Table columns](#table-columns)                 |
-| `linker`         | Identity used to align independent series                     | [Linkers](#linkers)                             |
-| `filters`        | Insight-wide filters                                          | [Filters](#filters)                             |
-| `result_policy`  | Inline row, sample, or export limits                          | [Result-size policy](#result-size-policy)       |
-| `display`        | Presentation hints such as colors and histogram bins          | [Display](#display)                             |
+| Key              | Purpose                                                | Details                                         |
+| ---------------- | ------------------------------------------------------ | ----------------------------------------------- |
+| `name`           | Saved insight and rendered result name                 | [Name](#name)                                   |
+| `description`    | Optional explanatory text returned with the result     | [Description](#description)                     |
+| `analysis_grain` | What each row or plotted point represents              | [Analysis grain](#analysis-grain)               |
+| `visualization`  | Table, metric, or chart ID                             | [Visualizations](#visualizations)               |
+| `query`          | Source, fields, dimensions, measures, and chart axes   | [Query and data source](#query-and-data-source) |
+| `series`         | Contract-backed chart values                           | [Series](#series)                               |
+| `table_columns`  | Identity and contract-field columns for table previews | [Table columns](#table-columns)                 |
+| `linker`         | Identity used to align independent series              | [Linkers](#linkers)                             |
+| `filters`        | Insight-wide filters                                   | [Filters](#filters)                             |
+| `result_policy`  | Inline row, sample, or export limits                   | [Result-size policy](#result-size-policy)       |
+| `display`        | Presentation hints such as colors and histogram bins   | [Display](#display)                             |
 
 ## Name
 
