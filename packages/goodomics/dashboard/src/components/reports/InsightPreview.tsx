@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DataGrid,
   type Column,
+  type ColumnWidths,
   type RenderHeaderCellProps,
   type SortColumn,
   type SortDirection,
@@ -32,6 +33,9 @@ import { isRecord } from "../../lib/valueUtils";
 
 type InsightResult = Record<string, unknown>;
 type GridRow = Record<string, unknown> & { __rowId: string };
+
+const INSIGHT_TABLE_COLUMN_MIN_WIDTH = 120;
+const INSIGHT_TABLE_COLUMN_MAX_WIDTH = 360;
 
 /** Renders an executed insight as an ECharts chart, metric tile, or data grid. */
 export function InsightPreview({
@@ -523,6 +527,8 @@ function InsightTable({
 }) {
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => new Set());
+  // Retain measured and user-resized widths by key when columns are hidden.
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => new Map());
   const [cellPreview, setCellPreview] = useState<CellPreview | null>(null);
   const [lastCellPreview, setLastCellPreview] = useState<CellPreview | null>(null);
   const cellPreviewPanelRef = useRef<HTMLElement | null>(null);
@@ -556,7 +562,9 @@ function InsightTable({
         ...visibleColumns.map((column) => ({
           key: column,
           name: columnLabels[column] ?? fallbackColumnLabel(column),
-          minWidth: 120,
+          width: "max-content",
+          minWidth: INSIGHT_TABLE_COLUMN_MIN_WIDTH,
+          maxWidth: INSIGHT_TABLE_COLUMN_MAX_WIDTH,
           resizable: true,
           sortable: true,
           renderHeaderCell: (props: RenderHeaderCellProps<GridRow>) => (
@@ -659,6 +667,7 @@ function InsightTable({
     <div className="flex h-full min-h-[260px] min-w-0 bg-white">
       <DataGrid
         className="goodomics-data-grid h-full min-w-0 flex-1"
+        columnWidths={columnWidths}
         columns={gridColumns}
         defaultColumnOptions={{ resizable: true }}
         headerRowHeight={40}
@@ -676,6 +685,7 @@ function InsightTable({
             value: args.row[column],
           });
         }}
+        onColumnWidthsChange={setColumnWidths}
         onSortColumnsChange={(nextSort) => {
           setSortColumns(nextSort.slice(-1));
           setCellPreview(null);

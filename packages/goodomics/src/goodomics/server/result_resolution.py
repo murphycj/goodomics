@@ -183,10 +183,7 @@ async def resolve_contract_results(
     candidate_availability = _apply_sample_selections(
         candidate_availability, sample_selections
     )
-    candidate_sample_ids = {
-        row[2].sample_id
-        for row in candidate_availability
-    }
+    candidate_sample_ids = {row[2].sample_id for row in candidate_availability}
     selected_sample_ids = {row[2].sample_id for row in selected_availability}
     warnings: list[str] = []
     if len(versions) > 1 and selection == "latest_successful_per_sample":
