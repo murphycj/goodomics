@@ -1,5 +1,6 @@
 import { Check, Plus } from "lucide-react";
 import type { InsightSummary } from "../../api";
+import { insightViewLabel } from "../../lib/insightViewCatalog";
 import { cn, formatDate } from "../../lib/utils";
 import {
   Badge,
@@ -68,11 +69,11 @@ export function InsightListTable({
                 </TableCell>
                 <TableCell>
                   <Badge variant="secondary">
-                    {insight.visualization}
+                    {insightViewLabel(insight.view_kind)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-[#657082]">
-                  {insight.source_store}.{insight.source_table}
+                  {insight.sources.join(", ")}
                 </TableCell>
                 <TableCell className="text-[#657082]">
                   {(reportCounts?.get(insight.insight_id) ?? 0).toLocaleString()}

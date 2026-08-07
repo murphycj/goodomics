@@ -1,121 +1,63 @@
-# Report templates and rendering
+# Report documents and rendering
 
-Goodomics currently has two report paths with different capabilities:
+Goodomics has two report paths:
 
-- **Saved server reports** compose saved insights, execute against project data,
-  and can be rendered and persisted as HTML.
-- **Standalone CLI reports** scan a filesystem results path and render without
-  requiring a server or database.
-
-Do not assume that a saved-report export can be passed to the standalone CLI
-and receive the same database-backed execution. Both formats are JSON/YAML
-compatible, but they enter different execution paths today.
+- saved server reports compose insights against project
+  data and can persist rendered HTML snapshots;
+- standalone CLI reports scan a filesystem results path without using saved
+  server insights.
 
 ## Saved report document
 
-A saved report API document is flat:
-
 ```yaml
-report_id: rnaseq-qc
 project_id: rnaseq-core
 name: RNA-seq QC
-description: Latest compatible QC results for the production sample group.
 version: 1
-layout:
-  columns: 12
-items:
-  - insight_id: mapping-rate
-    x: 0
-    y: 0
-    w: 6
-    h: 4
-filters:
-  - field: sample
-    operator: in
-    value:
-      - kind: sample_group
-        id: production-rnaseq
-refresh_policy:
-  mode: manual
+filters: []
+limit: 1000
+random: false
+layout: { columns: 12, row_height: 64 }
+insights:
+  - id: mapping-rate
+    layout: { x: 0, y: 0, width: 6, height: 4 }
+refresh_policy: { mode: manual }
 ```
 
-Create the component insights before creating the report. At execution time,
-Goodomics loads only referenced insight IDs that exist, preserving their order
-from `items`.
+Create component insights first. `POST /api/v1/reports/validate` verifies every
+dependency, project boundary, permission, filter, unique insight ID, and grid
+bound. Save is rejected when any referenced insight is unavailable; missing
+insights are never silently removed.
 
-Use these routes for the saved-report lifecycle:
+| Route                                           | Purpose                                  |
+| ----------------------------------------------- | ---------------------------------------- |
+| `POST /api/v1/reports/validate`                 | Validate a complete report before saving |
+| `POST /api/v1/reports`                          | Save the current definition              |
+| `PATCH /api/v1/reports/{report}`                | Update metadata or executable fields     |
+| `GET /api/v1/reports/{report}/export.yaml`      | Export portable YAML                     |
+| `POST /api/v1/reports/{report}/execute`         | Return structured results                |
+| `POST /api/v1/reports/render`                   | Execute and persist HTML                 |
+| `GET /api/v1/rendered-reports/{id}/export.html` | Download a snapshot                      |
 
-| Route | Purpose |
-| --- | --- |
-| `POST /api/v1/reports` | Save a report as the current definition |
-| `PATCH /api/v1/reports/{report}` | Update metadata or executable fields; executable changes record a revision |
-| `GET /api/v1/reports/{report}/export.yaml` | Export a portable YAML document |
-| `GET /api/v1/reports/{report}/export.json` | Export a portable JSON document |
-| `POST /api/v1/reports/{report}/execute` | Return a structured report result |
-| `POST /api/v1/reports/render` | Execute and persist HTML |
-| `GET /api/v1/rendered-reports/{id}/export.html` | Download a rendered snapshot |
+Reports reference insights rather than embedding them. Export the component
+insights alongside the report when moving a complete report between servers.
 
-See the [configuration reference](configuration.md) for insight and report
-keys and [compilation and execution](execution.md) for inheritance, caching,
-and rendering behavior.
+## Structured results and snapshots
 
-## Insight exports
+Structured report results contain one ordered `{id, layout, result}` entry per
+configured insight. The nested result omits the standalone result's `kind` and
+`insight_id` because its report entry already identifies it. Rendering uses the
+same execution path, embeds bounded result data, and stores the HTML in
+`rendered_reports`. The stored snapshot pins the exact resolved occurrences;
+the saved report remains dynamic.
 
-Reports reference insights by ID rather than embedding every insight config.
-Export the component insights alongside a report when moving a complete report
-definition between installations:
+## Standalone CLI reports
 
-```http
-GET /api/v1/insights/mapping-rate/export.yaml
-GET /api/v1/reports/rnaseq-qc/export.yaml
-```
-
-An insight export contains:
-
-```yaml
-insight_id: mapping-rate
-project_id: rnaseq-core
-name: Mapping rate
-description: Percent mapped for the latest successful result per sample.
-version: 1
-analysis_grain: sample
-visualization: table
-# Remaining executable fields omitted here.
-```
-
-## Structured results versus rendered HTML
-
-Executing a report returns a flat JSON object with the normalized report
-definition and one result object per insight. This form is appropriate for
-Python, notebooks, MCP tools, and clients that render their own UI.
-
-Rendering a saved report runs the same insight execution first, converts the
-result to HTML, and stores the snapshot in `rendered_reports`. The HTML embeds
-the structured result as `window.goodomicsReport` and includes fallback tables
-for the bounded rows in each insight.
-
-Large result policies still apply during report execution. Use
-`export_full_data` for a file-backed data artifact rather than embedding an
-unbounded dataset in the report payload.
-
-## Standalone CLI templates
-
-The standalone path remains the lowest-friction way to point Goodomics at a
-results folder:
+The standalone path remains a simple results-folder renderer:
 
 ```bash
 goodomics report ./results --template report.yaml --out report.html
 ```
 
-The current standalone renderer loads a YAML or JSON mapping and reads
-`config.name` when present:
-
-```yaml
-config:
-  name: RNA-seq QC Report
-```
-
-It records the scanned results path in the output and does not execute saved
-insights against the server's SQL/DuckDB stores. Use a saved server report when
-you need contract selection, result scopes, sample filters, compiled charts,
-cache behavior, or durable report history.
+It does not execute version 1 saved insights against SQL/DuckDB data. Use a
+saved server report for metadata values, occurrence scopes, matching, caching,
+or durable report history.

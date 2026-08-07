@@ -26,10 +26,11 @@ Saved insights are individual charts, metrics, or tables. Saved reports compose
 one or more insights into a grid. A project can set `default_report_id` so the
 project opens directly to its report view.
 
-See [Insights and reports](../reports/index.md) for the builder workflow,
-[configuration reference](../reports/configuration.md) for the saved JSON/YAML
-shape, and [compilation and execution](../reports/execution.md) for backend
-behavior.
+See [Insights and reports](../reports/index.md) for the builder workflow, the
+[insight](../reports/insight-configuration.md) and
+[report](../reports/report-configuration.md) configuration references for the
+saved JSON/YAML shapes, and
+[compilation and execution](../reports/execution.md) for backend behavior.
 
 ## Charting
 
@@ -39,9 +40,9 @@ specs first; Goodomics can compile those specs to ECharts options internally.
 Table insights use `react-data-grid` in the dashboard.
 
 !!! warning "Keep chart libraries behind Goodomics abstractions"
-    Avoid adding another charting stack unless a concrete report feature
-    requires it and the integration can remain behind the Goodomics report/chart
-    abstraction.
+Avoid adding another charting stack unless a concrete report feature
+requires it and the integration can remain behind the Goodomics report/chart
+abstraction.
 
 ## Build
 

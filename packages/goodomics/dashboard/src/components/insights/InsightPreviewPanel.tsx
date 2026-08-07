@@ -53,23 +53,19 @@ function PreviewAuditBar({
   config: Record<string, unknown>;
   result: Record<string, unknown> | null | undefined;
 }) {
-  const linker = recordValue(result?.linker) ?? recordValue(config.linker);
-  const diagnostics = recordValue(result?.linker_diagnostics);
+  const analysis = recordValue(result?.analysis) ?? recordValue(config.analysis);
+  const diagnostics = recordValue(result?.diagnostics);
   const resultDiagnostics = Array.isArray(result?.result_selection_diagnostics)
     ? result.result_selection_diagnostics.map(recordValue).filter(Boolean)
     : [];
-  const policy =
-    recordValue(result?.result_policy) ?? recordValue(config.result_policy);
-  const filters = Array.isArray(result?.filters)
-    ? result.filters
-    : Array.isArray(config.filters)
-      ? config.filters
+  const filters = Array.isArray(analysis?.filters)
+    ? analysis.filters
       : [];
   const chips = [
     sampleSelectionLabel(filters),
-    linkerLabel(linker),
+    linkerLabel(analysis),
     filters.length ? `${filters.length} filters` : "No filters",
-    policyLabel(policy),
+    resultRowsLabel(analysis, result),
     diagnosticsLabel(diagnostics),
     ...resultDiagnostics.flatMap((item) => resultDiagnosticLabels(item)),
   ].filter(Boolean);
@@ -141,19 +137,22 @@ function stringArrayValue(value: unknown) {
     : [];
 }
 
-function linkerLabel(linker: Record<string, unknown> | null) {
-  const kind = stringValue(linker?.kind);
+function linkerLabel(analysis: Record<string, unknown> | null) {
+  const kind = stringValue(analysis?.match_by);
   if (!kind || kind === "none") return null;
   return `Matched by ${kind.replace("_", " ")}`;
 }
 
-function policyLabel(policy: Record<string, unknown> | null) {
-  const mode = stringValue(policy?.mode);
-  const count = numberValue(policy?.embedded_row_count);
-  if (!mode) return null;
-  return count === null
-    ? `Data size ${mode}`
-    : `Data size ${mode}: ${count} rows`;
+function resultRowsLabel(
+  analysis: Record<string, unknown> | null,
+  result: Record<string, unknown> | null | undefined,
+) {
+  const limit = numberValue(analysis?.limit);
+  const returned = numberValue(result?.row_count);
+  const total = numberValue(result?.total_row_count);
+  const prefix = analysis?.random === true ? "Random rows" : "Rows";
+  if (returned !== null && total !== null) return `${prefix}: ${returned} of ${total}`;
+  return limit === null ? null : `${prefix}: up to ${limit}`;
 }
 
 function diagnosticsLabel(diagnostics: Record<string, unknown> | null) {

@@ -22,6 +22,7 @@ import {
 export type ResultScope = {
   selection:
     | "latest_successful_per_sample"
+    | "all_eligible"
     | "specific_methods"
     | "specific_versions"
     | "specific_runs"
@@ -36,8 +37,10 @@ export type ResultScope = {
   runContractIds: string[];
 };
 
-export const defaultResultScope = (): ResultScope => ({
-  selection: "latest_successful_per_sample",
+export const defaultResultScope = (
+  selection: ResultScope["selection"] = "latest_successful_per_sample",
+): ResultScope => ({
+  selection,
   analysisTypeIds: [],
   methodIds: [],
   methodVersions: [],
@@ -51,6 +54,7 @@ export const defaultResultScope = (): ResultScope => ({
 export function ResultScopeEditor({
   contract,
   projectId,
+  defaultSelection = "latest_successful_per_sample",
   open,
   scope,
   onOpenChange,
@@ -58,6 +62,7 @@ export function ResultScopeEditor({
 }: {
   contract: DataContract | undefined;
   projectId: string;
+  defaultSelection?: "latest_successful_per_sample" | "all_eligible";
   open: boolean;
   scope: ResultScope;
   onOpenChange: (open: boolean) => void;
@@ -105,7 +110,7 @@ export function ResultScopeEditor({
         <DialogHeader className="shrink-0 border-b border-[#dce3eb] px-6 py-5 pr-16">
           <DialogTitle className="text-lg">Results from</DialogTitle>
           <p className="text-sm text-[#64748b]">
-            Choose which compatible results supply this data series. Blank filters use the data contract defaults.
+            Choose which compatible results supply this field. Blank filters use the source defaults.
           </p>
           <p className="truncate pt-1 text-xs font-medium text-[#475569]">{summary}</p>
         </DialogHeader>
@@ -121,6 +126,7 @@ export function ResultScopeEditor({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="latest_successful_per_sample">Latest successful per sample</SelectItem>
+                <SelectItem value="all_eligible">All eligible results</SelectItem>
                 <SelectItem value="specific_methods">Specific methods</SelectItem>
                 <SelectItem value="specific_versions">Specific versions</SelectItem>
                 <SelectItem value="specific_runs">Specific runs</SelectItem>
@@ -145,12 +151,12 @@ export function ResultScopeEditor({
             <Input type="datetime-local" value={scope.endedBefore} onChange={(event) => update({ endedBefore: event.target.value })} />
           </ScopeField>
           <div className="sm:col-span-2">
-            <CsvField label="Pinned run-contract IDs" value={scope.runContractIds} onChange={(runContractIds) => update({ runContractIds })} />
+            <CsvField label="Pinned result IDs" value={scope.runContractIds} onChange={(runContractIds) => update({ runContractIds })} />
           </div>
           </div>
         </div>
         <DialogFooter className="shrink-0 border-t border-[#dce3eb] bg-[#f8fafc] px-6 py-4">
-          <Button type="button" variant="ghost" onClick={() => onChange(defaultResultScope())}>
+          <Button type="button" variant="ghost" onClick={() => onChange(defaultResultScope(defaultSelection))}>
             Reset to compatible defaults
           </Button>
           <DialogClose asChild>
@@ -166,7 +172,7 @@ function CsvField({ label, suggestions = [], value, onChange }: { label: string;
   return (
     <ScopeField label={label}>
       <Input
-        placeholder="Comma-separated; blank uses contract compatibility"
+        placeholder="Comma-separated; blank uses source defaults"
         value={value.join(", ")}
         onChange={(event) =>
           onChange(event.target.value.split(",").map((item) => item.trim()).filter(Boolean))
@@ -197,6 +203,7 @@ function ScopeField({ label, children }: { label: string; children: ReactNode })
 function selectionLabel(selection: ResultScope["selection"]) {
   return {
     latest_successful_per_sample: "Latest successful",
+    all_eligible: "All eligible",
     specific_methods: "Specific methods",
     specific_versions: "Specific versions",
     specific_runs: "Specific runs",

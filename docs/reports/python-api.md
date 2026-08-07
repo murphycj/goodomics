@@ -1,18 +1,7 @@
 # Use insights and reports from Python
 
-The current Python SDK records runs, samples, metrics, and files. Insight and
-report authoring is exposed by the Goodomics server's JSON API; there is not yet
-a dedicated `goodomics` Python builder client. Python applications and
-notebooks can use `httpx` with ordinary dictionaries, and the same configs can
-be saved as JSON or YAML.
-
-Start the server before running these examples:
-
-```bash
-goodomics serve
-```
-
-## Create an API client
+Insight and report authoring is available through the server JSON API. Python
+applications can use `httpx` with ordinary dictionaries.
 
 ```python
 import httpx
@@ -21,223 +10,129 @@ client = httpx.Client(base_url="http://127.0.0.1:8000/api/v1")
 project_id = "rnaseq-core"
 ```
 
-If authentication is enabled, add an `Authorization: Bearer ...` header to the
-client. All builder examples below are project-scoped so contract resolution
-and analytical storage use the intended project.
+## Discover selectable values
 
-## Discover contracts and fields
-
-Do not guess field IDs. Ask the contracts API which values are available:
+Use `/insights/capabilities` for approved metadata fields and view constraints,
+and `/contracts` plus `/contracts/{contract}` for contract fields. Do not guess
+field IDs or send table and column names.
 
 ```python
-contracts = client.get(
-    "/contracts",
-    params={"project_id": project_id},
-).raise_for_status().json()
+capabilities = client.get("/insights/capabilities").raise_for_status().json()
+run_fields = [
+    item for item in capabilities["metadata_fields"]
+    if item["entity"] == "run"
+]
+# Each item["field"] is ready to use, such as "metadata/run/status".
 
 salmon = client.get(
     "/contracts/salmon:results",
     params={"project_id": project_id},
 ).raise_for_status().json()
-
-numeric_fields = [
-    field
-    for field in salmon["fields"]
-    if field["value_type"] == "numeric"
-]
 ```
 
-Each field response includes its stable `field_id`, display name, type, unit,
-description, summary, and backend routing metadata. The builder config normally
-needs only the contract ID and field ID.
-
-## Execute an ad hoc table
-
-This config selects one contract field and returns one raw value per sample:
+## Validate and execute an ad hoc insight
 
 ```python
-field_id = "general_stats.salmon_percent_mapped"
-
-config = {
+definition = {
     "version": 1,
-    "analysis_grain": "sample",
-    "visualization": "table",
-    "query": {
-        "source": {
-            "kind": "data_contract",
-            "data_contract_id": "salmon:results",
-        },
-        "fields": [field_id],
-        "dimensions": ["sample_id"],
-    },
-    "table_columns": [
-        {"kind": "identity", "column": "sample_id", "label": "Sample"},
-        {
-            "kind": "contract_field",
-            "contract_id": "salmon:results",
-            "field_id": field_id,
-            "label": "Percent mapped",
-            "value_mode": "raw",
-            "result_scope": {
-                "selection": "latest_successful_per_sample",
+    "analysis": {
+        "grain": "sample",
+        "values": [
+            {"field": "metadata/sample/sample_name"},
+            {
+                "field": "salmon:results/general_stats.salmon_percent_mapped",
             },
-        },
-    ],
-    "result_policy": {"mode": "preview", "limit": 1000},
+        ],
+    },
+    "view": {"kind": "table"},
 }
 
-response = client.post(
-    "/insights/execute",
-    json={
-        **config,
-        "project_id": project_id,
-        "name": "Mapping rate by sample",
-        "refresh": True,
-    },
-)
-result = response.raise_for_status().json()["result"]
-
-print(result["columns"])
-print(result["rows"][:5])
-print(result["result_selection_diagnostics"])
-```
-
-The result contains readable identity labels, the rows used for plotting, the
-normalized result-size policy, and selection/linker diagnostics.
-
-## Build a chart from contract series
-
-Charts use `series` entries. Each series selects its own contract, field,
-aggregation, filters, and result scope:
-
-```python
-scatter_config = {
-    "version": 1,
-    "analysis_grain": "sample",
-    "visualization": "scatter",
-    "series": [
-        {
-            "id": "mapped",
-            "contract_id": "salmon:results",
-            "field_id": "general_stats.salmon_percent_mapped",
-            "name": "Percent mapped",
-            "aggregation": "avg",
-            "result_scope": {
-                "selection": "latest_successful_per_sample",
-            },
-        },
-        {
-            "id": "gc",
-            "contract_id": "fastqc:results",
-            "field_id": "general_stats.fastqc_raw_percent_gc",
-            "name": "Percent GC",
-            "aggregation": "avg",
-            "result_scope": {
-                "selection": "latest_successful_per_sample",
-            },
-        },
-    ],
-    "linker": {"kind": "sample"},
-    "filters": [],
-    "result_policy": {"mode": "preview", "limit": 1000},
-    "display": {
-        "colors": {"percent_mapped": "#38BDF8", "percent_gc": "#7C3AED"},
-    },
-}
-```
-
-The two series are resolved independently, then inner-aligned by biological
-sample. Samples available in only one series appear in linker diagnostics rather
-than producing a misleading unmatched point.
-
-## Validate before execution
-
-Use the shared validator to normalize defaults and catch config errors:
-
-```python
 validation = client.post(
     "/insights/validate",
-    json=scatter_config,
+    json={**definition, "project_id": project_id},
 ).raise_for_status().json()
-
 if not validation["valid"]:
     raise ValueError(validation["messages"])
 
-print(validation["explanation"])
-normalized = validation["normalized_definition"]
+result = client.post(
+    "/insights/execute",
+    json={**definition, "project_id": project_id, "refresh": True},
+).raise_for_status().json()["result"]
+print(result["columns"], result["rows"][:5])
 ```
 
-The validation endpoint checks definition shape and chart series counts. Execution
-adds data-specific checks, such as field existence, value types, valid linkers,
-and available produced results.
+The order of `analysis.values` is the table-column and chart-series order. A
+value's `field` is its default result and view reference. To hide a value
+without removing it from the analysis, add that reference to the shared view
+setting, for example `{"kind": "table", "hidden_values":
+["metadata/sample/sample_name"]}`.
 
-## Save and execute an insight
+Add optional `"as": "percent_mapped"` when a field needs a shorter reference
+or when the same field appears more than once. View bindings use `as` when it is
+present and `field` otherwise.
+
+For a scatter chart, keep the same values and replace the view with explicit
+field or alias bindings. Matching charts use an inner join for independently
+resolved values by default.
+
+## Save and execute
 
 ```python
 saved = client.post(
     "/insights",
     json={
-        **scatter_config,
-        "insight_id": "mapping-vs-gc",
+        **definition,
+        "insight_id": "sample-qc-overview",
         "project_id": project_id,
-        "name": "Mapping versus GC",
-        "description": "Latest successful results matched by sample.",
+        "name": "Sample QC overview",
     },
 ).raise_for_status().json()
 
 result = client.post(
     f"/insights/{saved['insight_id']}/execute",
-    json={"project_id": project_id, "refresh": False},
+    json={
+        "project_id": project_id,
+        "limit": 5000,
+        "random": True,
+    },
 ).raise_for_status().json()["result"]
 ```
 
-The first execution computes and caches the payload. A later identical request
-can return `cached: true`. Set `refresh` to `True` to bypass a reusable cache.
+Saved execution accepts `limit`, `random`, `export`, and `refresh` overrides,
+not analytical changes. Patch the saved insight to change its values or view.
 
-## Compose and render a report
-
-Save the component insights first, then reference their IDs from a report:
+## Compose a report
 
 ```python
+report_definition = {
+    "version": 1,
+    "name": "RNA-seq QC",
+    "layout": {"columns": 12, "row_height": 64},
+    "insights": [
+        {
+            "id": saved["insight_id"],
+            "layout": {"x": 0, "y": 0, "width": 12, "height": 6},
+        }
+    ],
+    "refresh_policy": {"mode": "manual"},
+}
+
+check = client.post(
+    "/reports/validate",
+    json={**report_definition, "project_id": project_id},
+).raise_for_status().json()
+if not check["valid"]:
+    raise ValueError(check["messages"])
+
 report = client.post(
     "/reports",
     json={
-        "report_id": "rnaseq-qc",
+        **report_definition,
         "project_id": project_id,
-        "name": "RNA-seq QC",
-        "version": 1,
-        "layout": {"columns": 12},
-        "items": [
-            {
-                "insight_id": "mapping-vs-gc",
-                "x": 0,
-                "y": 0,
-                "w": 6,
-                "h": 4,
-            }
-        ],
-        "refresh_policy": {"mode": "manual"},
     },
 ).raise_for_status().json()
-
-structured = client.post(
-    f"/reports/{report['report_id']}/execute",
-    json={"project_id": project_id, "refresh": True},
-).raise_for_status().json()["result"]
-
-rendered = client.post(
-    "/reports/render",
-    json={
-        "report_id": report["report_id"],
-        "project_id": project_id,
-        "name": "RNA-seq QC",
-        "refresh": False,
-    },
-).raise_for_status().json()
-
-html = rendered["html"]
 ```
 
-Use `/execute` when code needs structured insight payloads. Use `/reports/render`
-when it needs persisted HTML. Saved insights and reports can also be exported
-through their `/export.yaml` and `/export.json` routes.
+Use `/reports/{id}/execute` for structured results and `/reports/render` for a
+persisted HTML snapshot. Export saved definitions through their `/export.yaml`
+or `/export.json` routes.

@@ -26,6 +26,7 @@ import {
   readDisplayOptions,
   type DisplayOptions,
 } from "../../lib/insightDisplayOptions";
+import { insightViewSupportsMarks } from "../../lib/insightViewCatalog";
 import { cn } from "../../lib/utils";
 import { isRecord } from "../../lib/valueUtils";
 
@@ -48,9 +49,8 @@ export function InsightPreview({
     onAddColumn: () => void;
   };
 }) {
-  // The server echoes visualization in the result. Fall back to table so unknown
-  // or partial payloads still render as inspectable data.
-  const visualization = typeof result?.visualization === "string" ? result.visualization : "table";
+  const view = isRecord(result?.view) ? result.view : {};
+  const visualization = typeof view.kind === "string" ? view.kind : "table";
   if (!result) {
     return (
       <div className="relative grid h-full min-h-[220px] place-items-center text-sm text-[#657082]">
@@ -301,11 +301,9 @@ function applySeriesOptions(
   visualization: string,
 ) {
   if (!Array.isArray(series)) return series;
+  const supportsMarks = insightViewSupportsMarks(visualization);
   return series.map((item) => {
     if (!isRecord(item)) return item;
-    const supportsMarks = !["pie", "donut", "heatmap", "boxplot"].includes(
-      visualization,
-    );
     return {
       ...item,
       label: {

@@ -92,7 +92,8 @@ nav:
   - Insights and reports:
       - Overview: reports/index.md
       - Python and API usage: reports/python-api.md
-      - Configuration reference: reports/configuration.md
+      - Insight configuration: reports/insight-configuration.md
+      - Report configuration: reports/report-configuration.md
       - Compilation and execution: reports/execution.md
       - Templates and rendering: reports/report-templates.md
   - Operations:

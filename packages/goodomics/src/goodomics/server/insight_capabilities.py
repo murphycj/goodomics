@@ -1,14 +1,11 @@
-"""Insight/report builder capabilities and validation helpers.
-
-These capabilities are the Goodomics-owned contract for chart intent. Dashboard
-controls, API validation, report execution, and future AI insight drafting should
-use this module rather than reaching directly for ECharts-specific behavior.
-"""
+"""Server-owned insight/report builder capabilities."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from goodomics.schemas.field_references import metadata_field_reference
 
 JsonObject = dict[str, Any]
 
@@ -17,535 +14,343 @@ MORE_ROWS_MAX_LIMIT = 10000
 ALL_ROWS_INLINE_THRESHOLD = 10000
 EXPORT_FULL_DATA_LIMIT = 100000
 
-LINKERS: dict[str, JsonObject] = {
-    "auto": {
-        "id": "auto",
-        "label": "Auto",
-        "column": None,
-        "description": "Let Goodomics select the only valid linker.",
-    },
-    "sample": {
-        "id": "sample",
-        "label": "Sample",
-        "column": "sample_id",
-        "description": "Align values by biological sample.",
-    },
-    "run": {
-        "id": "run",
-        "label": "Run",
-        "column": "run_id",
-        "description": "Align values by run.",
-    },
-    "feature": {
-        "id": "feature",
-        "label": "Feature",
-        "column": "feature_id",
-        "description": "Align values by measured feature, gene, variant, or metric.",
-    },
-    "entity": {
-        "id": "entity",
-        "label": "Entity",
-        "column": "entity_id",
-        "description": "Align generic entity-attribute values.",
-    },
-    "time": {
-        "id": "time",
-        "label": "Time",
-        "column": "time",
-        "description": "Align values by a selected time/date field.",
-    },
+AGGREGATIONS_BY_TYPE: dict[str, list[str]] = {
+    "string": ["raw", "count", "count_distinct"],
+    "categorical": ["raw", "count", "count_distinct"],
+    "boolean": ["raw", "count", "count_distinct"],
+    "numeric": [
+        "raw",
+        "count",
+        "count_distinct",
+        "sum",
+        "avg",
+        "min",
+        "max",
+    ],
+    "date": ["raw", "min", "max"],
+    "datetime": ["raw", "min", "max"],
 }
+
+METADATA_FIELDS: tuple[JsonObject, ...] = (
+    {
+        "entity": "subject",
+        "field": "subject_id",
+        "label": "Subject ID",
+        "value_type": "string",
+        "allowed_grains": ["subject"],
+    },
+    {
+        "entity": "sample",
+        "field": "sample_id",
+        "label": "Sample ID",
+        "value_type": "string",
+        "allowed_grains": ["sample"],
+    },
+    {
+        "entity": "sample",
+        "field": "sample_name",
+        "label": "Sample name",
+        "value_type": "string",
+        "allowed_grains": ["sample"],
+    },
+    {
+        "entity": "sample",
+        "field": "subject_id",
+        "label": "Subject ID",
+        "value_type": "string",
+        "allowed_grains": ["sample"],
+    },
+    *(
+        {
+            "entity": "run",
+            "field": field,
+            "label": label,
+            "value_type": value_type,
+            "allowed_grains": ["run"],
+        }
+        for field, label, value_type in (
+            ("run_id", "Run ID", "string"),
+            ("name", "Run name", "string"),
+            ("run_kind", "Run kind", "string"),
+            ("analysis_type_id", "Analysis type", "string"),
+            ("method_id", "Method", "string"),
+            ("method_version", "Method version", "string"),
+            ("status", "Status", "string"),
+            ("started_at", "Started at", "date"),
+            ("ended_at", "Ended at", "date"),
+            ("created_at", "Created at", "date"),
+        )
+    ),
+    *(
+        {
+            "entity": "file",
+            "field": field,
+            "label": label,
+            "value_type": value_type,
+            "allowed_grains": ["file"],
+        }
+        for field, label, value_type in (
+            ("file_id", "File ID", "string"),
+            ("file_role", "File role", "string"),
+            ("format", "Format", "string"),
+            ("size_bytes", "Size (bytes)", "numeric"),
+            ("storage_location", "Storage location", "string"),
+            ("created_at", "Created at", "date"),
+        )
+    ),
+)
 
 ANALYSIS_GRAINS: dict[str, JsonObject] = {
-    "sample": {
-        "id": "sample",
-        "label": "Samples",
-        "singular_label": "Sample",
-        "description": "Analyze biological samples across one or more runs.",
-        "default_visualization": "table",
-        "default_linker": "sample",
-        "identity_columns": ["sample_id"],
-        "valid_linkers": ["sample"],
-    },
-    "subject": {
-        "id": "subject",
-        "label": "Subjects",
-        "singular_label": "Subject",
-        "description": "Analyze subject-level attributes and rollups.",
-        "default_visualization": "table",
-        "default_linker": "entity",
-        "identity_columns": ["entity_id", "sample_id"],
-        "valid_linkers": ["entity", "sample"],
-    },
-    "run": {
-        "id": "run",
-        "label": "Runs",
-        "singular_label": "Run",
-        "description": "Analyze pipeline runs and run-level files or metrics.",
-        "default_visualization": "table",
-        "default_linker": "run",
-        "identity_columns": ["run_id"],
-        "valid_linkers": ["run"],
-    },
-    "feature": {
-        "id": "feature",
-        "label": "Features",
-        "singular_label": "Feature",
-        "description": "Analyze genes, regions, features, or measured entities.",
-        "default_visualization": "histogram",
-        "default_linker": "feature",
-        "identity_columns": ["feature_id", "sample_id"],
-        "valid_linkers": ["feature", "sample"],
-    },
-    "variant": {
-        "id": "variant",
-        "label": "Variants",
-        "singular_label": "Variant",
-        "description": "Analyze variant and feature-call rows.",
-        "default_visualization": "table",
-        "default_linker": "feature",
-        "identity_columns": ["variant_id", "feature_id", "sample_id"],
-        "valid_linkers": ["feature", "sample"],
-    },
-    "file": {
-        "id": "file",
-        "label": "Files",
-        "singular_label": "File",
-        "description": "Analyze stored files and payload artifacts.",
-        "default_visualization": "table",
-        "default_linker": "run",
-        "identity_columns": ["source_file_id", "run_id", "sample_id"],
-        "valid_linkers": ["run", "sample"],
-    },
-}
-
-TEMPLATES: dict[str, JsonObject] = {
-    "qc_metrics_samples": {
-        "id": "qc_metrics_samples",
-        "label": "QC metrics across samples",
-        "description": "Start a sample table from QC contract fields.",
-        "analysis_grain": "sample",
-        "visualization": "table",
-        "linker": {"kind": "sample"},
-        "result_policy": {"mode": "preview"},
-    },
-    "build_table": {
-        "id": "build_table",
-        "label": "Build a table",
-        "description": "Choose identity and contract columns at the selected grain.",
-        "analysis_grain": "sample",
-        "visualization": "table",
-        "linker": {"kind": "sample"},
-        "result_policy": {"mode": "preview"},
-    },
-    "compare_two_fields": {
-        "id": "compare_two_fields",
-        "label": "Compare two fields",
-        "description": "Create a two-value scatter matched by sample.",
-        "analysis_grain": "sample",
-        "visualization": "scatter",
-        "linker": {"kind": "sample"},
-        "result_policy": {"mode": "preview"},
-    },
-    "inspect_one_sample": {
-        "id": "inspect_one_sample",
-        "label": "Inspect one sample",
-        "description": "Start a sample-filtered detail table.",
-        "analysis_grain": "sample",
-        "visualization": "table",
-        "linker": {"kind": "sample"},
-        "result_policy": {"mode": "preview"},
-    },
-    "explore_feature": {
-        "id": "explore_feature",
-        "label": "Explore a gene/feature",
-        "description": "Start a feature-grain numeric distribution.",
-        "analysis_grain": "feature",
-        "visualization": "histogram",
-        "linker": {"kind": "feature"},
-        "result_policy": {"mode": "preview"},
-    },
-    "variant_call_table": {
-        "id": "variant_call_table",
-        "label": "Variant/call table",
-        "description": "Start a table for variants, calls, or feature states.",
-        "analysis_grain": "variant",
-        "visualization": "table",
-        "linker": {"kind": "feature"},
-        "result_policy": {"mode": "preview"},
-    },
+    grain: {
+        "id": grain,
+        "label": label,
+        "singular_label": singular,
+        "identity_columns": [identity],
+        "default_match_by": grain,
+    }
+    for grain, label, singular, identity in (
+        ("sample", "Samples", "Sample", "sample_id"),
+        ("subject", "Subjects", "Subject", "subject_id"),
+        ("run", "Runs", "Run", "run_id"),
+        ("feature", "Features", "Feature", "feature_id"),
+        ("variant", "Variants", "Variant", "variant_id"),
+        ("file", "Files", "File", "file_id"),
+    )
 }
 
 CHARTS: dict[str, JsonObject] = {
-    "bar": {
-        "id": "bar",
-        "label": "Bar chart",
-        "icon": "BarChart3",
-        "series": {"min": 1, "max": None, "numeric": "mixed"},
-        "requires_linker": "multi_numeric",
-        "rule": (
-            "One numeric series plots values by entity/linker; categorical "
-            "series count categories; multiple numeric series align by linker."
-        ),
-    },
-    "stacked_bar": {
-        "id": "stacked_bar",
-        "label": "Stacked bar",
-        "icon": "BarChart2",
-        "series": {"min": 2, "max": None, "numeric": True},
-        "requires_linker": True,
-        "rule": (
-            "Two or more numeric series with a shared linker; duplicate fields "
-            "remain separate colored stacked series."
-        ),
-    },
-    "line": {
-        "id": "line",
-        "label": "Line chart",
-        "icon": "LineChart",
-        "series": {"min": 1, "max": None, "numeric": True},
-        "requires_linker": "multi_series",
-        "rule": "Numeric series aligned by entity, feature, time, or selected linker.",
-    },
-    "area": {
-        "id": "area",
-        "label": "Area chart",
-        "icon": "AreaChart",
-        "series": {"min": 1, "max": None, "numeric": True},
-        "requires_linker": "multi_series",
-        "rule": "Numeric series aligned by entity, feature, time, or selected linker.",
-    },
-    "scatter": {
-        "id": "scatter",
-        "label": "Scatter plot",
-        "icon": "ScatterChart",
-        "series": {"min": 2, "max": 2, "numeric": True},
-        "requires_linker": True,
-        "rule": "Exactly two numeric measures with a visible linker.",
-    },
-    "histogram": {
-        "id": "histogram",
-        "label": "Histogram",
-        "icon": "BarChart2",
-        "series": {"min": 1, "max": None, "numeric": True},
-        "requires_linker": False,
-        "rule": "One or more numeric series rendered as overlaid bins.",
-    },
-    "boxplot": {
-        "id": "boxplot",
-        "label": "Box plot",
-        "icon": "Box",
-        "series": {"min": 1, "max": None, "numeric": True},
-        "requires_linker": "comparison",
-        "rule": "Numeric values grouped by sample group, sample, run, or category.",
-    },
-    "pie": {
-        "id": "pie",
-        "label": "Pie chart",
-        "icon": "PieChart",
-        "series": {"min": 1, "max": 1, "numeric": "value"},
-        "requires_linker": False,
-        "rule": "Exactly one series.",
-    },
-    "donut": {
-        "id": "donut",
-        "label": "Donut chart",
-        "icon": "PieChart",
-        "series": {"min": 1, "max": 1, "numeric": "value"},
-        "requires_linker": False,
-        "rule": "Exactly one series.",
-    },
     "table": {
         "id": "table",
         "label": "Table",
-        "icon": "Table2",
-        "series": {"min": 0, "max": None, "numeric": False},
-        "requires_linker": False,
-        "rule": "Any supported fields.",
+        "visible_values": {"min": 1, "max": None, "numeric": False},
+        "default_join": "outer",
     },
     "metric": {
         "id": "metric",
         "label": "Metric",
-        "icon": "Hash",
-        "series": {"min": 1, "max": 1, "numeric": "value"},
-        "requires_linker": False,
-        "rule": "One headline value.",
+        "visible_values": {"min": 1, "max": 1, "numeric": "value"},
+        "default_join": "inner",
+    },
+    "scatter": {
+        "id": "scatter",
+        "label": "Scatter plot",
+        "visible_values": {"min": 2, "max": 2, "numeric": True},
+        "default_join": "inner",
+    },
+    "histogram": {
+        "id": "histogram",
+        "label": "Histogram",
+        "visible_values": {"min": 1, "max": None, "numeric": True},
+        "default_join": None,
+    },
+    **{
+        chart: {
+            "id": chart,
+            "label": label,
+            "visible_values": {
+                "min": minimum,
+                "max": maximum,
+                "numeric": numeric,
+            },
+            "default_join": "inner",
+        }
+        for chart, label, minimum, maximum, numeric in (
+            ("bar", "Bar chart", 1, None, "mixed"),
+            ("stacked_bar", "Stacked bar", 2, None, True),
+            ("line", "Line chart", 1, None, True),
+            ("area", "Area chart", 1, None, True),
+            ("boxplot", "Box plot", 1, None, True),
+            ("pie", "Pie chart", 1, 1, "value"),
+            ("donut", "Donut chart", 1, 1, "value"),
+            ("heatmap", "Heatmap", 3, 3, "value"),
+        )
     },
 }
 
-RESULT_POLICIES: dict[str, JsonObject] = {
-    "preview": {
-        "id": "preview",
-        "label": "Preview default",
-        "default_limit": PREVIEW_DEFAULT_LIMIT,
-        "max_limit": PREVIEW_DEFAULT_LIMIT,
-        "description": "Embed up to 1,000 rows.",
-    },
-    "more_rows": {
-        "id": "more_rows",
-        "label": "More rows",
-        "default_limit": 5000,
-        "max_limit": MORE_ROWS_MAX_LIMIT,
-        "description": "Embed a bounded user-selected number of rows.",
-    },
+OUTPUT_MODES: dict[str, JsonObject] = {
+    "preview": {"id": "preview", "default_limit": 1000, "max_limit": 1000},
+    "more_rows": {"id": "more_rows", "default_limit": 5000, "max_limit": 10000},
     "random_sample": {
         "id": "random_sample",
-        "label": "Random sample",
-        "default_limit": PREVIEW_DEFAULT_LIMIT,
-        "max_limit": MORE_ROWS_MAX_LIMIT,
-        "description": "Embed a deterministic sampled subset.",
+        "default_limit": 1000,
+        "max_limit": 10000,
     },
-    "all_rows": {
-        "id": "all_rows",
-        "label": "All rows",
-        "default_limit": ALL_ROWS_INLINE_THRESHOLD,
-        "max_limit": ALL_ROWS_INLINE_THRESHOLD,
-        "description": "Embed all rows only below the configured threshold.",
-    },
+    "all_rows": {"id": "all_rows", "default_limit": 10000, "max_limit": 10000},
     "export_full_data": {
         "id": "export_full_data",
-        "label": "Export full data",
-        "default_limit": EXPORT_FULL_DATA_LIMIT,
-        "max_limit": EXPORT_FULL_DATA_LIMIT,
-        "description": "Write complete plot/table data to a file-backed artifact.",
+        "default_limit": 100000,
+        "max_limit": 100000,
     },
 }
+
+# These mappings remain private execution helpers while the old resolver is
+# incrementally reused under the version 1 value planner.
+LINKERS: dict[str, JsonObject] = {
+    "sample": {"id": "sample", "column": "sample_id"},
+    "subject": {"id": "subject", "column": "entity_id"},
+    "run": {"id": "run", "column": "run_id"},
+    "feature": {"id": "feature", "column": "feature_id"},
+    "variant": {"id": "variant", "column": "variant_id"},
+    "file": {"id": "file", "column": "source_file_id"},
+    "auto": {"id": "auto", "column": None},
+    "none": {"id": "none", "column": None},
+}
+TEMPLATES: dict[str, JsonObject] = {
+    "build_table": {
+        "id": "build_table",
+        "label": "Build a table",
+        "definition": {
+            "version": 1,
+            "analysis": {"grain": "sample", "values": []},
+            "view": {"kind": "table"},
+        },
+    },
+    "compare_two_fields": {
+        "id": "compare_two_fields",
+        "label": "Compare two fields",
+        "definition": {
+            "version": 1,
+            "analysis": {
+                "grain": "sample",
+                "values": [],
+                "match_by": "sample",
+                "join": "inner",
+            },
+            "view": {"kind": "scatter"},
+        },
+    },
+}
+
+
+def metadata_fields() -> list[JsonObject]:
+    """Return metadata field definitions enriched with type-specific behavior."""
+
+    return [
+        _enriched_metadata_field(entry, canonical_reference=True)
+        for entry in METADATA_FIELDS
+    ]
+
+
+def metadata_field(entity: str, field: str) -> JsonObject | None:
+    """Return one metadata field definition by its stable public source pair."""
+
+    entry = next(
+        (
+            entry
+            for entry in METADATA_FIELDS
+            if entry["entity"] == entity and entry["field"] == field
+        ),
+        None,
+    )
+    return _enriched_metadata_field(entry) if entry is not None else None
+
+
+def _enriched_metadata_field(
+    entry: JsonObject, *, canonical_reference: bool = False
+) -> JsonObject:
+    field = str(entry["field"])
+    return {
+        **entry,
+        "field": (
+            metadata_field_reference(str(entry["entity"]), field)
+            if canonical_reference
+            else field
+        ),
+        "allowed_aggregations": AGGREGATIONS_BY_TYPE[str(entry["value_type"])],
+        "filterable": True,
+        "groupable": True,
+    }
 
 
 def insight_capabilities() -> JsonObject:
-    """Return the server-owned capabilities used by builders and validators."""
+    """Return strict version 1 builder capabilities."""
 
     return {
         "version": 1,
         "analysis_grains": list(ANALYSIS_GRAINS.values()),
         "templates": list(TEMPLATES.values()),
         "charts": list(CHARTS.values()),
-        "linkers": list(LINKERS.values()),
-        "result_policies": list(RESULT_POLICIES.values()),
-        "validation_messages": {
-            "scatter_two_numeric": (
-                "Scatter plots require exactly two numeric measures."
-            ),
-            "linker_choice": (
-                "This chart has multiple valid linkers; choose Matched by explicitly."
-            ),
-            "numeric_only": "This chart only supports numeric series.",
-            "single_series": "Pie and donut charts require exactly one series.",
-            "all_rows_threshold": (
-                "All rows can only be embedded below the configured response threshold."
-            ),
-            "invalid_analysis_grain": "Choose a supported Analyze by grain.",
+        "metadata_fields": metadata_fields(),
+        "aggregations_by_type": AGGREGATIONS_BY_TYPE,
+        "result_rows": {
+            "default_limit": PREVIEW_DEFAULT_LIMIT,
+            "max_limit": MORE_ROWS_MAX_LIMIT,
+            "random_supported": True,
         },
     }
 
 
 def normalize_linker(value: Any) -> JsonObject:
-    """Normalize string/object linker config to ``{"kind": ...}``."""
+    """Normalize an internal match-by value for the reused resolver."""
 
-    if isinstance(value, str):
-        kind = value
-    elif isinstance(value, Mapping):
+    if isinstance(value, Mapping):
         kind = str(value.get("kind") or value.get("id") or "auto")
     else:
-        kind = "auto"
-    if kind not in LINKERS:
-        kind = "auto"
-    normalized = {"kind": kind}
-    if isinstance(value, Mapping):
-        for key in ("field", "label"):
-            if isinstance(value.get(key), str):
-                normalized[key] = value[key]
-    return normalized
+        kind = str(value or "auto")
+    return {"kind": kind if kind in LINKERS else "auto"}
 
 
 def normalize_result_policy(value: Any) -> JsonObject:
-    """Normalize result-size policy config with bounded limits."""
+    """Normalize an internal output mapping with deterministic bounds."""
 
-    if isinstance(value, str):
-        mode = value
-        raw_limit = None
-        raw_seed = None
-    elif isinstance(value, Mapping):
-        mode = str(value.get("mode") or value.get("kind") or "preview")
-        raw_limit = value.get("limit") or value.get("sample_size")
-        raw_seed = value.get("seed")
+    if isinstance(value, Mapping):
+        mode = str(value.get("mode") or "preview")
+        raw_limit = value.get("limit")
+        seed = value.get("seed")
     else:
-        mode = "preview"
+        mode = str(value or "preview")
         raw_limit = None
-        raw_seed = None
-    if mode not in RESULT_POLICIES:
+        seed = None
+    if mode not in OUTPUT_MODES:
         mode = "preview"
-    policy_definition = RESULT_POLICIES[mode]
-    default_limit = int(policy_definition["default_limit"])
-    max_limit = int(policy_definition["max_limit"])
+    definition = OUTPUT_MODES[mode]
     try:
-        limit = int(raw_limit if raw_limit is not None else default_limit)
+        limit = int(raw_limit if raw_limit is not None else definition["default_limit"])
     except (TypeError, ValueError):
-        limit = default_limit
+        limit = int(definition["default_limit"])
     normalized: JsonObject = {
         "mode": mode,
-        "limit": min(max(limit, 1), max_limit),
+        "limit": min(max(limit, 1), int(definition["max_limit"])),
     }
     if mode == "random_sample":
-        normalized["seed"] = str(raw_seed if raw_seed is not None else "goodomics")
+        normalized["seed"] = str(seed or "goodomics")
     return normalized
 
 
 def chart_rule(chart_id: str) -> JsonObject:
-    """Return a chart rule, defaulting unknown charts to table."""
+    """Return the server-owned rule for one chart kind."""
 
     return CHARTS.get(chart_id, CHARTS["table"])
 
 
 def explain_insight_config(config: Mapping[str, Any]) -> str:
-    """Build a compact explanation of a normalized insight config."""
+    """Explain a normalized version 1 definition in public terminology."""
 
-    analysis_grain = str(config.get("analysis_grain") or "sample")
-    grain = ANALYSIS_GRAINS.get(analysis_grain, ANALYSIS_GRAINS["sample"])
-    chart = str(config.get("visualization") or "table")
-    linker = normalize_linker(config.get("linker"))
-    policy = normalize_result_policy(config.get("result_policy"))
-    value_labels = [
-        str(item.get("name") or item.get("label") or item.get("field_id") or "series")
-        for item in _series_items(config)
-    ]
-    table_labels = [
-        str(item.get("label") or item.get("field_id") or item.get("column") or "column")
-        for item in _table_column_items(config)
-    ]
-    sample_refs = _sample_filter_refs(config)
-    selection_label = (
-        f"{len(sample_refs)} selected sample source(s)"
-        if sample_refs
-        else "all samples"
+    raw_analysis = config.get("analysis")
+    analysis: Mapping[str, Any] = (
+        raw_analysis if isinstance(raw_analysis, Mapping) else {}
     )
+    raw_values = analysis.get("values")
+    values = raw_values if isinstance(raw_values, Sequence) else []
+    value_labels = [
+        str(value.get("label") or value.get("as") or value.get("field"))
+        for value in values
+        if isinstance(value, Mapping)
+    ]
+    raw_view = config.get("view")
+    view: Mapping[str, Any] = raw_view if isinstance(raw_view, Mapping) else {}
     return (
-        f"{grain['label']} insight using "
-        f"{CHARTS.get(chart, CHARTS['table'])['label']} over {selection_label}; "
-        f"values: {', '.join(value_labels) or 'none'}; "
-        f"columns: {', '.join(table_labels) or 'default identity'}; "
-        f"matched by {linker['kind']}; data size policy {policy['mode']}."
+        f"{analysis.get('grain', 'sample')} insight with {view.get('kind', 'table')} "
+        f"view; values: {', '.join(value_labels) or 'none'}; matched by "
+        f"{analysis.get('match_by') or 'none'} using "
+        f"{analysis.get('join') or 'view default'} join; returning up to "
+        f"{analysis.get('limit', PREVIEW_DEFAULT_LIMIT)} final rows"
+        f"{' selected randomly' if analysis.get('random') else ''}."
     )
 
 
 def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
-    """Validate the config shape before data-specific checks."""
+    """Retain the old helper name for callers; Pydantic owns shape validation."""
 
-    messages: list[JsonObject] = []
-    chart = str(config.get("visualization") or "table")
-    grain = str(config.get("analysis_grain") or "sample")
-    if grain not in ANALYSIS_GRAINS:
-        messages.append(
-            {
-                "level": "error",
-                "code": "invalid_analysis_grain",
-                "message": f"Unsupported analysis grain: {grain}.",
-            }
-        )
-    for filter_config in _filters(config):
-        if filter_config.get("field") != "sample":
-            continue
-        operator = str(
-            filter_config.get("operator") or filter_config.get("op") or ""
-        )
-        values = filter_config.get("value")
-        valid_values = (
-            isinstance(values, Sequence)
-            and not isinstance(values, str)
-            and all(
-                isinstance(value, Mapping)
-                and value.get("kind") in {"sample", "sample_group"}
-                and isinstance(value.get("id"), str)
-                and bool(value.get("id"))
-                for value in values
-            )
-        )
-        if operator != "in" or not valid_values:
-            messages.append(
-                {
-                    "level": "error",
-                    "code": "invalid_sample_filter",
-                    "message": (
-                        "Sample filters require operator 'in' and a list of "
-                        "sample or sample_group references."
-                    ),
-                }
-            )
-    rule = chart_rule(chart)
-    series_count = len(_series_items(config))
-    series_rule = rule["series"]
-    minimum = int(series_rule["min"])
-    maximum = series_rule["max"]
-    if series_count < minimum:
-        messages.append(
-            {
-                "level": "error",
-                "code": "too_few_series",
-                "message": (
-                    f"{rule['label']} requires at least {minimum} "
-                    f"{'series' if minimum != 1 else 'series'}."
-                ),
-            }
-        )
-    if maximum is not None and series_count > int(maximum):
-        messages.append(
-            {
-                "level": "error",
-                "code": "too_many_series",
-                "message": f"{rule['label']} allows at most {maximum} series.",
-            }
-        )
-    if chart in {"pie", "donut"} and series_count != 1:
-        messages.append(
-            {
-                "level": "error",
-                "code": "single_series",
-                "message": "Pie and donut charts require exactly one series.",
-            }
-        )
-    return messages
-
-
-def _filters(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    raw = config.get("filters")
-    if not isinstance(raw, Sequence) or isinstance(raw, str):
-        return []
-    return [item for item in raw if isinstance(item, Mapping)]
-
-
-def _sample_filter_refs(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    references: list[Mapping[str, Any]] = []
-    for filter_config in _filters(config):
-        if filter_config.get("field") != "sample":
-            continue
-        values = filter_config.get("value")
-        if not isinstance(values, Sequence) or isinstance(values, str):
-            continue
-        references.extend(value for value in values if isinstance(value, Mapping))
-    return references
-
-
-def _series_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    raw = config.get("series")
-    query = config.get("query") if isinstance(config.get("query"), Mapping) else {}
-    if not raw and isinstance(query, Mapping):
-        raw = query.get("measures")
-    if not raw and isinstance(query, Mapping):
-        x_value = query.get("x")
-        y_value = query.get("y")
-        if isinstance(x_value, str) and isinstance(y_value, str):
-            raw = [{"field": x_value}, {"field": y_value}]
-    if isinstance(raw, Mapping):
-        return [raw]
-    if isinstance(raw, Sequence) and not isinstance(raw, str):
-        return [item for item in raw if isinstance(item, Mapping)]
-    return []
-
-
-def _table_column_items(config: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    raw = config.get("table_columns")
-    if isinstance(raw, Mapping):
-        return [raw]
-    if isinstance(raw, Sequence) and not isinstance(raw, str):
-        return [item for item in raw if isinstance(item, Mapping)]
+    del config
     return []

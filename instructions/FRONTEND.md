@@ -53,11 +53,26 @@ work in `packages/goodomics/dashboard`, also use
 
 ## Insight Builder
 
-- Keep the contract-grouped field picker as the main data selection control.
-- Split series editing, data picking, result scope, and diagnostics into focused
+- Keep one searchable field picker as the main data selection control. Present
+  **All / Results / Metadata** as understated source tabs below search, omit
+  fields that are incompatible with the current grain, and keep already-selected
+  incompatible fields visible with a warning. Use friendly result-source labels;
+  reserve data-contract identifiers for provenance and advanced details.
+- Split value editing, data picking, result scope, and diagnostics into focused
   components instead of growing one page component indefinitely.
 - Fetch contract-compatible result options with bounded TanStack queries and
   explicit loading, error, and empty states.
+- Store builder state in one typed version 1 insight draft. Field selection edits
+  `analysis.values`; switching views preserves values; table and chart series order
+  follows value order. Dragging or moving a field changes that canonical order.
+  Use `field` as a value's default reference and generate optional `as` aliases
+  only for duplicates or other cases that need a distinct short reference.
+- Use compact value rows with progressive disclosure. Tables use a column-oriented,
+  multi-select editor; charts use view-appropriate series or binding language. The
+  same visibility control edits `view.hidden_values` for tables and charts; disable
+  it for values currently used by a required role binding.
+- Keep **Analyze by** and **View as** in the builder toolbar. Separate per-field
+  settings from visualization and final result-row settings.
 - Show inferred **Results from** scope compactly; keep detailed overrides
   collapsed until requested.
 - Never expose internal `run_sample` as an Analyze by grain, Matched by choice,

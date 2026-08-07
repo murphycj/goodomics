@@ -14,6 +14,7 @@ export function InsightBuilderHeader({
   descriptionOpen,
   isSaving,
   canSave,
+  showSave,
   onBack,
   onDescriptionChange,
   onDescriptionOpenChange,
@@ -26,6 +27,7 @@ export function InsightBuilderHeader({
   descriptionOpen: boolean;
   isSaving: boolean;
   canSave: boolean;
+  showSave: boolean;
   onBack: () => void;
   onDescriptionChange: (value: string) => void;
   onDescriptionOpenChange: (value: boolean) => void;
@@ -45,10 +47,10 @@ export function InsightBuilderHeader({
           value={name}
           onChange={(event) => onNameChange(event.target.value)}
         />
-        {canSave && <div className="flex overflow-hidden rounded-lg">
+        {showSave && <div className="flex overflow-hidden rounded-lg">
           <Button
             className="h-8 rounded-r-none"
-            disabled={isSaving}
+            disabled={!canSave || isSaving}
             onClick={onSave}
           >
             <Save className="h-4 w-4" /> Save
@@ -58,7 +60,7 @@ export function InsightBuilderHeader({
               <Button
                 aria-label="Save options"
                 className="h-8 rounded-l-none border-l border-[#16864f] px-2.5"
-                disabled={isSaving}
+                disabled={!canSave || isSaving}
               >
                 <ChevronDown className="h-4 w-4" />
               </Button>

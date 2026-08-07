@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  insightDefinitionSchema,
+  reportDefinitionShape,
+  reportDefinitionSchema,
+  type InsightDraft,
+  type ReportDefinition,
+} from './lib/insightSchemas';
 import { apiFetch } from './lib/authRequest';
 
 const idSchema = z.union([z.string(), z.number()]);
@@ -246,12 +253,11 @@ const insightMetadataSchema = z.object({
 });
 
 const insightSummarySchema = insightMetadataSchema.extend({
-  visualization: z.string(),
-  source_store: z.string(),
-  source_table: z.string(),
+  view_kind: z.string(),
+  sources: z.array(z.string()),
 });
 
-const insightSchema = insightMetadataSchema.catchall(z.unknown());
+const insightSchema = z.intersection(insightMetadataSchema, insightDefinitionSchema);
 
 const reportMetadataSchema = z.object({
   report_id: z.string(),
@@ -268,24 +274,65 @@ const reportSummarySchema = reportMetadataSchema.extend({
   insight_ids: z.array(z.string()),
 });
 
-const reportSchema = reportMetadataSchema.catchall(z.unknown());
+const reportSchema = z
+  .object({
+    ...reportMetadataSchema.shape,
+    ...reportDefinitionShape,
+  })
+  .strict();
 
 const insightResultSchema = z.object({
   result: z.record(z.string(), z.unknown()),
 });
 
+const reportInsightResultSchema = z
+  .object({
+    id: z.string(),
+    layout: z
+      .object({
+        x: z.number().int().min(0),
+        y: z.number().int().min(0),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+      })
+      .strict(),
+    result: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 const reportResultSchema = z.object({
-  result: z.record(z.string(), z.unknown()),
+  result: z
+    .object({
+      kind: z.literal("report_result"),
+      report_id: z.string(),
+      name: z.string(),
+      description: z.string().nullable(),
+      insights: z.array(reportInsightResultSchema),
+      computed_at: z.string(),
+      cached: z.boolean(),
+    })
+    .passthrough(),
+});
+
+const reportValidationSchema = z.object({
+  valid: z.boolean(),
+  messages: z.array(z.record(z.string(), z.unknown())).default([]),
+  normalized_definition: z.record(z.string(), z.unknown()),
+  capabilities_version: z.literal(1),
 });
 
 const insightCapabilitiesSchema = z.object({
-  version: z.number(),
+  version: z.literal(1),
   analysis_grains: z.array(z.record(z.string(), z.unknown())).default([]),
   templates: z.array(z.record(z.string(), z.unknown())).default([]),
   charts: z.array(z.record(z.string(), z.unknown())).default([]),
-  linkers: z.array(z.record(z.string(), z.unknown())).default([]),
-  result_policies: z.array(z.record(z.string(), z.unknown())).default([]),
-  validation_messages: z.record(z.string(), z.unknown()).default({}),
+  metadata_fields: z.array(z.record(z.string(), z.unknown())).default([]),
+  aggregations_by_type: z.record(z.string(), z.array(z.string())).default({}),
+  result_rows: z.object({
+    default_limit: z.number().int(),
+    max_limit: z.number().int(),
+    random_supported: z.boolean(),
+  }),
 });
 
 const insightValidationSchema = z.object({
@@ -699,7 +746,9 @@ export function getInsightCapabilities() {
   return getJson('/api/v1/insights/capabilities', insightCapabilitiesSchema);
 }
 
-export async function validateInsightConfig(config: Record<string, unknown>) {
+export async function validateInsightConfig(
+  config: InsightDraft & { project_id?: string },
+) {
   const response = await apiFetch('/api/v1/insights/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -892,12 +941,14 @@ export function getInsight(insightId: string) {
   return getJson(`/api/v1/insights/${encodeURIComponent(insightId)}`, insightSchema);
 }
 
-export async function createInsight(payload: {
+export async function createInsight(payload: InsightDraft & {
   insight_id?: string;
   project_id: string;
   name: string;
   description?: string | null;
-} & Record<string, unknown>) {
+}) {
+  const { project_id: _projectId, ...definition } = payload;
+  insightDefinitionSchema.parse(definition);
   const response = await apiFetch('/api/v1/insights', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -912,7 +963,10 @@ export async function patchInsight(
   payload: {
     name?: string;
     description?: string | null;
-  } & Record<string, unknown>,
+    version?: 1;
+    analysis?: InsightDraft['analysis'];
+    view?: InsightDraft['view'];
+  },
 ) {
   const response = await apiFetch(`/api/v1/insights/${encodeURIComponent(insightId)}`, {
     method: 'PATCH',
@@ -936,13 +990,19 @@ export async function executeInsight({
   config,
   name,
   description,
+  limit,
+  random,
+  exportResult,
   refresh,
 }: {
   insightId?: string;
   projectId: string;
-  config?: Record<string, unknown>;
+  config?: InsightDraft;
   name?: string;
   description?: string | null;
+  limit?: number;
+  random?: boolean;
+  exportResult?: boolean;
   refresh?: boolean;
 }) {
   const response = await apiFetch(
@@ -953,7 +1013,10 @@ export async function executeInsight({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ...config,
+        ...(insightId ? {} : config),
+        limit,
+        random,
+        export: exportResult,
         project_id: projectId,
         name,
         description,
@@ -981,12 +1044,11 @@ export function getReport(reportId: string) {
   return getJson(`/api/v1/reports/${encodeURIComponent(reportId)}`, reportSchema);
 }
 
-export async function createReport(payload: {
-  report_id?: string;
-  project_id: string;
-  name: string;
-  description?: string | null;
-} & Record<string, unknown>) {
+export async function createReport(
+  payload: ReportDefinition & { project_id: string },
+) {
+  const { project_id: _projectId, ...definition } = payload;
+  reportDefinitionSchema.parse(definition);
   const response = await apiFetch('/api/v1/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -996,12 +1058,24 @@ export async function createReport(payload: {
   return reportSchema.parse(await response.json());
 }
 
+export async function validateReportConfig(
+  payload: ReportDefinition & { project_id: string },
+) {
+  const response = await apiFetch('/api/v1/reports/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw await responseError(response);
+  return reportValidationSchema.parse(await response.json());
+}
+
 export async function patchReport(
   reportId: string,
   payload: {
     name?: string;
     description?: string | null;
-  } & Record<string, unknown>,
+  } & Partial<ReportDefinition>,
 ) {
   const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}`, {
     method: 'PATCH',
@@ -1022,16 +1096,25 @@ export async function deleteReport(reportId: string) {
 export async function executeReport({
   reportId,
   projectId,
+  limit,
+  random,
   refresh,
 }: {
   reportId: string;
   projectId: string;
+  limit?: number;
+  random?: boolean;
   refresh?: boolean;
 }) {
   const response = await apiFetch(`/api/v1/reports/${encodeURIComponent(reportId)}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project_id: projectId, refresh: Boolean(refresh) }),
+    body: JSON.stringify({
+      project_id: projectId,
+      limit,
+      random,
+      refresh: Boolean(refresh),
+    }),
   });
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
   return reportResultSchema.parse(await response.json()).result;

@@ -27,7 +27,7 @@ from sqlalchemy.sql import func
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from goodomics.projects import DEFAULT_PROJECT_ID
+from goodomics.schemas.field_references import parse_field_reference
 from goodomics.server.db.metadata import METADATA_MODELS
 from goodomics.server.db.models import (
     InsightRecord,
@@ -36,6 +36,7 @@ from goodomics.server.db.models import (
     ReportResultCacheRecord,
 )
 from goodomics.server.insight_capabilities import (
+    AGGREGATIONS_BY_TYPE,
     ALL_ROWS_INLINE_THRESHOLD,
     ANALYSIS_GRAINS,
     EXPORT_FULL_DATA_LIMIT,
@@ -44,9 +45,23 @@ from goodomics.server.insight_capabilities import (
     PREVIEW_DEFAULT_LIMIT,
     chart_rule,
     explain_insight_config,
+    metadata_field,
     normalize_linker,
     normalize_result_policy,
     validate_config_shape,
+)
+from goodomics.server.insight_models import (
+    AnalysisValue,
+    BoxplotView,
+    CategoryChartView,
+    HeatmapView,
+    HistogramView,
+    InsightDefinition,
+    MetricView,
+    ReportDefinition,
+    ScatterView,
+    normalize_insight_definition,
+    normalize_report_definition,
 )
 from goodomics.server.result_resolution import SampleSelection, resolve_contract_results
 from goodomics.storage.duckdb import (
@@ -55,8 +70,11 @@ from goodomics.storage.duckdb import (
     DuckDBAnalyticsStore,
 )
 from goodomics.storage.sqlalchemy import (
+    AnalysisMethodRecord,
+    AnalysisTypeRecord,
     DataContractFieldRecord,
     DataContractRecord,
+    FileRecord,
     ProjectRecord,
     RunContractRecord,
     RunContractSampleRecord,
@@ -65,16 +83,16 @@ from goodomics.storage.sqlalchemy import (
     SampleGroupMemberRecord,
     SampleGroupRecord,
     SampleRecord,
+    SubjectRecord,
 )
 
 JsonObject = dict[str, Any]
 StoreName = Literal["metadata", "analytics"]
 
-# Builder queries intentionally support a tiny aggregation/operator vocabulary.
-# Advanced SQL exists as an escape hatch, but the default UI/API path stays
-# constrained and easy to validate.
+# Version 1 values support one shared aggregation vocabulary. Physical SQL and
+# tables remain implementation details and are never accepted by public models.
 AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
-RESULT_FORMAT_VERSION = 6
+RESULT_FORMAT_VERSION = 12
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -136,38 +154,38 @@ def canonical_hash(value: Mapping[str, Any]) -> str:
 
 
 def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
-    """Fill in default keys expected by insight execution."""
+    """Parse and fully normalize a strict version 1 insight definition."""
 
-    normalized = dict(config)
-    normalized.pop("name", None)
-    normalized.pop("description", None)
-    normalized.pop("context", None)
-    normalized.setdefault("version", 1)
-    normalized["analysis_grain"] = _normalize_analysis_grain(
-        normalized.get("analysis_grain")
-    )
-    normalized.pop("mode", None)
-    normalized.setdefault("visualization", "table")
-    normalized.setdefault("query", {})
-    normalized.setdefault("series", [])
-    normalized["linker"] = normalize_linker(normalized.get("linker"))
-    normalized.setdefault("filters", [])
-    display = normalized.get("display")
-    display_policy = (
-        display.get("result_policy") if isinstance(display, Mapping) else None
-    )
-    normalized["result_policy"] = normalize_result_policy(
-        normalized.get("result_policy") or display_policy
-    )
-    normalized.setdefault("display", {})
+    try:
+        definition = _parse_insight_definition(config)
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    return cast(JsonObject, definition.executable_config())
 
-    return normalized
+
+def _parse_insight_definition(config: Mapping[str, Any]) -> InsightDefinition:
+    """Parse public fields while excluding transient executor metadata."""
+
+    return normalize_insight_definition(
+        {key: value for key, value in config.items() if key != "_runtime"}
+    )
 
 
 def validate_and_explain_config(config: Mapping[str, Any]) -> JsonObject:
-    """Return shared validation/explanation payload for UI and AI callers."""
+    """Return strict shape validation and explanation for a version 1 draft."""
 
-    normalized = normalize_insight_config(config)
+    try:
+        normalized = normalize_insight_config(config)
+    except ValueError as error:
+        return {
+            "valid": False,
+            "messages": [
+                {"level": "error", "code": "invalid_definition", "message": str(error)}
+            ],
+            "normalized_config": dict(config),
+            "explanation": "Invalid version 1 insight definition.",
+            "capabilities_version": 1,
+        }
     messages = validate_config_shape(normalized)
     return {
         "valid": not any(message.get("level") == "error" for message in messages),
@@ -179,21 +197,210 @@ def validate_and_explain_config(config: Mapping[str, Any]) -> JsonObject:
 
 
 def normalize_report_config(config: Mapping[str, Any]) -> JsonObject:
-    """Fill in default keys expected by report execution."""
+    """Parse and normalize a report definition."""
 
-    normalized = dict(config)
-    normalized.setdefault("version", 1)
-    normalized.setdefault("items", [])
-    normalized.setdefault("layout", {"columns": 12})
-    normalized.setdefault("filters", [])
-    normalized.setdefault("refresh_policy", {"mode": "manual"})
-    return normalized
+    try:
+        definition = normalize_report_definition(dict(config))
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    return cast(JsonObject, definition.executable_config())
 
 
 def _normalize_analysis_grain(value: Any) -> str:
     """Return a supported public analysis grain, defaulting to sample."""
     grain = str(value or "sample")
     return grain if grain in ANALYSIS_GRAINS else "sample"
+
+
+async def validate_insight_definition_data(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+) -> InsightDefinition:
+    """Validate contract fields, metadata fields, types, and bindings."""
+
+    definition = _parse_insight_definition(config)
+    value_types: dict[str, str] = {}
+
+    for value in definition.analysis.values:
+        reference = value.parsed_field
+
+        # Handle metadata fields
+
+        if reference.kind == "metadata":
+            entity = str(reference.entity)
+            field_definition = metadata_field(entity, reference.field_id)
+
+            if field_definition is None:
+                raise ValueError(f"Metadata field not found: {value.field}.")
+
+            if definition.analysis.grain not in field_definition["allowed_grains"]:
+                raise ValueError(
+                    f"Metadata field {value.field} is not allowed "
+                    f"at {definition.analysis.grain} grain."
+                )
+
+            match_by = definition.analysis.match_by or definition.analysis.grain
+
+            if match_by != definition.analysis.grain:
+                raise ValueError(
+                    "Metadata values must match by their declared analysis grain."
+                )
+
+            allowed = field_definition["allowed_aggregations"]
+
+            if value.aggregation not in allowed:
+                raise ValueError(
+                    f"Aggregation {value.aggregation!r} is not allowed for "
+                    f"{value.field}."
+                )
+            value_types[value.reference] = str(field_definition["value_type"])
+            continue
+
+        # Handle analytical fields
+
+        contract_id = str(reference.contract_id)
+        contract = await _get_contract_record(session, project_id, contract_id)
+
+        if contract is None:
+            raise ValueError(f"Data contract not found: {contract_id}.")
+
+        field = await _series_field_record(
+            session=session,
+            contract=contract,
+            field_id=reference.field_id,
+        )
+        table = _series_table(contract, field, reference.field_id)
+        match_by = definition.analysis.match_by or definition.analysis.grain
+        linker_column = LINKERS.get(match_by, {}).get("column")
+
+        if linker_column not in _columns_for_source("analytics", table):
+            raise ValueError(
+                f"Analytical field {value.field} cannot match by {match_by}."
+            )
+
+        synthetic_column = (
+            _synthetic_contract_fields(table).get(table, {}).get(reference.field_id)
+        )
+
+        value_type = (
+            field.value_type
+            if field is not None
+            else (
+                "numeric"
+                if synthetic_column
+                in {
+                    "value",
+                    "value_numeric",
+                    "call_rank",
+                    "score",
+                    "segment_mean",
+                    "allele_fraction",
+                    "split_read_count",
+                }
+                else "string"
+            )
+        )
+        allowed = AGGREGATIONS_BY_TYPE.get(value_type, AGGREGATIONS_BY_TYPE["string"])
+
+        if value.aggregation not in allowed:
+            raise ValueError(
+                f"Aggregation {value.aggregation!r} is not allowed for {value.field}."
+            )
+        value_types[value.reference] = value_type
+    _validate_view_value_types(definition, value_types)
+
+    return definition
+
+
+def _validate_view_value_types(
+    definition: InsightDefinition, value_types: Mapping[str, str]
+) -> None:
+    """Enforce numeric and cardinality constraints for the selected view."""
+
+    view = definition.view
+    numeric_ids = {
+        value_id
+        for value_id, value_type in value_types.items()
+        if value_type == "numeric"
+    }
+    visible_ids = set(_visible_value_references(definition))
+
+    if view.kind == "scatter":
+        required = {view.x, view.y}
+
+        if not required.issubset(numeric_ids):
+            raise ValueError("Scatter plots require two numeric value references.")
+
+        if view.x == view.y:
+            raise ValueError("Scatter x and y must reference different values.")
+
+    if view.kind == "histogram" and not visible_ids.issubset(numeric_ids):
+        raise ValueError("Histograms require numeric value references.")
+
+    if (
+        isinstance(view, (CategoryChartView, BoxplotView))
+        and view.kind in {"line", "area", "stacked_bar", "boxplot"}
+        and not visible_ids.issubset(numeric_ids)
+    ):
+        raise ValueError(f"{view.kind} views require numeric value references.")
+
+
+def _visible_value_references(definition: InsightDefinition) -> list[str]:
+    """Derive rendered references from analysis order and the shared hide list."""
+
+    hidden = set(definition.view.hidden_values)
+    category = (
+        definition.view.category
+        if isinstance(definition.view, (CategoryChartView, BoxplotView))
+        else None
+    )
+
+    return [
+        value.reference
+        for value in definition.analysis.values
+        if value.reference not in hidden and value.reference != category
+    ]
+
+
+async def validate_report_definition_data(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    config: Mapping[str, Any],
+) -> tuple[ReportDefinition, list[InsightRecord]]:
+    """Validate report dependencies, ownership, and every referenced insight."""
+
+    definition = normalize_report_definition(dict(config))
+    insight_ids = [insight.id for insight in definition.insights]
+    rows = (
+        (
+            await session.exec(
+                select(InsightRecord).where(
+                    cast(Any, InsightRecord.insight_id).in_(insight_ids)
+                )
+            )
+        ).all()
+        if insight_ids
+        else []
+    )
+    by_id = {row.insight_id: row for row in rows}
+    missing = [insight_id for insight_id in insight_ids if insight_id not in by_id]
+    if missing:
+        raise ValueError(f"Report insights not found: {', '.join(missing)}.")
+    for row in rows:
+        if row.project_id != project_id:
+            raise ValueError(
+                f"Insight {row.insight_id!r} does not belong to this report project."
+            )
+        await validate_insight_definition_data(
+            session=session,
+            project_id=project_id,
+            config=row.config,
+        )
+    ordered = [by_id[insight.id] for insight in definition.insights]
+    return definition, ordered
 
 
 async def execute_insight(
@@ -205,6 +412,9 @@ async def execute_insight(
     config: Mapping[str, Any] | None = None,
     name: str | None = None,
     description: str | None = None,
+    limit_override: int | None = None,
+    random_override: bool | None = None,
+    export: bool = False,
     refresh: bool = False,
     persist_results: bool = True,
 ) -> JsonObject:
@@ -220,6 +430,15 @@ async def execute_insight(
         config if config is not None else (insight.config if insight else {})
     )
     insight_config = normalize_insight_config(source_config)
+    if limit_override is not None or random_override is not None:
+        analysis = dict(cast(Mapping[str, Any], insight_config["analysis"]))
+        if limit_override is not None:
+            analysis["limit"] = limit_override
+        if random_override is not None:
+            analysis["random"] = random_override
+        insight_config = normalize_insight_config(
+            {**insight_config, "analysis": analysis}
+        )
     result_name = name or (insight.name if insight is not None else "Untitled insight")
     result_description = description
     if result_description is None and insight is not None:
@@ -230,15 +449,23 @@ async def execute_insight(
             message for message in validation["messages"] if message["level"] == "error"
         )
         raise ValueError(str(first_error["message"]))
-    source = _query_source(insight_config)
-    # Cache identity is split into the normalized spec and a source fingerprint
-    # so a config can be reused until either the config or the underlying data
-    # changes.
-    source_fingerprint = await fingerprint_source(
+    _set_runtime_metadata(
+        insight_config,
+        {
+            "column_labels": await _value_labels(
+                session=session,
+                project_id=project_id,
+                config=insight_config,
+            )
+        },
+    )
+    # Cache identity fingerprints every referenced semantic contract and
+    # metadata entity; physical sources are not part of the public definition.
+    source_fingerprint = await fingerprint_values(
         session=session,
         analytics_store=analytics_store,
         project_id=project_id,
-        source=source,
+        config=insight_config,
     )
     spec_hash = canonical_hash(
         {
@@ -247,7 +474,8 @@ async def execute_insight(
             "description": result_description,
             "project_id": project_id,
             "result_format_version": RESULT_FORMAT_VERSION,
-            "source": source,
+            "sources": _value_sources(insight_config),
+            "export": export,
         }
     )
     insight_id = insight.insight_id if insight is not None else None
@@ -273,22 +501,24 @@ async def execute_insight(
         columns=columns,
         rows=rows,
     )
-    policy_rows, policy_summary = _apply_result_policy(
+    columns, rows = _apply_view_projection(insight_config, columns, rows)
+    selected_rows, row_selection = _apply_analysis_row_selection(
         config=insight_config,
         columns=columns,
         rows=rows,
         analytics_store=analytics_store,
+        export=export,
     )
     result = compile_insight_result(
         config=insight_config,
         name=result_name,
         description=result_description,
         columns=columns,
-        rows=policy_rows,
+        rows=selected_rows,
         insight_id=insight_id,
         computed_at=datetime.now(UTC),
         cached=False,
-        result_policy_summary=policy_summary,
+        row_selection=row_selection,
     )
     cache_id = f"insight_cache_{uuid4().hex}"
     if persist_results:
@@ -307,6 +537,76 @@ async def execute_insight(
     return result
 
 
+async def _value_labels(
+    *, session: AsyncSession, project_id: str | None, config: Mapping[str, Any]
+) -> dict[str, str]:
+    """Resolve default labels from contract and metadata field definitions."""
+
+    definition = _parse_insight_definition(config)
+    labels: dict[str, str] = {}
+    for value in definition.analysis.values:
+        if value.label:
+            labels[value.reference] = value.label
+            continue
+        reference = value.parsed_field
+        if reference.kind == "metadata":
+            field_definition = metadata_field(str(reference.entity), reference.field_id)
+            labels[value.reference] = str(
+                field_definition["label"] if field_definition else reference.field_id
+            )
+            continue
+        contract = await _get_contract_record(
+            session, project_id, str(reference.contract_id)
+        )
+        field = (
+            await _series_field_record(
+                session=session,
+                contract=contract,
+                field_id=reference.field_id,
+            )
+            if contract is not None
+            else None
+        )
+        labels[value.reference] = (
+            field.display_name if field is not None else reference.field_id
+        )
+    return labels
+
+
+def _apply_view_projection(
+    config: Mapping[str, Any],
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[str], list[JsonObject]]:
+    """Apply table visibility and sorting without changing analysis order."""
+
+    definition = _parse_insight_definition(config)
+    view = definition.view
+    if view.kind != "table":
+        return list(columns), [dict(row) for row in rows]
+    value_references = {value.reference for value in definition.analysis.values}
+    hidden = set(view.hidden_values)
+    output_columns = [column for column in columns if column not in value_references]
+    output_columns.extend(
+        value.reference
+        for value in definition.analysis.values
+        if value.reference not in hidden and value.reference in columns
+    )
+    ordered_rows = [dict(row) for row in rows]
+    for sort in reversed(view.sorting):
+        ordered_rows.sort(
+            key=lambda row: (
+                row.get(sort.by) is None,
+                str(row.get(sort.by) or ""),
+            ),
+            reverse=sort.direction == "desc",
+        )
+    projected = [
+        {column: row.get(column) for column in output_columns} for row in ordered_rows
+    ]
+    return output_columns, projected
+
+
 async def execute_report(
     *,
     session: AsyncSession,
@@ -314,6 +614,8 @@ async def execute_report(
     project_id: str | None,
     report: ReportRecord,
     insights: Sequence[InsightRecord],
+    limit_override: int | None = None,
+    random_override: bool | None = None,
     refresh: bool = False,
     persist_results: bool = True,
 ) -> JsonObject:
@@ -324,7 +626,13 @@ async def execute_report(
     report_name = report.name
     report_description = report.description
     effective_insight_configs = [
-        _inherit_report_config(insight.config, report_config) for insight in insights
+        _inherit_report_config(
+            insight.config,
+            report_config,
+            limit_override=limit_override,
+            random_override=random_override,
+        )
+        for insight in insights
     ]
     spec_hash = canonical_hash(
         {
@@ -340,11 +648,11 @@ async def execute_report(
             # per-insight fingerprints keeps report cache invalidation aligned
             # with insight cache invalidation.
             "insights": [
-                await fingerprint_source(
+                await fingerprint_values(
                     session=session,
                     analytics_store=analytics_store,
                     project_id=project_id,
-                    source=_query_source(normalize_insight_config(config)),
+                    config=normalize_insight_config(config),
                 )
                 for config in effective_insight_configs
             ]
@@ -361,7 +669,7 @@ async def execute_report(
         if cached is not None:
             return cached
 
-    insight_results = [
+    executed_results = [
         await execute_insight(
             session=session,
             analytics_store=analytics_store,
@@ -373,6 +681,33 @@ async def execute_report(
         )
         for insight, config in zip(insights, effective_insight_configs, strict=True)
     ]
+    configured_insights = report_config.get("insights")
+    report_insights = (
+        [item for item in configured_insights if isinstance(item, Mapping)]
+        if isinstance(configured_insights, Sequence)
+        and not isinstance(configured_insights, str)
+        else []
+    )
+    insight_results: list[JsonObject] = []
+    for report_insight, executed_result in zip(
+        report_insights, executed_results, strict=True
+    ):
+        insight_id = str(report_insight.get("id") or "")
+        if executed_result.get("insight_id") != insight_id:
+            raise ValueError(
+                "Executed insight identity does not match its report definition: "
+                f"{executed_result.get('insight_id')!r} != {insight_id!r}."
+            )
+        nested_result = dict(executed_result)
+        nested_result.pop("kind", None)
+        nested_result.pop("insight_id", None)
+        insight_results.append(
+            {
+                "id": insight_id,
+                "layout": dict(cast(Mapping[str, Any], report_insight["layout"])),
+                "result": nested_result,
+            }
+        )
     result = {
         **report_config,
         "kind": "report_result",
@@ -401,17 +736,30 @@ async def execute_report(
 
 
 def _inherit_report_config(
-    insight_config: Mapping[str, Any], report_config: Mapping[str, Any]
+    insight_config: Mapping[str, Any],
+    report_config: Mapping[str, Any],
+    *,
+    limit_override: int | None = None,
+    random_override: bool | None = None,
 ) -> JsonObject:
-    """Apply report-level filters, linkers, and policies to an insight."""
-    inherited = dict(insight_config)
-    for key in ("linker", "result_policy"):
-        if key not in inherited and key in report_config:
-            inherited[key] = report_config[key]
+    """Intersect report filters and apply result-row precedence to one insight."""
+
+    inherited = normalize_insight_config(insight_config)
+    analysis = dict(cast(Mapping[str, Any], inherited["analysis"]))
+    report_limit = report_config.get("limit")
+    report_random = report_config.get("random")
+    if limit_override is not None:
+        analysis["limit"] = limit_override
+    elif report_limit is not None:
+        analysis["limit"] = report_limit
+    if random_override is not None:
+        analysis["random"] = random_override
+    elif report_random is not None:
+        analysis["random"] = report_random
     report_filters = report_config.get("filters")
     if isinstance(report_filters, Sequence) and not isinstance(report_filters, str):
-        insight_filters = inherited.get("filters")
-        inherited["filters"] = [
+        insight_filters = analysis.get("filters")
+        analysis["filters"] = [
             *list(report_filters),
             *(
                 list(insight_filters)
@@ -420,7 +768,7 @@ def _inherit_report_config(
                 else []
             ),
         ]
-    return inherited
+    return normalize_insight_config({**inherited, "analysis": analysis})
 
 
 async def execute_data_query(
@@ -430,57 +778,14 @@ async def execute_data_query(
     project_id: str | None,
     config: Mapping[str, Any],
 ) -> tuple[list[str], list[JsonObject]]:
-    """Run the data query described by an insight config.
+    """Resolve version 1 values and align them at the declared public grain."""
 
-    Contract-first queries are preferred because they use Goodomics semantic data
-    contracts. Generic table queries and read-only SQL are supported as escape
-    hatches.
-    """
-
-    query_config = _query_config(config)
-    if not _is_table_preview_config(config):
-        series_query = await _execute_contract_series_query(
-            session=session,
-            analytics_store=analytics_store,
-            project_id=project_id,
-            config=config,
-        )
-        if series_query is not None:
-            return series_query
-    contract_query = await _compile_contract_query(
+    return await _execute_values_query(
         session=session,
+        analytics_store=analytics_store,
         project_id=project_id,
-        query_config=query_config,
         config=config,
     )
-    if contract_query is not None:
-        sql, parameters, columns = contract_query
-        return analytics_store.query_rows(
-            sql, parameters=parameters, limit=_query_limit(query_config, config)
-        )
-    store, table = _parse_source(query_config.get("source"))
-    if query_config.get("sql") is not None:
-        # Advanced SQL is still wrapped and limited by the storage adapters, but
-        # it must pass a simple read-only validation gate first.
-        sql = _validate_read_only_sql(str(query_config["sql"]))
-        limit = _query_limit(query_config, config)
-        if store == "analytics":
-            return analytics_store.query_rows(sql, limit=limit)
-        return await _execute_metadata_sql(session, sql, limit=limit)
-    if table is None:
-        raise ValueError("Query source must include a table.")
-    sql, parameters, columns = await _compile_builder_query(
-        session=session,
-        project_id=project_id,
-        store=store,
-        table=table,
-        query_config=query_config,
-        config=config,
-    )
-    limit = _query_limit(query_config, config)
-    if store == "analytics":
-        return analytics_store.query_rows(sql, parameters=parameters, limit=limit)
-    return await _execute_metadata_sql(session, sql, parameters=parameters, limit=limit)
 
 
 async def _decorate_identity_values(
@@ -508,6 +813,16 @@ async def _decorate_identity_values(
             session, _integer_values(decorated, "run_sample_id")
         )
         _replace_column_values(decorated, "run_sample_id", run_sample_labels)
+    if "entity_id" in columns:
+        subject_labels = await _subject_public_labels(
+            session, _integer_values(decorated, "entity_id")
+        )
+        _replace_column_values(decorated, "entity_id", subject_labels)
+    if "source_file_id" in columns:
+        file_labels = await _file_public_labels(
+            session, _integer_values(decorated, "source_file_id")
+        )
+        _replace_column_values(decorated, "source_file_id", file_labels)
     return decorated
 
 
@@ -544,11 +859,7 @@ async def _sample_display_labels(
             select(SampleRecord).where(cast(Any, SampleRecord.id).in_(sample_pks))
         )
     ).all()
-    return {
-        int(row.id): row.sample_name or row.sample_id
-        for row in rows
-        if row.id is not None
-    }
+    return {int(row.id): row.sample_id for row in rows if row.id is not None}
 
 
 async def _run_display_labels(
@@ -562,7 +873,7 @@ async def _run_display_labels(
             select(RunRecord).where(cast(Any, RunRecord.id).in_(run_pks))
         )
     ).all()
-    return {int(row.id): row.name or row.run_id for row in rows if row.id is not None}
+    return {int(row.id): row.run_id for row in rows if row.id is not None}
 
 
 async def _run_sample_display_labels(
@@ -597,6 +908,510 @@ async def _run_sample_display_labels(
         else:
             labels[int(link.id)] = link.run_sample_id
     return labels
+
+
+async def _subject_public_labels(
+    session: AsyncSession, subject_pks: Sequence[int]
+) -> dict[int, str]:
+    """Resolve internal subject keys to stable public subject IDs."""
+
+    if not subject_pks:
+        return {}
+    rows = (
+        await session.exec(
+            select(SubjectRecord).where(cast(Any, SubjectRecord.id).in_(subject_pks))
+        )
+    ).all()
+    return {int(row.id): row.subject_id for row in rows if row.id is not None}
+
+
+async def _file_public_labels(
+    session: AsyncSession, file_pks: Sequence[int]
+) -> dict[int, str]:
+    """Resolve internal file keys to stable public file IDs."""
+
+    if not file_pks:
+        return {}
+    rows = (
+        await session.exec(
+            select(FileRecord).where(cast(Any, FileRecord.id).in_(file_pks))
+        )
+    ).all()
+    return {int(row.id): row.file_id for row in rows if row.id is not None}
+
+
+async def _execute_values_query(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    config: Mapping[str, Any],
+) -> tuple[list[str], list[JsonObject]]:
+    """Resolve every selected value independently and align by public identity."""
+
+    definition = _parse_insight_definition(config)
+    identity = _value_identity(definition)
+    value_rows: list[list[JsonObject]] = []
+    selection_diagnostics: list[JsonObject] = []
+    for value in definition.analysis.values:
+        if value.parsed_field.kind == "contract":
+            rows, diagnostics = await _contract_value_rows(
+                session=session,
+                analytics_store=analytics_store,
+                project_id=project_id,
+                definition=definition,
+                value=value,
+                identity=identity,
+            )
+            selection_diagnostics.extend(diagnostics)
+        else:
+            rows = await _metadata_value_rows(
+                session=session,
+                project_id=project_id,
+                definition=definition,
+                value=value,
+                identity=identity,
+            )
+        value_rows.append(rows)
+    if definition.view.kind == "histogram":
+        columns, rows = _unaligned_value_rows(definition, value_rows)
+        diagnostics = {
+            "join": "none",
+            "matched_count": len(rows),
+            "coverage": {
+                value.reference: len(source_rows)
+                for value, source_rows in zip(
+                    definition.analysis.values, value_rows, strict=True
+                )
+            },
+            "duplicate_conflict_count": 0,
+        }
+    else:
+        columns, rows, diagnostics = _align_value_rows(
+            identity=identity,
+            values=definition.analysis.values,
+            value_rows=value_rows,
+            join=definition.analysis.join or "inner",
+        )
+    _set_runtime_metadata(
+        config,
+        {
+            "linker": {
+                "kind": definition.analysis.match_by or definition.analysis.grain,
+                "column": identity,
+            },
+            "linker_diagnostics": diagnostics,
+            "value_diagnostics": diagnostics,
+            "series_aliases": [value.reference for value in definition.analysis.values],
+            "result_selection_diagnostics": selection_diagnostics,
+        },
+    )
+    return columns, rows
+
+
+def _value_identity(definition: InsightDefinition) -> str:
+    """Return the public identity column used to match selected values."""
+
+    match_by = definition.analysis.match_by or definition.analysis.grain
+    return f"{match_by}_id"
+
+
+async def _contract_value_rows(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    definition: InsightDefinition,
+    value: AnalysisValue,
+    identity: str,
+) -> tuple[list[JsonObject], list[JsonObject]]:
+    """Resolve one contract value through the existing occurrence-aware compiler."""
+
+    reference = value.parsed_field
+    if reference.kind != "contract":
+        raise ValueError(f"Expected an analytical field reference: {value.field}.")
+    execution_alias = _execution_value_alias(value.reference)
+    series_item = {
+        "id": execution_alias,
+        "data_contract_id": reference.contract_id,
+        "field_id": reference.field_id,
+        "aggregation": value.aggregation,
+        "filters": [item.model_dump(mode="json") for item in value.filters],
+        "result_scope": (
+            value.scope.model_dump(mode="json", exclude_none=True)
+            if value.scope is not None
+            else {}
+        ),
+    }
+    legacy_config: JsonObject = {
+        "analysis_grain": definition.analysis.grain,
+        "visualization": definition.view.kind,
+        "linker": {"kind": definition.analysis.match_by or definition.analysis.grain},
+        "filters": [
+            item.model_dump(mode="json") for item in definition.analysis.filters
+        ],
+    }
+    linker_column = LINKERS.get(
+        definition.analysis.match_by or definition.analysis.grain, {}
+    ).get("column")
+    if linker_column is None:
+        raise ValueError(f"Unsupported match identity: {identity}.")
+    sql, parameters = await _contract_series_sql(
+        session=session,
+        project_id=project_id,
+        config=legacy_config,
+        series_item=series_item,
+        alias=execution_alias,
+        linker_column=str(linker_column),
+    )
+    _, rows = analytics_store.query_rows(
+        sql,
+        parameters=parameters,
+        limit=EXPORT_FULL_DATA_LIMIT,
+    )
+    decorated = await _decorate_identity_values(
+        session=session,
+        columns=[str(linker_column)],
+        rows=[
+            {
+                str(linker_column): row.get("__linker"),
+                value.reference: row.get(execution_alias),
+            }
+            for row in rows
+        ],
+    )
+    public_rows = [
+        {
+            "__linker": row.get(str(linker_column)),
+            value.reference: row.get(value.reference),
+        }
+        for row in decorated
+    ]
+    diagnostics = _runtime_metadata(legacy_config).get("result_selection_diagnostics")
+    public_diagnostics = (
+        [
+            {**item, "series_id": value.reference}
+            for item in diagnostics
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(diagnostics, list)
+        else []
+    )
+    return public_rows, public_diagnostics
+
+
+def _execution_value_alias(reference: str) -> str:
+    """Return a deterministic SQL-safe private alias for one public value reference."""
+
+    digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()[:16]
+    return f"value_{digest}"
+
+
+async def _metadata_value_rows(
+    *,
+    session: AsyncSession,
+    project_id: str | None,
+    definition: InsightDefinition,
+    value: AnalysisValue,
+    identity: str,
+) -> list[JsonObject]:
+    """Read one allow-listed metadata value within the current project."""
+
+    if project_id is None:
+        raise ValueError("Metadata values require a project-scoped insight.")
+    reference = value.parsed_field
+    if reference.kind != "metadata":
+        raise ValueError(f"Expected a metadata field reference: {value.field}.")
+    entity = str(reference.entity)
+    field_definition = metadata_field(entity, reference.field_id)
+    if field_definition is None:
+        raise ValueError(f"Metadata field not found: {value.field}.")
+    project_pk = await _project_pk(session, project_id)
+    if project_pk is None:
+        raise ValueError(f"Project not found: {project_id}.")
+    source_rows = await _metadata_entity_rows(
+        session=session,
+        project_pk=project_pk,
+        entity=entity,
+    )
+    filters = [
+        *definition.analysis.filters,
+        *value.filters,
+    ]
+    semantic_filters = [item for item in filters if item.field == "sample"]
+    allowed_sample_ids: set[str] | None = None
+    if semantic_filters and entity == "sample":
+        selections = await _resolve_sample_selections(
+            session=session,
+            project_id=project_id,
+            config={
+                "filters": [item.model_dump(mode="json") for item in semantic_filters]
+            },
+        )
+        sample_pks = sorted(
+            {
+                sample_pk
+                for selection in selections
+                for sample_pk in selection.sample_pks
+            }
+        )
+        sample_rows = (
+            await session.exec(
+                select(SampleRecord).where(cast(Any, SampleRecord.id).in_(sample_pks))
+            )
+        ).all()
+        allowed_sample_ids = {row.sample_id for row in sample_rows}
+    filtered = [
+        row
+        for row in source_rows
+        if (allowed_sample_ids is None or row.get("sample_id") in allowed_sample_ids)
+        and all(
+            _metadata_filter_matches(row, item.model_dump())
+            for item in filters
+            if item.field != "sample"
+        )
+    ]
+    rows = [
+        {
+            "__linker": row.get(identity),
+            value.reference: row.get(reference.field_id),
+        }
+        for row in filtered
+        if row.get(identity) is not None
+    ]
+    return _aggregate_metadata_rows(rows, value=value)
+
+
+async def _metadata_entity_rows(
+    *, session: AsyncSession, project_pk: int, entity: str
+) -> list[JsonObject]:
+    """Return approved public fields for one metadata entity."""
+
+    if entity == "subject":
+        rows = (
+            await session.exec(
+                select(SubjectRecord).where(SubjectRecord.project_id == project_pk)
+            )
+        ).all()
+        return [{"subject_id": row.subject_id} for row in rows]
+    if entity == "sample":
+        rows = (
+            await session.exec(
+                select(SampleRecord).where(SampleRecord.project_id == project_pk)
+            )
+        ).all()
+        subject_pks = [row.subject_id for row in rows if row.subject_id is not None]
+        subjects = (
+            await session.exec(
+                select(SubjectRecord).where(
+                    cast(Any, SubjectRecord.id).in_(subject_pks)
+                )
+            )
+        ).all()
+        subject_ids = {row.id: row.subject_id for row in subjects}
+        return [
+            {
+                "sample_id": row.sample_id,
+                "sample_name": row.sample_name,
+                "subject_id": subject_ids.get(row.subject_id),
+            }
+            for row in rows
+        ]
+    if entity == "run":
+        rows = (
+            await session.exec(
+                select(RunRecord).where(RunRecord.project_id == project_pk)
+            )
+        ).all()
+        analysis_types = (await session.exec(select(AnalysisTypeRecord))).all()
+        methods = (await session.exec(select(AnalysisMethodRecord))).all()
+        analysis_labels = {row.id: row.name for row in analysis_types}
+        method_labels = {row.id: row.name for row in methods}
+        return [
+            {
+                "run_id": row.run_id,
+                "name": row.name,
+                "run_kind": row.run_kind,
+                "analysis_type_id": analysis_labels.get(row.analysis_type_id),
+                "method_id": method_labels.get(row.method_id),
+                "method_version": row.method_version,
+                "status": row.status,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
+    if entity == "file":
+        rows = (
+            await session.exec(
+                select(FileRecord).where(FileRecord.project_id == project_pk)
+            )
+        ).all()
+        return [
+            {
+                "file_id": row.file_id,
+                "file_role": row.file_role,
+                "format": row.format,
+                "size_bytes": row.size_bytes,
+                "storage_location": row.storage_location,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    raise ValueError(f"Unsupported metadata entity: {entity}.")
+
+
+def _metadata_filter_matches(
+    row: Mapping[str, Any], filter_config: Mapping[str, Any]
+) -> bool:
+    """Evaluate the bounded filter vocabulary against a metadata row."""
+
+    field = str(filter_config.get("field") or "")
+    actual = row.get(field)
+    expected = filter_config.get("value")
+    operator = str(filter_config.get("operator") or "eq")
+    if operator == "eq":
+        return actual == expected
+    if operator == "ne":
+        return actual != expected
+    if operator in {"in", "not_in"}:
+        choices = expected if isinstance(expected, list) else [expected]
+        matched = actual in choices
+        return matched if operator == "in" else not matched
+    if operator == "contains":
+        return str(expected).lower() in str(actual or "").lower()
+    if actual is None or expected is None:
+        return False
+    try:
+        return {
+            "gt": actual > expected,
+            "gte": actual >= expected,
+            "lt": actual < expected,
+            "lte": actual <= expected,
+        }[operator]
+    except (KeyError, TypeError):
+        return False
+
+
+def _aggregate_metadata_rows(
+    rows: list[JsonObject], *, value: AnalysisValue
+) -> list[JsonObject]:
+    """Aggregate metadata values per matching identity when requested."""
+
+    if value.aggregation == "raw":
+        return rows
+    grouped: dict[Any, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(row.get("__linker"), []).append(row.get(value.reference))
+    aggregated: list[JsonObject] = []
+    for linker, source_values in grouped.items():
+        non_null = [item for item in source_values if item is not None]
+        if value.aggregation == "count":
+            result: Any = len(non_null)
+        elif value.aggregation == "count_distinct":
+            result = len({str(item) for item in non_null})
+        elif not non_null:
+            result = None
+        elif value.aggregation == "sum":
+            result = sum(non_null)
+        elif value.aggregation == "avg":
+            result = sum(non_null) / len(non_null)
+        elif value.aggregation == "min":
+            result = min(non_null)
+        else:
+            result = max(non_null)
+        aggregated.append({"__linker": linker, value.reference: result})
+    return aggregated
+
+
+def _unaligned_value_rows(
+    definition: InsightDefinition, value_rows: Sequence[Sequence[Mapping[str, Any]]]
+) -> tuple[list[str], list[JsonObject]]:
+    """Preserve independent distribution lengths for histogram values."""
+
+    aliases = [value.reference for value in definition.analysis.values]
+    row_count = max((len(rows) for rows in value_rows), default=0)
+    rows = [
+        {
+            alias: source_rows[index].get(alias) if index < len(source_rows) else None
+            for alias, source_rows in zip(aliases, value_rows, strict=True)
+        }
+        for index in range(row_count)
+    ]
+    return aliases, rows
+
+
+def _align_value_rows(
+    *,
+    identity: str,
+    values: Sequence[AnalysisValue],
+    value_rows: Sequence[Sequence[Mapping[str, Any]]],
+    join: str,
+) -> tuple[list[str], list[JsonObject], JsonObject]:
+    """Join values with null coverage and per-value duplicate conflict handling."""
+
+    maps: list[dict[Any, Any]] = []
+    conflicts_by_value: dict[str, set[Any]] = {}
+    key_sets: list[set[Any]] = []
+    coverage: dict[str, JsonObject] = {}
+    for value, source_rows in zip(values, value_rows, strict=True):
+        resolved: dict[Any, Any] = {}
+        conflicts: set[Any] = set()
+        for source_row in source_rows:
+            key = source_row.get("__linker")
+            if key is None:
+                continue
+            candidate = source_row.get(value.reference)
+            if key in resolved and resolved[key] != candidate:
+                conflicts.add(key)
+                resolved.pop(key, None)
+                continue
+            if key not in conflicts:
+                resolved[key] = candidate
+        maps.append(resolved)
+        conflicts_by_value[value.reference] = conflicts
+        key_sets.append(set(resolved) | conflicts)
+    union_keys = set.union(*key_sets) if key_sets else set()
+    selected_keys = (
+        set.intersection(*key_sets) if join == "inner" and key_sets else union_keys
+    )
+    aligned_rows: list[JsonObject] = []
+    for key in sorted(selected_keys, key=lambda item: str(item)):
+        row: JsonObject = {identity: key}
+        for value, resolved in zip(values, maps, strict=True):
+            row[value.reference] = (
+                None
+                if key in conflicts_by_value[value.reference]
+                else resolved.get(key)
+            )
+        aligned_rows.append(row)
+    for value, resolved in zip(values, maps, strict=True):
+        present = len(set(resolved).intersection(selected_keys))
+        coverage[value.reference] = {
+            "present": present,
+            "missing": max(len(selected_keys) - present, 0),
+            "conflicts": len(conflicts_by_value[value.reference]),
+        }
+    diagnostics: JsonObject = {
+        "join": join,
+        "matched_count": len(set.intersection(*key_sets)) if key_sets else 0,
+        "unmatched_count": (
+            len(union_keys - set.intersection(*key_sets)) if key_sets else 0
+        ),
+        "duplicate_conflict_count": sum(
+            len(items) for items in conflicts_by_value.values()
+        ),
+        "coverage": coverage,
+    }
+    return (
+        [
+            identity,
+            *[value.reference for value in values],
+        ],
+        aligned_rows,
+        diagnostics,
+    )
 
 
 async def _execute_contract_series_query(
@@ -1178,9 +1993,7 @@ async def _resolve_sample_selections(
                     await _sample_group_run_sample_pks(session, project_id, public_id)
                 )
             else:
-                raise ValueError(
-                    "Sample filter kinds must be sample or sample_group."
-                )
+                raise ValueError("Sample filter kinds must be sample or sample_group.")
         selections.append(
             SampleSelection(
                 sample_pks=frozenset(sample_pks),
@@ -1204,15 +2017,11 @@ def _sample_selection_where_sql(
         if selection.sample_pks and "sample_id" in columns:
             values = sorted(selection.sample_pks)
             parameters.extend(values)
-            alternatives.append(
-                f"sample_id IN ({', '.join('?' for _ in values)})"
-            )
+            alternatives.append(f"sample_id IN ({', '.join('?' for _ in values)})")
         if selection.run_sample_pks and "run_sample_id" in columns:
             values = sorted(selection.run_sample_pks)
             parameters.extend(values)
-            alternatives.append(
-                f"run_sample_id IN ({', '.join('?' for _ in values)})"
-            )
+            alternatives.append(f"run_sample_id IN ({', '.join('?' for _ in values)})")
         clauses.append(f"({' OR '.join(alternatives)})" if alternatives else "1 = 0")
     return clauses
 
@@ -1759,7 +2568,7 @@ async def _compile_contract_query(
         ]
         if not identity_dimensions:
             identity_dimensions = [
-                ("sample_id" if table == "sample_metrics" else "entity_id")
+                "sample_id" if table == "sample_metrics" else "entity_id"
             ]
         parameters: list[Any] = []
         select_parts = [
@@ -2064,9 +2873,7 @@ async def _compile_mixed_contract_table_query(
         source_column = (
             "__value_numeric"
             if value_column == "value_numeric"
-            else "__value_string"
-            if value_column == "value_string"
-            else "__value_json"
+            else "__value_string" if value_column == "value_string" else "__value_json"
         )
         select_parts.append(
             f"MAX(CASE WHEN __field_alias = ? THEN {source_column} END) "
@@ -2118,6 +2925,73 @@ def _unique_alias(alias: str, used_aliases: set[str]) -> str:
     return candidate
 
 
+def _render_config(config: Mapping[str, Any]) -> JsonObject:
+    """Translate version 1 view intent for private ECharts/result helpers."""
+
+    definition = _parse_insight_definition(config)
+    values = definition.analysis.values
+    view = definition.view
+    visible_ids = set(_visible_value_references(definition))
+    if isinstance(view, ScatterView):
+        bound_ids = {view.x, view.y}
+    elif isinstance(view, MetricView):
+        bound_ids = {view.value}
+    elif isinstance(view, (HistogramView, BoxplotView, CategoryChartView)):
+        bound_ids = visible_ids
+    elif isinstance(view, HeatmapView):
+        bound_ids = {view.x, view.y, view.value}
+    else:
+        bound_ids = visible_ids
+    bound_values = [value for value in values if value.reference in bound_ids]
+    series = [
+        {
+            "id": value.reference,
+            "field_id": value.reference,
+            "name": value.label or value.reference,
+            "label": value.label or value.reference,
+            "aggregation": value.aggregation,
+        }
+        for value in bound_values
+    ]
+    query: JsonObject = {}
+    if isinstance(view, ScatterView):
+        query.update({"x": view.x, "y": view.y})
+    elif isinstance(view, HistogramView):
+        query.update(
+            {"values": _visible_value_references(definition), "bins": view.bins}
+        )
+    elif isinstance(view, MetricView):
+        query["y"] = view.value
+    elif isinstance(view, (CategoryChartView, BoxplotView)):
+        category = view.category
+        if category is not None:
+            query["x"] = category
+    render: JsonObject = {
+        "analysis_grain": definition.analysis.grain,
+        "visualization": view.kind,
+        "series": series,
+        "table_columns": [
+            {
+                "field_id": value.reference,
+                "label": value.label or value.reference,
+            }
+            for value in values
+            if value.reference not in view.hidden_values
+        ],
+        "linker": {"kind": definition.analysis.match_by or definition.analysis.grain},
+        "filters": [
+            item.model_dump(mode="json") for item in definition.analysis.filters
+        ],
+        "display": view.model_dump(mode="json", exclude_none=True),
+        "query": query,
+    }
+    runtime = dict(_runtime_metadata(config))
+    runtime["series_aliases"] = [value.reference for value in bound_values]
+    if runtime:
+        _set_runtime_metadata(render, runtime)
+    return render
+
+
 def compile_insight_result(
     *,
     config: Mapping[str, Any],
@@ -2128,10 +3002,12 @@ def compile_insight_result(
     cached: bool,
     name: str = "Untitled insight",
     description: str | None = None,
-    result_policy_summary: Mapping[str, Any] | None = None,
+    row_selection: Mapping[str, Any] | None = None,
 ) -> JsonObject:
     """Compile query rows into a dashboard/report insight payload."""
 
+    public_config = config
+    config = _render_config(config) if config.get("version") == 1 else config
     visualization = str(config.get("visualization") or "table")
     row_dicts = [dict(row) for row in rows]
     column_labels = _result_column_labels(config, columns)
@@ -2142,23 +3018,27 @@ def compile_insight_result(
         "row_count": len(row_dicts),
     }
     runtime = _runtime_metadata(config)
-    result_policy = (
-        dict(result_policy_summary)
-        if result_policy_summary is not None
-        else _inline_result_policy_summary(config, len(row_dicts))
-    )
+    selection = dict(row_selection or {})
     result: JsonObject = {
         "kind": "insight_result",
+        "version": 1,
         "insight_id": insight_id,
         "name": name,
         "description": description,
-        "analysis_grain": _normalize_analysis_grain(config.get("analysis_grain")),
-        "linker": runtime.get("linker") or normalize_linker(config.get("linker")),
-        "filters": (
-            config.get("filters") if isinstance(config.get("filters"), list) else []
+        "analysis": (
+            public_config.get("analysis")
+            if isinstance(public_config.get("analysis"), Mapping)
+            else {}
         ),
-        "result_policy": result_policy,
-        "linker_diagnostics": runtime.get("linker_diagnostics")
+        "view": (
+            public_config.get("view")
+            if isinstance(public_config.get("view"), Mapping)
+            else {"kind": visualization}
+        ),
+        "row_count": len(row_dicts),
+        "total_row_count": int(selection.get("source_row_count", len(row_dicts))),
+        "diagnostics": runtime.get("value_diagnostics")
+        or runtime.get("linker_diagnostics")
         or _linker_diagnostics(
             linker_kind=str(normalize_linker(config.get("linker"))["kind"]),
             matched=len(row_dicts),
@@ -2167,10 +3047,6 @@ def compile_insight_result(
             rows_excluded=0,
         ),
         "result_selection_diagnostics": runtime.get("result_selection_diagnostics", []),
-        "visualization": visualization,
-        "display": (
-            config.get("display") if isinstance(config.get("display"), dict) else {}
-        ),
         "columns": list(columns),
         "column_labels": column_labels,
         "rows": row_dicts,
@@ -2178,6 +3054,9 @@ def compile_insight_result(
         "computed_at": computed_at.isoformat(),
         "cached": cached,
     }
+    export_artifact = selection.get("export")
+    if isinstance(export_artifact, Mapping):
+        result["export"] = dict(export_artifact)
     if visualization == "table":
         return result
     if visualization in {"metric", "stat", "number"}:
@@ -2195,6 +3074,15 @@ def _result_column_labels(
 ) -> dict[str, str]:
     """Build display labels for result columns."""
     labels: dict[str, str] = {column: column for column in columns}
+    runtime_labels = _runtime_metadata(config).get("column_labels")
+    if isinstance(runtime_labels, Mapping):
+        labels.update(
+            {
+                str(column): str(label)
+                for column, label in runtime_labels.items()
+                if str(column) in columns
+            }
+        )
     for item in _table_column_items(config):
         raw_label = item.get("label") or item.get("name")
         if not isinstance(raw_label, str) or not raw_label.strip():
@@ -2229,54 +3117,38 @@ def _identity_column_label(column: str) -> str:
     return IDENTITY_COLUMN_LABELS.get(column, column.replace("_", " ").title())
 
 
-def _apply_result_policy(
+def _apply_analysis_row_selection(
     *,
     config: Mapping[str, Any],
     columns: Sequence[str],
     rows: Sequence[Mapping[str, Any]],
     analytics_store: DuckDBAnalyticsStore,
+    export: bool,
 ) -> tuple[list[JsonObject], JsonObject]:
-    """Apply inline, sampling, and export policies to result rows."""
-    policy = normalize_result_policy(config.get("result_policy"))
-    mode = str(policy["mode"])
-    limit = int(policy["limit"])
+    """Apply random selection and the limit after the result rows are complete."""
+
+    definition = _parse_insight_definition(config)
+    limit = definition.analysis.limit
     row_dicts = [dict(row) for row in rows]
-    if mode == "all_rows" and len(row_dicts) > ALL_ROWS_INLINE_THRESHOLD:
-        raise ValueError(
-            "All rows can only be embedded below the configured response threshold. "
-            "Use Export full data for larger results."
-        )
-    if mode == "random_sample" and len(row_dicts) > limit:
-        seed = str(policy.get("seed") or "goodomics")
-        randomizer = random.Random(seed)
+    if definition.analysis.random and len(row_dicts) > limit:
+        randomizer = random.Random("goodomics")
         sampled_indices = sorted(randomizer.sample(range(len(row_dicts)), limit))
-        sampled = [row_dicts[index] for index in sampled_indices]
-        return sampled, {
-            **policy,
-            "embedded_row_count": len(sampled),
-            "source_row_count": len(row_dicts),
-            "sampled": True,
-        }
-    if mode == "export_full_data":
-        artifact = _write_plot_artifact(
-            analytics_store=analytics_store,
-            columns=columns,
-            rows=row_dicts,
-        )
-        embedded = row_dicts[:PREVIEW_DEFAULT_LIMIT]
-        return embedded, {
-            **policy,
-            "embedded_row_count": len(embedded),
-            "source_row_count": len(row_dicts),
-            "artifact": artifact,
-            "exported": True,
-        }
-    embedded = row_dicts[:limit]
-    return embedded, {
-        **policy,
-        "embedded_row_count": len(embedded),
+        selected = [row_dicts[index] for index in sampled_indices]
+    else:
+        selected = row_dicts[:limit]
+    summary: JsonObject = {
+        "limit": limit,
+        "random": definition.analysis.random,
+        "returned_row_count": len(selected),
         "source_row_count": len(row_dicts),
     }
+    if export:
+        summary["export"] = _write_plot_artifact(
+            analytics_store=analytics_store,
+            columns=columns,
+            rows=row_dicts[:EXPORT_FULL_DATA_LIMIT],
+        )
+    return selected, summary
 
 
 def _write_plot_artifact(
@@ -2297,18 +3169,6 @@ def _write_plot_artifact(
         "path": str(path),
         "format": "json",
         "row_count": len(rows),
-    }
-
-
-def _inline_result_policy_summary(
-    config: Mapping[str, Any], row_count: int
-) -> JsonObject:
-    """Describe the result policy used for inline payloads."""
-    policy = normalize_result_policy(config.get("result_policy"))
-    return {
-        **policy,
-        "embedded_row_count": row_count,
-        "source_row_count": row_count,
     }
 
 
@@ -2400,6 +3260,74 @@ def _column_is_numeric(rows: Sequence[Mapping[str, Any]], field: str) -> bool:
     """Return whether any value in a column is numeric."""
     values = [row.get(field) for row in rows if row.get(field) is not None]
     return bool(values) and all(_is_numeric_value(value) for value in values)
+
+
+def _value_sources(config: Mapping[str, Any]) -> list[JsonObject]:
+    """Return stable semantic sources referenced by a version 1 definition."""
+
+    analysis = (
+        config.get("analysis") if isinstance(config.get("analysis"), Mapping) else {}
+    )
+    raw_values = analysis.get("values") if isinstance(analysis, Mapping) else []
+    sources: list[JsonObject] = []
+    if not isinstance(raw_values, Sequence) or isinstance(raw_values, str):
+        return sources
+    for value in raw_values:
+        if not isinstance(value, Mapping):
+            continue
+        raw_field = value.get("field")
+        if not isinstance(raw_field, str):
+            continue
+        reference = parse_field_reference(raw_field)
+        if reference.kind == "contract":
+            sources.append(
+                {
+                    "kind": "data_contract",
+                    "data_contract_id": reference.contract_id,
+                }
+            )
+        else:
+            sources.append({"kind": "metadata_entity", "entity": reference.entity})
+    return list({canonical_hash(source): source for source in sources}.values())
+
+
+async def fingerprint_values(
+    *,
+    session: AsyncSession,
+    analytics_store: DuckDBAnalyticsStore,
+    project_id: str | None,
+    config: Mapping[str, Any],
+) -> str:
+    """Fingerprint all contracts and metadata entities selected as values."""
+
+    fingerprints: list[str] = []
+    for source in _value_sources(config):
+        if source["kind"] == "data_contract":
+            fingerprints.append(
+                await fingerprint_source(
+                    session=session,
+                    analytics_store=analytics_store,
+                    project_id=project_id,
+                    source=source,
+                )
+            )
+            continue
+        if project_id is None:
+            fingerprints.append(canonical_hash(source))
+            continue
+        project_pk = await _project_pk(session, project_id)
+        entity = str(source["entity"])
+        rows = (
+            await _metadata_entity_rows(
+                session=session,
+                project_pk=project_pk,
+                entity=entity,
+            )
+            if project_pk is not None
+            else []
+        )
+        fingerprints.append(canonical_hash({"source": source, "rows": rows}))
+    return canonical_hash({"values": fingerprints})
 
 
 async def fingerprint_source(
@@ -2895,18 +3823,15 @@ async def _get_contract_record(
         project_pk = await _project_pk(session, project_id)
         if project_pk is None:
             return None
-        if project_id == DEFAULT_PROJECT_ID:
-            contract_project_id = cast(Any, DataContractRecord.project_id)
-            statement = statement.where(
-                or_(
-                    contract_project_id == project_pk,
-                    contract_project_id.is_(None),
-                )
+        contract_project_id = cast(Any, DataContractRecord.project_id)
+        statement = statement.where(
+            or_(
+                contract_project_id == project_pk,
+                contract_project_id.is_(None),
             )
-        else:
-            statement = statement.where(DataContractRecord.project_id == project_pk)
+        )
     rows = list((await session.exec(statement)).all())
-    if project_id == DEFAULT_PROJECT_ID:
+    if project_id is not None:
         for row in rows:
             if row.project_id == project_pk:
                 return row

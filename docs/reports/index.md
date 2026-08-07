@@ -1,103 +1,66 @@
 # Insights and reports
 
-An **insight** is one reusable analysis: a table, metric, or chart backed by a
-declarative configuration. A **report** arranges saved insights into a layout
-and can execute or render them as one result.
+An **insight** is one reusable analysis. A **report** arranges saved insights in a validated grid and can
+execute or render them as one result.
 
-The builder follows this conceptual workflow:
+The builder follows this workflow:
 
-1. **Analyze by**: choose the public grain—sample, subject, run, feature,
+1. **Analyze by** selects the public grain: sample, subject, run, feature,
    variant, or file.
-2. **Context**: optionally restrict the analysis to samples or a saved sample
-   group.
-3. **Choose data**: select one or more fields grouped under their data
-   contracts.
-4. **Results from**: decide which produced result occurrence to use for every
-   field or series.
-5. **Matched by**: select the biological or computational identity that aligns
-   multiple series.
-6. **View as**: choose a compatible table, metric, or chart.
+2. **Add series**, **Add fields**, or **Add columns** opens one searchable field
+   picker. **Results** contains analysis measurements grouped by their friendly
+   source name; **Metadata** contains approved subject, sample, run, and file
+   fields. Both add entries to one ordered `analysis.values` list.
+3. **Results from** optionally changes the occurrence scope of each contract
+   value.
+4. **Matched by** controls how independently resolved values are joined.
+5. **View as** presents the same ordered values as a table, metric, or chart.
+   Drag values to set their shared order, use the eye control to add them to
+   `view.hidden_values`, and configure only required chart roles such as axes or
+   category.
+6. **Settings** configures the selected visualization and completed result-row
+   limit. Clicking a selected field opens its aggregation,
+   filters, label, and result-scope controls.
 
 The dashboard, API, report renderer, and AI-assisted drafting use the same
-server-owned capabilities and config grammar. Chart configs describe Goodomics
-intent; ECharts options are compiled output rather than the primary authoring
-format.
+server-owned capabilities and definition grammar. Saved insights do not accept
+physical table names or freeform SQL. The standalone database browser remains
+available for database inspection.
 
-## Saved versus ad hoc insights
+## Saved and ad hoc insights
 
-An ad hoc insight is a flat definition sent directly to
-`POST /api/v1/insights/execute`. It is useful for previews, notebooks, and code
-that does not need a durable builder object.
+Send a complete definition to `POST /api/v1/insights/execute` for an ad hoc
+preview. Save it with `POST /api/v1/insights` to give it a stable ID and make it
+available to reports. Executable changes archive the previous JSON definition;
+metadata-only changes do not create a revision.
 
-A saved insight stores its stable ID, project, name, and description in indexed
-SQL columns and its executable fields in a JSON column. Updating the executable
-fields archives the previous definition as an immutable analytical revision;
-creation and metadata-only changes do not add revisions. Saved insights can be
-exported as flat YAML or JSON documents and referenced by reports.
-
-Saved insight configs are dynamic: the default result resolver can select newer
-compatible results when data arrives. An executed result includes the exact
-run-contract and run-sample IDs that were selected, so the result remains
-explainable.
+Saved definitions remain dynamic. Each execution resolves current compatible
+contract occurrences, while result diagnostics and rendered snapshots record
+the exact resolved occurrences.
 
 ## Reports compose insights
 
-A saved report config primarily contains ordered layout items:
+Each saved insight may appear once in a report. Its public ID is also its grid
+identity:
 
 ```yaml
 version: 1
-layout:
-  columns: 12
-items:
-  - insight_id: mapping-rate
-    x: 0
-    y: 0
-    w: 6
-    h: 4
-  - insight_id: gc-distribution
-    x: 6
-    y: 0
-    w: 6
-    h: 4
+name: RNA-seq QC
+layout: { columns: 12, row_height: 64 }
+insights:
+  - id: mapping-rate
+    layout: { x: 0, y: 0, width: 12, height: 4 }
+refresh_policy: { mode: manual }
 ```
 
-During execution, Goodomics loads those insights in item order. Report-level
-`linker` and `result_policy` values are inherited only when an
-insight does not define its own value. Report filters are prepended to each
-insight's filters.
+The server validates every dependency, project boundary, permission, filter,
+and layout bound before saving. Report filters narrow insight filters; they do
+not replace an insight's grain, values, aggregation, matching, or result scope.
 
-The structured report result contains the normalized report definition as flat
-top-level fields plus each compiled insight result. Rendering produces HTML and
-can persist the snapshot in `rendered_reports`.
+## Learn more
 
-## Result selection is explicit
-
-The same contract can be produced by many runs and method versions. Each
-series or table column can therefore define a `result_scope`. Sample-based
-analysis defaults to the latest successful compatible result per sample. Run
-analysis defaults to all eligible runs.
-
-Execution diagnostics report:
-
-- resolved run-contract and run-sample IDs;
-- excluded failed and incompatible results;
-- represented methods and versions;
-- missing samples and superseded occurrences;
-- observed versus profiled-empty availability;
-- mixed-version warnings;
-- matched, unmatched, and conflicting linker values.
-
-These diagnostics are part of the result payload and should be shown to users
-instead of hiding selection decisions behind a chart.
-
-## Choose the next guide
-
-- [Use insights and reports from Python](python-api.md) shows the user workflow
-  for discovering fields, validating configs, executing insights, and
-  composing reports.
-- [Configuration reference](configuration.md) documents the insight and report
-  config structures.
-- [Compilation and execution](execution.md) describes the backend resolver,
-  query compiler, result compiler, caching, and rendering path.
-- [Report templates and rendering](report-templates.md) explains portable
-  exports and the difference between saved-report and standalone CLI rendering.
+- [Insight configuration](insight-configuration.md)
+- [Report configuration](report-configuration.md)
+- [Compilation and execution](execution.md)
+- [Use the JSON API from Python](python-api.md)
+- [Report documents and rendering](report-templates.md)

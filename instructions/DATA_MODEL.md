@@ -23,6 +23,9 @@ The guiding identity rule:
   them before analytical writes.
 - User/API/ingest boundaries may accept readable labels, then resolve them to
   integer IDs before writing analytical rows.
+- Data-contract IDs and contract-field IDs cannot contain `/`. Insight values
+  use that reserved separator in canonical `<contract>/<field>` references.
+  Human-readable names and display labels have no such restriction.
 
 ## Core Relationship Model
 
@@ -550,8 +553,9 @@ Recommended physical layouts:
 | `sample_metrics`                  | `data_contract_id, run_id, run_sample_id, field_id, source_observation_id`        | Canonical table and fast run/sample detail queries        |
 | `sample_metric_numeric_by_metric` | `data_contract_id, field_id, source_observation_id, value_numeric, run_sample_id` | Derived table for numeric scans, distributions, and top-N |
 
-Keep direct table/SQL access available as an advanced mode, but use contracts and
-fields as the default report, insight, dashboard, and MCP query surface.
+Saved insights and reports use contract fields plus the server-owned metadata
+fields. They never accept physical table names or freeform SQL. Keep the
+standalone database browser as a separate inspection surface.
 
 ### `features`
 

@@ -300,9 +300,9 @@ async def _write_saved_report_operation(
             raise typer.BadParameter(f"Saved report not found: {report_name}")
         project_id = project or saved_report.project_id or DEFAULT_PROJECT_ID
         insight_ids = [
-            item["insight_id"]
-            for item in saved_report.config.get("items", [])
-            if isinstance(item, dict) and isinstance(item.get("insight_id"), str)
+            insight["id"]
+            for insight in saved_report.config.get("insights", [])
+            if isinstance(insight, dict) and isinstance(insight.get("id"), str)
         ]
         insights = (
             await session.exec(

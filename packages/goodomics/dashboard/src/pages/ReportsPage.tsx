@@ -27,6 +27,7 @@ import {
   listReports,
   listSampleGroups,
   patchReport,
+  validateReportConfig,
   type InsightSummary,
   type ReportSummary,
   type SavedReport,
@@ -36,9 +37,10 @@ import { InsightListTable } from "../components/reports/InsightListTable";
 import { InsightPreview } from "../components/reports/InsightPreview";
 import { ReportListTable } from "../components/reports/ReportListTable";
 import {
-  readReportItems,
-  type ReportItem,
+  readReportInsights,
+  type ReportInsight,
 } from "../components/reports/reportUtils";
+import { reportDefinitionSchema } from "../lib/insightSchemas";
 import {
   AsyncBlock,
   Button,
@@ -104,7 +106,7 @@ export function ReportsPage({
   });
   const mode: ReportMode = target.mode === "list" ? "list" : "detail";
   const isNewReport = target.mode === "new";
-  const canSaveReport = isNewReport ? true : can("report.edit", projectId);
+  const maySaveReport = isNewReport ? true : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
   const selectedReportSummary = reports.data?.find(
@@ -134,7 +136,41 @@ export function ReportsPage({
   const [description, setDescription] = useState("");
   const [sampleGroupId, setSampleGroupId] = useState("");
   const [sampleIdsInput, setSampleIdsInput] = useState("");
-  const [items, setItems] = useState<ReportItem[]>([]);
+  const [rowLimit, setRowLimit] = useState<number | undefined>();
+  const [randomRows, setRandomRows] = useState<boolean | undefined>();
+  const [reportInsights, setReportInsights] = useState<ReportInsight[]>([]);
+  const reportDefinition = useMemo(
+    () => ({
+      version: 1 as const,
+      name,
+      description,
+      layout: { columns: 12, row_height: 64 },
+      insights: reportInsights,
+      filters: buildReportFilters({ sampleIdsInput, sampleGroupId }),
+      limit: rowLimit,
+      random: randomRows,
+      refresh_policy: { mode: "manual" as const },
+    }),
+    [
+      description,
+      name,
+      randomRows,
+      reportInsights,
+      rowLimit,
+      sampleGroupId,
+      sampleIdsInput,
+    ],
+  );
+  const parsedReportDefinition =
+    reportDefinitionSchema.safeParse(reportDefinition);
+  const serverValidation = useQuery({
+    queryKey: ["report-validation", projectId, reportDefinition],
+    queryFn: () =>
+      validateReportConfig({ ...reportDefinition, project_id: projectId }),
+    enabled: parsedReportDefinition.success,
+    retry: false,
+  });
+  const canSaveReport = maySaveReport && serverValidation.data?.valid === true;
 
   useEffect(() => {
     if (isNewReport) {
@@ -142,7 +178,9 @@ export function ReportsPage({
       setDescription("");
       setSampleGroupId("");
       setSampleIdsInput("");
-      setItems([]);
+      setRowLimit(undefined);
+      setRandomRows(undefined);
+      setReportInsights([]);
       setEditMode(true);
       return;
     }
@@ -152,7 +190,9 @@ export function ReportsPage({
     const selection = readReportSampleFilter(selectedReport.filters);
     setSampleGroupId(selection.sampleGroupId);
     setSampleIdsInput(selection.sampleIds.join(", "));
-    setItems(readReportItems(selectedReport));
+    setRowLimit(selectedReport.limit ?? undefined);
+    setRandomRows(selectedReport.random ?? undefined);
+    setReportInsights(readReportInsights(selectedReport));
     setEditMode(target.mode === "edit");
   }, [isNewReport, selectedReport, target.mode]);
 
@@ -164,21 +204,14 @@ export function ReportsPage({
   });
   const saveReport = useMutation({
     mutationFn: async (continueEditing: boolean) => {
-      const config = {
-        version: 1,
-        layout: { columns: 12 },
-        items,
-        filters: buildReportFilters({ sampleIdsInput, sampleGroupId }),
-        refresh_policy: { mode: "manual" },
-      };
+      const config = reportDefinition;
       if (selectedReportId) {
-        return patchReport(selectedReportId, { ...config, name, description });
+        return patchReport(selectedReportId, config);
       }
+
       return createReport({
         ...config,
         project_id: projectId,
-        name,
-        description,
       });
     },
     onSuccess: (saved, continueEditing) => {
@@ -202,31 +235,36 @@ export function ReportsPage({
   });
   const layout = useMemo<Layout>(
     () =>
-      items.map((item) => ({
-        i: item.insight_id,
-        x: item.x,
-        y: item.y,
-        w: item.w,
-        h: item.h,
+      reportInsights.map((insight) => ({
+        i: insight.id,
+        x: insight.layout.x,
+        y: insight.layout.y,
+        w: insight.layout.width,
+        h: insight.layout.height,
         minW: 3,
         minH: 3,
         static: !editMode,
         isDraggable: editMode,
         isResizable: editMode,
       })),
-    [editMode, items],
+    [editMode, reportInsights],
   );
-  const insightResults = Array.isArray(result.data?.insights)
-    ? result.data.insights
-    : [];
-  const insightById = new Map(
-    insightResults
-      .filter(isRecord)
-      .map((item) => [String(item.insight_id ?? ""), item] as const),
-  );
+
+  const insightById = useMemo(() => {
+    const insightResults = Array.isArray(result.data?.insights)
+      ? result.data.insights
+      : [];
+    return new Map(
+      insightResults
+        .filter(isRecord)
+        .filter((insight) => isRecord(insight.result))
+        .map((insight) => [String(insight.id ?? ""), insight.result] as const),
+    );
+  }, [result.data]);
+
   const selectedInsightIds = useMemo(
-    () => new Set(items.map((item) => item.insight_id)),
-    [items],
+    () => new Set(reportInsights.map((insight) => insight.id)),
+    [reportInsights],
   );
 
   if (mode === "list") {
@@ -293,6 +331,7 @@ export function ReportsPage({
           description={description}
           isSaving={saveReport.isPending}
           canSave={canSaveReport}
+          showSave={maySaveReport}
           name={name}
           onBack={() => {
             window.location.href = selectedReport?.url_slug
@@ -339,6 +378,15 @@ export function ReportsPage({
           role="alert"
         >
           {saveReport.error.message}
+        </div>
+      ) : null}
+
+      {serverValidation.data && !serverValidation.data.valid ? (
+        <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-sm text-[#b42318]">
+          {String(
+            serverValidation.data.messages[0]?.message ??
+              "Report validation failed.",
+          )}
         </div>
       ) : null}
 
@@ -390,12 +438,12 @@ export function ReportsPage({
                         <InsightListTable
                           insights={filterInsights(data, addSearch)}
                           selectedInsightIds={selectedInsightIds}
-                          onAdd={(insight) =>
-                            setItems((current) => {
+                          onAdd={(insight) => {
+                            setReportInsights((current) => {
                               if (
                                 current.some(
-                                  (item) =>
-                                    item.insight_id === insight.insight_id,
+                                  (candidate) =>
+                                    candidate.id === insight.insight_id,
                                 )
                               ) {
                                 return current;
@@ -403,15 +451,17 @@ export function ReportsPage({
                               return [
                                 ...current,
                                 {
-                                  insight_id: insight.insight_id,
-                                  x: 0,
-                                  y: Infinity,
-                                  w: 6,
-                                  h: 5,
+                                  id: insight.insight_id,
+                                  layout: {
+                                    x: 0,
+                                    y: current.length * 5,
+                                    width: 6,
+                                    height: 5,
+                                  },
                                 },
                               ];
-                            })
-                          }
+                            });
+                          }}
                         />
                       </div>
                     )}
@@ -451,7 +501,7 @@ export function ReportsPage({
               <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
                 {(result.error as Error).message}
               </div>
-            ) : items.length === 0 ? (
+            ) : reportInsights.length === 0 ? (
               <div className="grid min-h-[360px] place-items-center rounded-lg border border-dashed border-[#cfd8e3] bg-white text-sm text-[#657082]">
                 Add saved insights to build this report.
               </div>
@@ -472,45 +522,47 @@ export function ReportsPage({
                 layout={layout}
                 onLayoutChange={(nextLayout) => {
                   if (!editMode) return;
-                  setItems((current) =>
-                    current.map((item) => {
+                  setReportInsights((current) =>
+                    current.map((insight) => {
                       const next = nextLayout.find(
-                        (layoutItem) => layoutItem.i === item.insight_id,
+                        (layoutItem) => layoutItem.i === insight.id,
                       );
                       return next
                         ? {
-                            ...item,
-                            x: next.x,
-                            y: next.y,
-                            w: next.w,
-                            h: next.h,
+                            ...insight,
+                            layout: {
+                              x: next.x,
+                              y: next.y,
+                              width: next.w,
+                              height: next.h,
+                            },
                           }
-                        : item;
+                        : insight;
                     }),
                   );
                 }}
                 resizeConfig={{ enabled: editMode, handles: ["se", "e", "s"] }}
                 width={1120}
               >
-                {items.map((item) => (
-                  <div className="report-card" key={item.insight_id}>
+                {reportInsights.map((reportInsight) => (
+                  <div className="report-card" key={reportInsight.id}>
                     <div className="report-card-header flex items-center justify-between gap-2 border-b border-[#dce3eb] px-3 py-2">
                       <span className="report-card-drag-handle min-w-0 flex-1 truncate text-sm font-semibold">
-                        {insightTitle(insights.data ?? [], item.insight_id)}
+                        {insightTitle(insights.data ?? [], reportInsight.id)}
                       </span>
                       <InsightCardMenu
                         insightRef={
                           insights.data?.find(
-                            (insight) => insight.insight_id === item.insight_id,
-                          )?.url_slug ?? item.insight_id
+                            (insight) =>
+                              insight.insight_id === reportInsight.id,
+                          )?.url_slug ?? reportInsight.id
                         }
                         projectId={projectId}
                         onRefresh={() => void result.refetch()}
                         onRemove={() =>
-                          setItems((current) =>
+                          setReportInsights((current) =>
                             current.filter(
-                              (candidate) =>
-                                candidate.insight_id !== item.insight_id,
+                              (candidate) => candidate.id !== reportInsight.id,
                             ),
                           )
                         }
@@ -518,7 +570,7 @@ export function ReportsPage({
                     </div>
                     <div className="h-[calc(100%-42px)] min-h-0 p-3">
                       <InsightPreview
-                        result={insightById.get(item.insight_id)}
+                        result={insightById.get(reportInsight.id)}
                       />
                     </div>
                   </div>
@@ -537,6 +589,7 @@ function ReportBuilderHeader({
   description,
   isSaving,
   canSave,
+  showSave,
   onBack,
   onDescriptionChange,
   onSave,
@@ -547,6 +600,7 @@ function ReportBuilderHeader({
   description: string;
   isSaving: boolean;
   canSave: boolean;
+  showSave: boolean;
   onBack: () => void;
   onDescriptionChange: (value: string) => void;
   onSave: () => void;
@@ -588,11 +642,11 @@ function ReportBuilderHeader({
             </>
           )}
         </Button>
-        {canSave && (
+        {showSave && (
           <div className="flex overflow-hidden rounded-lg shadow-sm">
             <Button
               className="rounded-r-none"
-              disabled={isSaving}
+              disabled={!canSave || isSaving}
               onClick={onSave}
             >
               <Save className="h-4 w-4" /> Save
@@ -602,7 +656,7 @@ function ReportBuilderHeader({
                 <Button
                   aria-label="Save options"
                   className="rounded-l-none border-l border-[#16864f] px-2.5"
-                  disabled={isSaving}
+                  disabled={!canSave || isSaving}
                 >
                   <ChevronDown className="h-4 w-4" />
                 </Button>
@@ -858,7 +912,9 @@ function buildReportFilters({
     ...sampleIds.map((id) => ({ kind: "sample", id })),
     ...(sampleGroupId ? [{ kind: "sample_group", id: sampleGroupId }] : []),
   ];
-  return value.length ? [{ field: "sample", operator: "in", value }] : [];
+  return value.length
+    ? [{ field: "sample", operator: "in" as const, value }]
+    : [];
 }
 
 // reads the report filters and returns the sample IDs and sample group ID

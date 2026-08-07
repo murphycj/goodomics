@@ -7,6 +7,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import Field
 
+from goodomics.schemas.field_references import FieldReferenceSegment
 from goodomics.schemas.models import (
     DataContract,
     DataContractField,
@@ -18,7 +19,7 @@ from goodomics.schemas.models import (
 class DataContractFieldSpec(GoodomicsModel):
     """Declarative field definition nested under a data contract spec."""
 
-    field_id: str
+    field_id: FieldReferenceSegment
     field_role: str = "metric"
     entity_scope: str | None = None
     display_name: str
@@ -56,7 +57,7 @@ class DataContractFieldSpec(GoodomicsModel):
 class DataContractSpec(GoodomicsModel):
     """Declarative form of one built-in data contract."""
 
-    data_contract_id: str
+    data_contract_id: FieldReferenceSegment
     name: str
     data_type: str
     producer_tool: str | None = None

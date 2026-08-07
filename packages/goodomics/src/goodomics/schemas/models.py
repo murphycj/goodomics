@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from goodomics.schemas.field_references import FieldReferenceSegment
+
 JsonObject = dict[str, Any]
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
@@ -124,7 +126,7 @@ class RunRelationship(GoodomicsModel):
 class DataContract(GoodomicsModel):
     """Describes a stable semantic analytical data layer."""
 
-    data_contract_id: str
+    data_contract_id: FieldReferenceSegment
     project_id: str | None = None
     name: str
     data_type: str
@@ -145,7 +147,7 @@ class DataContract(GoodomicsModel):
 class DataContractAnalysisType(GoodomicsModel):
     """Declares that a stable contract is compatible with an analysis type."""
 
-    data_contract_id: str
+    data_contract_id: FieldReferenceSegment
     analysis_type_id: str
 
 
@@ -154,7 +156,7 @@ class RunContract(GoodomicsModel):
 
     run_contract_id: str
     run_id: str
-    data_contract_id: str
+    data_contract_id: FieldReferenceSegment
     producer_method_id: str | None = None
     producer_version: str | None = None
     reference_context_json: JsonObject = Field(default_factory=dict)
@@ -177,8 +179,8 @@ class RunContractSample(GoodomicsModel):
 class DataContractField(GoodomicsModel):
     """Queryable field exposed by a semantic data contract."""
 
-    data_contract_id: str
-    field_id: str
+    data_contract_id: FieldReferenceSegment
+    field_id: FieldReferenceSegment
     field_role: str = "metric"
     entity_scope: str | None = None
     display_name: str
@@ -239,7 +241,7 @@ class FileLink(GoodomicsModel):
     run_id: str | None = None
     run_sample_id: str | None = None
     sample_id: str | None = None
-    data_contract_id: str | None = None
+    data_contract_id: FieldReferenceSegment | None = None
     link_role: str
 
 

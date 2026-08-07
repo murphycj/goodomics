@@ -76,11 +76,15 @@ def render_report_result(result: dict[str, Any]) -> str:
     )
 
 
-def _render_insight_block(result: Any) -> str:
+def _render_insight_block(report_insight: Any) -> str:
+    if not isinstance(report_insight, dict):
+        return ""
+    result = report_insight.get("result")
     if not isinstance(result, dict):
         return ""
     name = escape(str(result.get("name") or "Untitled insight"))
-    visualization = str(result.get("visualization") or "table")
+    view = result.get("view")
+    visualization = str(view.get("kind") if isinstance(view, dict) else "table")
     class_name = "insight insight-wide" if visualization == "table" else "insight"
     body = (
         _render_metric(result)
