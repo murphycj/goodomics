@@ -5,6 +5,15 @@ Install the development dependencies from the repository root:
 
 ```bash
 uv sync --all-packages --group dev
+uv run pre-commit install
+```
+
+The pre-commit hook runs Ruff lint fixes and formatting on staged Python files.
+If Ruff updates a file during a commit, review and stage the formatting change,
+then commit again. To check the entire repository at any time, run:
+
+```bash
+uv run pre-commit run --all-files
 ```
 
 ## Work with the Python packages
@@ -60,6 +69,7 @@ Run the relevant checks before opening a pull request:
 
 ```bash
 uv run pytest
+uv run ruff format --check .
 uv run ruff check .
 uv run pyright
 uv run python -m build packages/goodomics
