@@ -92,7 +92,7 @@ StoreName = Literal["metadata", "analytics"]
 # Version 1 values support one shared aggregation vocabulary. Physical SQL and
 # tables remain implementation details and are never accepted by public models.
 AGGREGATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
-RESULT_FORMAT_VERSION = 12
+RESULT_FORMAT_VERSION = 13
 OPERATORS = {
     "eq": "=",
     "=": "=",
@@ -2873,7 +2873,9 @@ async def _compile_mixed_contract_table_query(
         source_column = (
             "__value_numeric"
             if value_column == "value_numeric"
-            else "__value_string" if value_column == "value_string" else "__value_json"
+            else "__value_string"
+            if value_column == "value_string"
+            else "__value_json"
         )
         select_parts.append(
             f"MAX(CASE WHEN __field_alias = ? THEN {source_column} END) "
@@ -2947,8 +2949,8 @@ def _render_config(config: Mapping[str, Any]) -> JsonObject:
         {
             "id": value.reference,
             "field_id": value.reference,
-            "name": value.label or value.reference,
-            "label": value.label or value.reference,
+            "name": _value_display_label(config, value),
+            "label": _value_display_label(config, value),
             "aggregation": value.aggregation,
         }
         for value in bound_values
@@ -2973,7 +2975,7 @@ def _render_config(config: Mapping[str, Any]) -> JsonObject:
         "table_columns": [
             {
                 "field_id": value.reference,
-                "label": value.label or value.reference,
+                "label": _value_display_label(config, value),
             }
             for value in values
             if value.reference not in view.hidden_values
@@ -2990,6 +2992,19 @@ def _render_config(config: Mapping[str, Any]) -> JsonObject:
     if runtime:
         _set_runtime_metadata(render, runtime)
     return render
+
+
+def _value_display_label(config: Mapping[str, Any], value: AnalysisValue) -> str:
+    """Return an authored or resolved human-readable label for a value."""
+
+    if value.label:
+        return value.label
+    runtime_labels = _runtime_metadata(config).get("column_labels")
+    if isinstance(runtime_labels, Mapping):
+        resolved = runtime_labels.get(value.reference)
+        if isinstance(resolved, str) and resolved.strip():
+            return resolved.strip()
+    return value.reference
 
 
 def compile_insight_result(

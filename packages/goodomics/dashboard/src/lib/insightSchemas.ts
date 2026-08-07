@@ -104,7 +104,7 @@ const axisSchema = z
   .strict();
 
 const colorsSchema = z.record(z.string(), z.string()).default({});
-const hiddenValuesSchema = z.array(safeId).default([]);
+const hiddenValuesSchema = z.array(z.string().min(1)).default([]);
 const tableViewSchema = z
   .object({
     kind: z.literal("table"),

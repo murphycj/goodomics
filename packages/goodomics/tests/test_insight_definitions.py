@@ -393,6 +393,11 @@ def test_metadata_only_insight_is_project_scoped(
         "metadata/run/name",
         "metadata/run/status",
     ]
+    assert payload["column_labels"] == {
+        "run_id": "Run",
+        "metadata/run/name": "Run name",
+        "metadata/run/status": "Status",
+    }
     assert {row["run_id"] for row in payload["rows"]} == {"alpha-run"}
 
 

@@ -1106,6 +1106,10 @@ def test_contract_series_charts_match_metadata_field_ids(
     ]
     assert table_result["analysis"]["grain"] == "sample"
     assert table_result["columns"] == ["sample_id", "percent_mapped"]
+    assert table_result["column_labels"] == {
+        "sample_id": "Sample",
+        "percent_mapped": "Percent mapped",
+    }
     assert isinstance(table_result["rows"][0]["percent_mapped"], float)
 
     assert histogram_response.status_code == 200
@@ -1116,6 +1120,7 @@ def test_contract_series_charts_match_metadata_field_ids(
         histogram_result["rows"][0]["percent_mapped"]
         == table_result["rows"][0]["percent_mapped"]
     )
+    assert histogram_result["echarts_options"]["series"][0]["name"] == "Percent mapped"
     assert histogram_result["echarts_options"]["series"][0]["data"]
 
 
