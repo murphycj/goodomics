@@ -36,7 +36,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import ConfigDict, Field, StringConstraints
 from sqlalchemy import func, or_
 from sqlmodel import SQLModel, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -51,7 +51,26 @@ from goodomics.projects import (
     validate_project_slug,
 )
 from goodomics.report.html import render_report, render_report_result
+from goodomics.schemas.base import BaseModel
 from goodomics.schemas.field_references import parse_field_reference
+from goodomics.schemas.insights import (
+    RESULT_LIMIT_MAX,
+    AnalysisConfig,
+    GridLayout,
+    InsightFilter,
+    InsightView,
+    RefreshPolicy,
+    ReportInsight,
+    ReportInsightLayout,
+    SavedInsightCreate,
+    SavedInsightPatch,
+    SavedInsightRead,
+    SavedInsightSummary,
+    SavedReportCreate,
+    SavedReportPatch,
+    SavedReportRead,
+    SavedReportSummary,
+)
 from goodomics.schemas.models import Run, RunSample, Sample
 from goodomics.server.ai import (
     AIProviderNotConfigured,
@@ -78,15 +97,6 @@ from goodomics.server.db.models import (
     ReportRevisionRecord,
 )
 from goodomics.server.insight_capabilities import insight_capabilities
-from goodomics.server.insight_models import (
-    RESULT_LIMIT_MAX,
-    AnalysisConfig,
-    GridLayout,
-    InsightFilter,
-    InsightView,
-    RefreshPolicy,
-    ReportInsight,
-)
 from goodomics.server.insights import (
     execute_insight,
     execute_report,
@@ -318,202 +328,6 @@ class FileRead(BaseModel):
     created_at: datetime | None = None
 
 
-class SavedInsightCreate(BaseModel):
-    """Flat payload for creating a saved insight."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal[1]
-    insight_id: str | None = None
-    project_id: str | None = None
-    name: str
-    description: str | None = None
-    analysis: AnalysisConfig
-    view: InsightView
-
-    def executable_fields(self) -> dict[str, JsonValue]:
-        """Return the complete executable version 1 definition."""
-
-        return cast(
-            dict[str, JsonValue],
-            self.model_dump(
-                include={"version", "analysis", "view"},
-                exclude_none=True,
-                mode="json",
-                by_alias=True,
-            ),
-        )
-
-
-class SavedInsightPatch(BaseModel):
-    """Flat fields that can be patched on an existing saved insight."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = None
-    description: str | None = None
-    version: Literal[1] | None = None
-    analysis: AnalysisConfig | None = None
-    view: InsightView | None = None
-
-    def executable_fields(self) -> dict[str, JsonValue]:
-        """Return executable fields explicitly present in this patch."""
-
-        return cast(
-            dict[str, JsonValue],
-            self.model_dump(
-                include={"version", "analysis", "view"},
-                exclude_unset=True,
-                mode="json",
-                by_alias=True,
-            ),
-        )
-
-
-class SavedInsightMetadata(BaseModel):
-    """Shared persisted insight metadata."""
-
-    insight_id: str
-    url_slug: str
-    project_id: str | None = None
-    name: str
-    description: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class SavedInsightSummary(SavedInsightMetadata):
-    """Lightweight insight row returned by list endpoints."""
-
-    view_kind: str
-    sources: list[str]
-
-
-class SavedInsightRead(SavedInsightMetadata):
-    """Saved insight metadata plus its flat executable definition."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal[1]
-    analysis: AnalysisConfig
-    view: InsightView
-
-
-class SavedReportCreate(BaseModel):
-    """Flat payload for creating a saved report."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal[1]
-    project_id: str | None = None
-    name: NonBlankName
-    description: str | None = None
-    filters: list[InsightFilter] = Field(default_factory=list)
-    limit: int | None = Field(default=None, ge=1, le=RESULT_LIMIT_MAX)
-    random: bool | None = None
-    layout: GridLayout = Field(default_factory=GridLayout)
-    insights: list[ReportInsight] = Field(min_length=1)
-    refresh_policy: RefreshPolicy = Field(default_factory=RefreshPolicy)
-
-    def executable_fields(self) -> dict[str, JsonValue]:
-        """Return the complete executable report definition."""
-
-        return cast(
-            dict[str, JsonValue],
-            self.model_dump(
-                include={
-                    "version",
-                    "filters",
-                    "limit",
-                    "random",
-                    "layout",
-                    "insights",
-                    "refresh_policy",
-                },
-                exclude_none=True,
-                mode="json",
-            ),
-        )
-
-
-class SavedReportPatch(BaseModel):
-    """Flat fields that can be patched on an existing saved report."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: NonBlankName | None = None
-    description: str | None = None
-    version: Literal[1] | None = None
-    filters: list[InsightFilter] | None = None
-    limit: int | None = Field(default=None, ge=1, le=RESULT_LIMIT_MAX)
-    random: bool | None = None
-    layout: GridLayout | None = None
-    insights: list[ReportInsight] | None = Field(default=None, min_length=1)
-    refresh_policy: RefreshPolicy | None = None
-
-    def executable_fields(self) -> dict[str, JsonValue]:
-        """Return executable report fields explicitly present in this patch."""
-
-        return cast(
-            dict[str, JsonValue],
-            self.model_dump(
-                include={
-                    "version",
-                    "filters",
-                    "limit",
-                    "random",
-                    "layout",
-                    "insights",
-                    "refresh_policy",
-                },
-                exclude_unset=True,
-                mode="json",
-            ),
-        )
-
-    @field_validator("name")
-    @classmethod
-    def reject_empty_name(cls, value: str | None) -> str | None:
-        """Reject attempts to clear an existing report name."""
-
-        if value is None:
-            raise ValueError("Report name cannot be cleared.")
-        return value
-
-
-class SavedReportMetadata(BaseModel):
-    """Shared persisted report metadata."""
-
-    report_id: str
-    url_slug: str
-    project_id: str | None = None
-    name: str
-    description: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class SavedReportSummary(SavedReportMetadata):
-    """Lightweight report row returned by list endpoints."""
-
-    insight_count: int
-    insight_ids: list[str]
-
-
-class SavedReportRead(SavedReportMetadata):
-    """Saved report metadata plus its flat executable definition."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal[1]
-    filters: list[InsightFilter]
-    limit: int | None = None
-    random: bool | None = None
-    layout: GridLayout
-    insights: list[ReportInsight] = Field(min_length=1)
-    refresh_policy: RefreshPolicy
-
-
 class ReportRenderRequest(BaseModel):
     """Payload for rendering a saved or standalone HTML report."""
 
@@ -635,10 +449,30 @@ class InsightResultRead(BaseModel):
     result: dict[str, JsonValue]
 
 
+class ReportInsightResultRead(BaseModel):
+    """One positioned insight result inside an executed report."""
+
+    id: str
+    layout: ReportInsightLayout
+    result: dict[str, JsonValue]
+
+
+class ReportResultPayloadRead(BaseModel):
+    """Stable executed-report metadata with dynamic per-insight results."""
+
+    kind: Literal["report_result"]
+    report_id: str
+    name: str
+    description: str | None = None
+    insights: list[ReportInsightResultRead]
+    computed_at: datetime
+    cached: bool
+
+
 class ReportResultRead(BaseModel):
     """Envelope for an executed report result payload."""
 
-    result: dict[str, JsonValue]
+    result: ReportResultPayloadRead
 
 
 class InsightValidationRequest(BaseModel):
@@ -675,6 +509,26 @@ class InsightValidationRead(BaseModel):
     normalized_definition: dict[str, JsonValue]
     explanation: str
     capabilities_version: int = 1
+
+
+class InsightResultRowsRead(BaseModel):
+    """Result-row limits advertised to the insight builder."""
+
+    default_limit: int
+    max_limit: int
+    random_supported: bool
+
+
+class InsightCapabilitiesRead(BaseModel):
+    """Server-owned structural capabilities for insight builder controls."""
+
+    version: Literal[1]
+    analysis_grains: list[dict[str, JsonValue]]
+    templates: list[dict[str, JsonValue]]
+    charts: list[dict[str, JsonValue]]
+    metadata_fields: list[dict[str, JsonValue]]
+    aggregations_by_type: dict[str, list[str]]
+    result_rows: InsightResultRowsRead
 
 
 class SampleGroupRead(BaseModel):
@@ -782,7 +636,7 @@ class DatabaseTableRead(BaseModel):
     """Summary row for a metadata or analytics table in the database browser."""
 
     name: str
-    store: str = "metadata"
+    store: Literal["metadata", "analytics"] = "metadata"
     rows: int = 0
     columns: list[str] = Field(default_factory=list)
     editable: bool = False
@@ -792,14 +646,14 @@ class DatabaseTablePageRead(BaseModel):
     """Paginated preview of rows from one database table."""
 
     name: str
-    store: str
+    store: Literal["metadata", "analytics"]
     columns: list[str]
     rows: list[dict[str, JsonValue]]
     total: int
     limit: int
     offset: int
     sort_by: str | None = None
-    sort_direction: str | None = None
+    sort_direction: Literal["asc", "desc"] | None = None
 
 
 class DataContractFieldRead(BaseModel):
@@ -2144,11 +1998,11 @@ async def list_insights(
     return [_saved_insight_summary(row) for row in rows]
 
 
-@router.get("/insights/capabilities")
-async def get_insight_capabilities() -> dict[str, JsonValue]:
+@router.get("/insights/capabilities", response_model=InsightCapabilitiesRead)
+async def get_insight_capabilities() -> InsightCapabilitiesRead:
     """Return the server-owned insight/report builder capabilities."""
 
-    return insight_capabilities()
+    return InsightCapabilitiesRead.model_validate(insight_capabilities())
 
 
 @router.post("/insights/validate", response_model=InsightValidationRead)
@@ -2774,7 +2628,7 @@ async def execute_saved_report(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-    return ReportResultRead(result=result)
+    return ReportResultRead(result=ReportResultPayloadRead.model_validate(result))
 
 
 @router.get("/rendered-reports/{rendered_report_id}", response_model=RenderedReportRead)
@@ -3233,14 +3087,14 @@ async def list_database_rows(table_name: str, request: Request) -> list[dict[str
     response_model=DatabaseTablePageRead,
 )
 async def preview_database_table(
-    store: str,
+    store: Literal["metadata", "analytics"],
     table_name: str,
     request: Request,
     project_id: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     sort_by: str | None = Query(default=None),
-    sort_direction: str = Query(default="asc", pattern="^(asc|desc)$"),
+    sort_direction: Literal["asc", "desc"] = Query(default="asc"),
 ) -> DatabaseTablePageRead:
     """Preview paginated rows from a metadata or analytics table."""
 
@@ -4692,7 +4546,7 @@ async def _metadata_table_page(
     limit: int,
     offset: int,
     sort_by: str | None,
-    sort_direction: str,
+    sort_direction: Literal["asc", "desc"],
 ) -> DatabaseTablePageRead:
     """Preview one metadata table with safe sorting and project scoping."""
 

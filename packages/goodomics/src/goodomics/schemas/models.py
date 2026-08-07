@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
+from goodomics.schemas.base import BaseModel
 from goodomics.schemas.field_references import FieldReferenceSegment
 
 JsonObject = dict[str, Any]

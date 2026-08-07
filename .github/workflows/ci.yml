@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   python:
-    name: Python tests
+    name: Python and API contract
     runs-on: ubuntu-latest
 
     steps:
@@ -41,6 +41,25 @@ jobs:
 
       - name: Run type checks
         run: uv run pyright
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/goodomics/dashboard/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm --prefix packages/goodomics/dashboard ci
+
+      - name: Check generated API artifacts
+        run: bash scripts/check-api-codegen.sh
+
+      - name: Run dashboard tests
+        run: npm --prefix packages/goodomics/dashboard run test
+
+      - name: Build dashboard
+        run: npm --prefix packages/goodomics/dashboard run build
 
       - name: Build goodomics-core package
         run: uv run python -m build packages/goodomics

@@ -1,7 +1,7 @@
-"""Models for saved insights and reports.
+"""Canonical insight and report contracts for Python and the public API.
 
 The public configuration grammar deliberately contains no physical database
-names or SQL escape hatch.  Values identify either a semantic data-contract
+names or SQL escape hatch. Values identify either a semantic data-contract
 field or one field from the small set of server-owned metadata fields.
 """
 
@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
+from goodomics.schemas.base import BaseModel
 from goodomics.schemas.field_references import (
     ParsedFieldReference,
     parse_field_reference,
@@ -21,6 +28,7 @@ from goodomics.schemas.field_references import (
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 Grain = Literal["sample", "subject", "run", "feature", "variant", "file"]
 Aggregation = Literal["raw", "count", "count_distinct", "sum", "avg", "min", "max"]
+NonBlankName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RESULT_LIMIT_DEFAULT = 1000
 RESULT_LIMIT_MAX = 10000
@@ -269,18 +277,15 @@ InsightView = Annotated[
 ]
 
 
-class InsightDefinition(StrictModel):
-    """Complete portable version 1 insight definition."""
+class InsightSpec(StrictModel):
+    """Executable version 1 insight configuration."""
 
     version: Literal[1]
-    insight_id: str | None = None
-    name: str | None = None
-    description: str | None = None
     analysis: AnalysisConfig
     view: InsightView
 
     @model_validator(mode="after")
-    def validate_bindings(self) -> InsightDefinition:
+    def validate_bindings(self) -> InsightSpec:
         """Validate view references and expand join defaults."""
 
         for value in self.analysis.values:
@@ -309,6 +314,7 @@ class InsightDefinition(StrictModel):
             raise ValueError(
                 f"Hidden value references must be unique: {', '.join(duplicates)}."
             )
+
         invalid_hidden = sorted(set(hidden) - value_references)
 
         if invalid_hidden:
@@ -336,19 +342,23 @@ class InsightDefinition(StrictModel):
             )
         if self.view.kind in {"pie", "donut"} and len(visible_series) != 1:
             raise ValueError("Pie and donut views require exactly one visible value.")
+
         if self.view.kind == "stacked_bar" and len(visible_series) < 2:
             raise ValueError("Stacked bar views require at least two visible values.")
+
         if self.analysis.match_by is None and self.view.kind != "histogram":
             self.analysis.match_by = self.analysis.grain
+
         if self.analysis.join is None:
             self.analysis.join = "outer" if self.view.kind == "table" else "inner"
+
         return self
 
     def executable_config(self) -> dict[str, Any]:
         """Return only fields persisted in an insight record's JSON definition."""
 
         return self.model_dump(
-            exclude={"insight_id", "name", "description"},
+            include={"version", "analysis", "view"},
             exclude_none=True,
             mode="json",
             by_alias=True,
@@ -443,7 +453,7 @@ class RefreshPolicy(StrictModel):
     mode: Literal["manual"] = "manual"
 
 
-class ReportDefinition(StrictModel):
+class ReportSpec(StrictModel):
     """Executable version 1 saved-report configuration."""
 
     version: Literal[1]
@@ -455,7 +465,7 @@ class ReportDefinition(StrictModel):
     refresh_policy: RefreshPolicy = Field(default_factory=RefreshPolicy)
 
     @model_validator(mode="after")
-    def validate_insights(self) -> ReportDefinition:
+    def validate_insights(self) -> ReportSpec:
         """Require unique insight identities and placements within grid bounds."""
 
         insight_ids = [insight.id for insight in self.insights]
@@ -481,6 +491,15 @@ class ReportDefinition(StrictModel):
         """Return only fields persisted in a report record's JSON definition."""
 
         return self.model_dump(
+            include={
+                "version",
+                "filters",
+                "limit",
+                "random",
+                "layout",
+                "insights",
+                "refresh_policy",
+            },
             exclude_none=True,
             mode="json",
         )
@@ -558,7 +577,7 @@ def _required_view_bindings(view: InsightView) -> set[str]:
     return set()
 
 
-def _visible_series_ids(definition: InsightDefinition) -> list[str]:
+def _visible_series_ids(definition: InsightSpec) -> list[str]:
     """Derive rendered series from canonical value order and view visibility."""
 
     hidden = set(definition.view.hidden_values)
@@ -574,13 +593,197 @@ def _visible_series_ids(definition: InsightDefinition) -> list[str]:
     ]
 
 
-def normalize_insight_definition(value: dict[str, Any]) -> InsightDefinition:
+class InsightDocument(InsightSpec):
+    """Portable named insight document used by YAML and JSON import/export."""
+
+    insight_id: str | None = None
+    name: NonBlankName
+    description: str | None = None
+
+
+class ReportDocument(ReportSpec):
+    """Portable named report document used by YAML and JSON import/export."""
+
+    report_id: str | None = None
+    name: NonBlankName
+    description: str | None = None
+
+
+class SavedInsightCreate(InsightDocument):
+    """Request contract for creating a saved insight resource."""
+
+    project_id: str | None = None
+
+    def executable_fields(self) -> dict[str, JsonValue]:
+        """Return the complete executable version 1 configuration."""
+
+        return cast(
+            dict[str, JsonValue],
+            self.model_dump(
+                include={"version", "analysis", "view"},
+                exclude_none=True,
+                mode="json",
+                by_alias=True,
+            ),
+        )
+
+
+class SavedInsightPatch(StrictModel):
+    """Request contract for patching a saved insight resource."""
+
+    name: NonBlankName | None = None
+    description: str | None = None
+    version: Literal[1] | None = None
+    analysis: AnalysisConfig | None = None
+    view: InsightView | None = None
+
+    def executable_fields(self) -> dict[str, JsonValue]:
+        """Return executable fields explicitly present in the patch."""
+
+        return cast(
+            dict[str, JsonValue],
+            self.model_dump(
+                include={"version", "analysis", "view"},
+                exclude_unset=True,
+                mode="json",
+                by_alias=True,
+            ),
+        )
+
+    @field_validator("name")
+    @classmethod
+    def reject_empty_name(cls, value: str | None) -> str | None:
+        """Reject attempts to clear an existing insight name."""
+
+        if value is None:
+            raise ValueError("Insight name cannot be cleared.")
+        return value
+
+
+class SavedInsightMetadata(StrictModel):
+    """Shared persisted insight resource metadata."""
+
+    insight_id: str
+    url_slug: str
+    project_id: str | None = None
+    name: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedInsightSummary(SavedInsightMetadata):
+    """Compact insight resource returned by list endpoints."""
+
+    view_kind: str
+    sources: list[str]
+
+
+class SavedInsightRead(SavedInsightMetadata, InsightSpec):
+    """Read contract containing persisted metadata and executable fields."""
+
+
+class SavedReportCreate(ReportSpec):
+    """Request contract for creating a saved report resource."""
+
+    project_id: str | None = None
+    name: NonBlankName
+    description: str | None = None
+
+    def executable_fields(self) -> dict[str, JsonValue]:
+        """Return the complete executable report configuration."""
+
+        return cast(
+            dict[str, JsonValue],
+            self.model_dump(
+                include={
+                    "version",
+                    "filters",
+                    "limit",
+                    "random",
+                    "layout",
+                    "insights",
+                    "refresh_policy",
+                },
+                exclude_none=True,
+                mode="json",
+            ),
+        )
+
+
+class SavedReportPatch(StrictModel):
+    """Request contract for patching a saved report resource."""
+
+    name: NonBlankName | None = None
+    description: str | None = None
+    version: Literal[1] | None = None
+    filters: list[InsightFilter] | None = None
+    limit: int | None = Field(default=None, ge=1, le=RESULT_LIMIT_MAX)
+    random: bool | None = None
+    layout: GridLayout | None = None
+    insights: list[ReportInsight] | None = Field(default=None, min_length=1)
+    refresh_policy: RefreshPolicy | None = None
+
+    def executable_fields(self) -> dict[str, JsonValue]:
+        """Return executable report fields explicitly present in this patch."""
+
+        return cast(
+            dict[str, JsonValue],
+            self.model_dump(
+                include={
+                    "version",
+                    "filters",
+                    "limit",
+                    "random",
+                    "layout",
+                    "insights",
+                    "refresh_policy",
+                },
+                exclude_unset=True,
+                mode="json",
+            ),
+        )
+
+    @field_validator("name")
+    @classmethod
+    def reject_empty_name(cls, value: str | None) -> str | None:
+        """Reject attempts to clear an existing report name."""
+
+        if value is None:
+            raise ValueError("Report name cannot be cleared.")
+        return value
+
+
+class SavedReportMetadata(StrictModel):
+    """Shared persisted report resource metadata."""
+
+    report_id: str
+    url_slug: str
+    project_id: str | None = None
+    name: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedReportSummary(SavedReportMetadata):
+    """Compact report resource returned by list endpoints."""
+
+    insight_count: int
+    insight_ids: list[str]
+
+
+class SavedReportRead(SavedReportMetadata, ReportSpec):
+    """Read contract containing persisted metadata and executable fields."""
+
+
+def normalize_insight_definition(value: dict[str, Any]) -> InsightSpec:
     """Parse a complete definition and expand deterministic version 1 defaults."""
 
-    return InsightDefinition.model_validate(value)
+    return InsightSpec.model_validate(value)
 
 
-def normalize_report_definition(value: dict[str, Any]) -> ReportDefinition:
+def normalize_report_definition(value: dict[str, Any]) -> ReportSpec:
     """Parse a complete report definition with optional result-row overrides."""
 
-    return ReportDefinition.model_validate(value)
+    return ReportSpec.model_validate(value)

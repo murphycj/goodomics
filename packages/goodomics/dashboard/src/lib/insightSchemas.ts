@@ -1,317 +1,218 @@
-/*
- * Insight schema definitions for Goodomics dashboard.
- */
+/** Frontend-only builder drafts and adapters around generated API contracts. */
 
 import { z } from "zod";
+import type {
+  AnalysisValue as ApiAnalysisValue,
+  BoxplotView,
+  CategoryChartView,
+  HeatmapView,
+  HistogramView,
+  InsightFilter,
+  MetricView,
+  ReportInsight,
+  ResultScope as ApiResultScope,
+  SavedInsightCreate,
+  SavedInsightPatch,
+  SavedInsightRead,
+  SavedReportCreate,
+  SavedReportPatch,
+  SavedReportRead,
+  ScatterView,
+  TableView,
+} from "../api/generated/types.gen";
 import {
-  isMetadataFieldReference,
-  parseFieldReference,
-  valueReference,
-} from "./fieldReferences";
+  zInsightValidationRequest,
+  zSavedInsightCreate,
+  zSavedInsightPatch,
+  zSavedInsightRead,
+  zSavedReportCreate,
+  zSavedReportPatch,
+  zSavedReportRead,
+} from "../api/generated/zod.gen";
 
-const safeId = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
-const grainSchema = z.enum([
-  "sample",
-  "subject",
-  "run",
-  "feature",
-  "variant",
-  "file",
-]);
+const generatedInsightDefinitionSchema = zInsightValidationRequest.omit({
+  description: true,
+  name: true,
+  project_id: true,
+});
 
-export const insightFilterSchema = z
-  .object({
-    field: z.string().min(1),
-    operator: z
-      .enum(["eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in", "contains"])
-      .default("eq"),
-    value: z.unknown(),
-  })
-  .strict();
+const generatedReportDefinitionSchema = zSavedReportCreate.omit({
+  project_id: true,
+});
 
-export const resultScopeSchema = z
-  .object({
-    selection: z
-      .enum([
-        "latest_successful_per_sample",
-        "all_eligible",
-        "specific_methods",
-        "specific_versions",
-        "specific_runs",
-        "pinned_results",
-      ])
-      .default("latest_successful_per_sample"),
-    analysis_type_ids: z.array(z.string()).default([]),
-    method_ids: z.array(z.string()).default([]),
-    method_versions: z.array(z.string()).default([]),
-    run_ids: z.array(z.string()).default([]),
-    statuses: z.array(z.string()).default([]),
-    started_after: z.string().nullable().optional(),
-    ended_before: z.string().nullable().optional(),
-    run_contract_ids: z.array(z.string()).default([]),
-  })
-  .strict();
+export type ResultScope = Omit<ApiResultScope, "selection"> & {
+  analysis_type_ids: string[];
+  method_ids: string[];
+  method_versions: string[];
+  run_ids: string[];
+  statuses: string[];
+  run_contract_ids: string[];
+  selection: NonNullable<ApiResultScope["selection"]>;
+};
 
-export const analysisValueSchema = z
-  .object({
-    field: z
-      .string()
-      .min(1)
-      .refine((value) => {
-        try {
-          parseFieldReference(value);
-          return true;
-        } catch {
-          return false;
-        }
-      }, "Invalid field reference."),
-    as: safeId.optional(),
-    label: z.string().min(1).optional(),
-    aggregation: z
-      .enum(["raw", "count", "count_distinct", "sum", "avg", "min", "max"])
-      .default("raw"),
-    filters: z.array(insightFilterSchema).default([]),
-    scope: resultScopeSchema.optional(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (isMetadataFieldReference(value.field) && value.scope) {
-      context.addIssue({
-        code: "custom",
-        message: "Metadata values cannot define scope.",
-      });
-    }
+export type AnalysisValue = Omit<
+  ApiAnalysisValue,
+  "aggregation" | "as" | "filters" | "label" | "scope"
+> & {
+  aggregation: NonNullable<ApiAnalysisValue["aggregation"]>;
+  as?: string;
+  filters: DraftInsightFilter[];
+  label?: string;
+  scope?: ResultScope;
+};
+
+export type DraftInsightFilter = Omit<InsightFilter, "operator" | "value"> & {
+  operator: NonNullable<InsightFilter["operator"]>;
+  value: InsightFilter["value"];
+};
+
+type DraftTableView = Omit<
+  TableView,
+  "hidden_values" | "kind" | "null_format" | "numeric_format" | "sorting"
+> & {
+  hidden_values: string[];
+  kind: "table";
+  null_format: string;
+  numeric_format: NonNullable<TableView["numeric_format"]>;
+  sorting: NonNullable<TableView["sorting"]>;
+};
+type DraftScatterView = MaterializedView<ScatterView>;
+type DraftMetricView = Omit<MetricView, "hidden_values" | "thresholds"> & {
+  hidden_values: string[];
+  thresholds: NonNullable<MetricView["thresholds"]>;
+};
+type DraftHistogramView = Omit<
+  HistogramView,
+  "bins" | "colors" | "hidden_values"
+> & {
+  bins: number;
+  colors: Record<string, string>;
+  hidden_values: string[];
+};
+type DraftCategoryChartView = MaterializedView<CategoryChartView>;
+type DraftBoxplotView = Omit<BoxplotView, "colors" | "hidden_values"> & {
+  colors: Record<string, string>;
+  hidden_values: string[];
+};
+type DraftHeatmapView = Omit<HeatmapView, "colors" | "hidden_values" | "tooltips"> & {
+  colors: string[];
+  hidden_values: string[];
+  tooltips: string[];
+};
+type MaterializedView<T extends { colors?: unknown; hidden_values?: string[]; tooltips?: string[] }> =
+  Omit<T, "colors" | "hidden_values" | "tooltips"> & {
+    colors: Record<string, string>;
+    hidden_values: string[];
+    tooltips: string[];
+  };
+
+export type InsightView =
+  | DraftTableView
+  | DraftScatterView
+  | DraftMetricView
+  | DraftHistogramView
+  | DraftCategoryChartView
+  | DraftBoxplotView
+  | DraftHeatmapView;
+
+export type InsightDraft = {
+  version: 1;
+  analysis: {
+    grain: NonNullable<z.input<typeof zInsightValidationRequest>["analysis"]["grain"]>;
+    values: AnalysisValue[];
+    filters: DraftInsightFilter[];
+    match_by?: NonNullable<z.input<typeof zInsightValidationRequest>["analysis"]["match_by"]> | null;
+    join?: "outer" | "inner" | null;
+    limit: number;
+    random: boolean;
+  };
+  view: InsightView;
+};
+
+export type ReportDefinition = {
+  version: 1;
+  name: string;
+  description?: string | null;
+  filters: DraftInsightFilter[];
+  limit?: number | null;
+  random?: boolean | null;
+  layout: { columns: number; row_height: number };
+  insights: ReportInsight[];
+  refresh_policy: { mode: "manual" };
+};
+
+export { type ReportInsight };
+
+export const insightDefinitionSchema = generatedInsightDefinitionSchema.transform(
+  materializeInsightDraft,
+);
+export const reportDefinitionSchema = generatedReportDefinitionSchema.transform(
+  materializeReportDraft,
+);
+
+/** Convert a generated saved resource into complete frontend builder state. */
+export function savedInsightToDraft(value: SavedInsightRead): InsightDraft {
+  const saved = zSavedInsightRead.parse(value);
+  return insightDefinitionSchema.parse({
+    version: saved.version,
+    analysis: {
+      ...saved.analysis,
+      values: saved.analysis.values.map(normalizeDraftValue),
+    },
+    view: saved.view,
   });
+}
 
-const numberFormatSchema = z
-  .object({
-    style: z
-      .enum(["number", "percent", "scientific", "compact"])
-      .default("number"),
-    decimals: z.number().int().min(0).max(12).nullable().optional(),
-    prefix: z.string().nullable().optional(),
-    suffix: z.string().nullable().optional(),
-  })
-  .strict();
+/** Build a generated create payload without persisted/read-only metadata. */
+export function insightDraftToCreate(
+  draft: InsightDraft,
+  metadata: Pick<SavedInsightCreate, "name" | "project_id"> &
+    Partial<Pick<SavedInsightCreate, "description" | "insight_id">>,
+): SavedInsightCreate {
+  return zSavedInsightCreate.parse({ ...draft, ...metadata });
+}
 
-const axisSchema = z
-  .object({
-    label: z.string().nullable().optional(),
-    scale: z.enum(["linear", "log", "category", "time"]).nullable().optional(),
-    minimum: z.number().nullable().optional(),
-    maximum: z.number().nullable().optional(),
-  })
-  .strict();
+/** Build a generated patch payload without persisted/read-only metadata. */
+export function insightDraftToPatch(
+  draft: InsightDraft,
+  metadata: Partial<Pick<SavedInsightPatch, "name" | "description">> = {},
+): SavedInsightPatch {
+  return zSavedInsightPatch.parse({ ...draft, ...metadata });
+}
 
-const colorsSchema = z.record(z.string(), z.string()).default({});
-const hiddenValuesSchema = z.array(z.string().min(1)).default([]);
-const tableViewSchema = z
-  .object({
-    kind: z.literal("table"),
-    hidden_values: hiddenValuesSchema,
-    sorting: z
-      .array(
-        z
-          .object({
-            by: z.string(),
-            direction: z.enum(["asc", "desc"]).default("asc"),
-          })
-          .strict(),
-      )
-      .default([]),
-    null_format: z.string().default("—"),
-    numeric_format: z.record(z.string(), numberFormatSchema).default({}),
-  })
-  .strict();
-
-const scatterViewSchema = z
-  .object({
-    kind: z.literal("scatter"),
-    hidden_values: hiddenValuesSchema,
-    x: z.string(),
-    y: z.string(),
-    x_axis: axisSchema.nullable().optional(),
-    y_axis: axisSchema.nullable().optional(),
-    colors: colorsSchema,
-    tooltips: z.array(z.string()).default([]),
-  })
-  .strict();
-
-const metricViewSchema = z
-  .object({
-    kind: z.literal("metric"),
-    hidden_values: hiddenValuesSchema,
-    value: z.string(),
-    number_format: numberFormatSchema.nullable().optional(),
-    thresholds: z
-      .array(
-        z
-          .object({
-            value: z.number(),
-            label: z.string().nullable().optional(),
-            color: z.string().nullable().optional(),
-          })
-          .strict(),
-      )
-      .default([]),
-  })
-  .strict();
-
-const histogramViewSchema = z
-  .object({
-    kind: z.literal("histogram"),
-    hidden_values: hiddenValuesSchema,
-    bins: z.number().int().min(1).max(500).default(20),
-    x_axis: axisSchema.nullable().optional(),
-    y_axis: axisSchema.nullable().optional(),
-    colors: colorsSchema,
-  })
-  .strict();
-
-const categoryViewSchema = z
-  .object({
-    kind: z.enum(["bar", "stacked_bar", "line", "area", "pie", "donut"]),
-    hidden_values: hiddenValuesSchema,
-    category: z.string().nullable().optional(),
-    x_axis: axisSchema.nullable().optional(),
-    y_axis: axisSchema.nullable().optional(),
-    colors: colorsSchema,
-    tooltips: z.array(z.string()).default([]),
-  })
-  .strict();
-
-const boxplotViewSchema = z
-  .object({
-    kind: z.literal("boxplot"),
-    hidden_values: hiddenValuesSchema,
-    category: z.string().nullable().optional(),
-    x_axis: axisSchema.nullable().optional(),
-    y_axis: axisSchema.nullable().optional(),
-    colors: colorsSchema,
-  })
-  .strict();
-
-const heatmapViewSchema = z
-  .object({
-    kind: z.literal("heatmap"),
-    hidden_values: hiddenValuesSchema,
-    x: z.string(),
-    y: z.string(),
-    value: z.string(),
-    colors: z.array(z.string()).default([]),
-    tooltips: z.array(z.string()).default([]),
-  })
-  .strict();
-
-export const insightViewSchema = z.discriminatedUnion("kind", [
-  tableViewSchema,
-  scatterViewSchema,
-  metricViewSchema,
-  histogramViewSchema,
-  categoryViewSchema,
-  boxplotViewSchema,
-  heatmapViewSchema,
-]);
-
-export const insightDefinitionSchema = z
-  .object({
-    version: z.literal(1),
-    insight_id: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().nullable().optional(),
-    analysis: z
-      .object({
-        grain: grainSchema.default("sample"),
-        values: z.array(analysisValueSchema).min(1),
-        filters: z.array(insightFilterSchema).default([]),
-        match_by: grainSchema.nullable().optional(),
-        join: z.enum(["outer", "inner"]).nullable().optional(),
-        limit: z.number().int().min(1).max(10_000).default(1_000),
-        random: z.boolean().default(false),
-      })
-      .strict(),
-    view: insightViewSchema,
-  })
-  .strict()
-  .superRefine((definition, context) => {
-    const ids = definition.analysis.values.map(valueReference);
-    if (new Set(ids).size !== ids.length) {
-      context.addIssue({
-        code: "custom",
-        message:
-          "Value references must be unique; add 'as' to repeated fields.",
-      });
-    }
-    if (ids.includes(`${definition.analysis.grain}_id`)) {
-      context.addIssue({
-        code: "custom",
-        message: "Value aliases cannot collide with the grain identity.",
-      });
-    }
-    const hidden = definition.view.hidden_values;
-    if (new Set(hidden).size !== hidden.length) {
-      context.addIssue({
-        code: "custom",
-        message: "Hidden value references must be unique.",
-      });
-    }
-    const unknownHidden = hidden.filter((id) => !ids.includes(id));
-    if (unknownHidden.length) {
-      context.addIssue({
-        code: "custom",
-        message: `Only analysis values can be hidden: ${unknownHidden.join(", ")}.`,
-      });
-    }
-    const required = requiredViewBindingIds(definition.view);
-    const hiddenRequired = hidden.filter((id) => required.has(id));
-    if (hiddenRequired.length) {
-      context.addIssue({
-        code: "custom",
-        message: `Required view bindings cannot be hidden: ${hiddenRequired.join(", ")}.`,
-      });
-    }
-    const allowed = new Set([...ids, `${definition.analysis.grain}_id`]);
-    const unknownReferences = viewReferences(definition.view).filter(
-      (id) => !allowed.has(id),
-    );
-    if (unknownReferences.length) {
-      context.addIssue({
-        code: "custom",
-        message: `View references unknown values: ${unknownReferences.join(", ")}.`,
-      });
-    }
-    const category =
-      "category" in definition.view ? definition.view.category : undefined;
-    const visible = ids.filter((id) => !hidden.includes(id) && id !== category);
-    if (
-      ("bins" in definition.view || "category" in definition.view) &&
-      !visible.length
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "The view requires a visible value.",
-      });
-    }
-    if (
-      ["pie", "donut"].includes(definition.view.kind) &&
-      visible.length !== 1
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Pie and donut views require exactly one visible value.",
-      });
-    }
-    if (definition.view.kind === "stacked_bar" && visible.length < 2) {
-      context.addIssue({
-        code: "custom",
-        message: "Stacked bars require at least two visible values.",
-      });
-    }
+/** Convert a generated saved report into complete frontend builder state. */
+export function savedReportToDraft(value: SavedReportRead): ReportDefinition {
+  const saved = zSavedReportRead.parse(value);
+  return reportDefinitionSchema.parse({
+    version: saved.version,
+    name: saved.name,
+    description: saved.description,
+    filters: saved.filters,
+    limit: saved.limit,
+    random: saved.random,
+    layout: saved.layout,
+    insights: saved.insights,
+    refresh_policy: saved.refresh_policy,
   });
+}
 
-export function requiredViewBindingIds(
-  view: z.infer<typeof insightViewSchema>,
-) {
+/** Build a generated report create payload from frontend builder state. */
+export function reportDraftToCreate(
+  draft: ReportDefinition,
+  projectId: string,
+): SavedReportCreate {
+  return zSavedReportCreate.parse({ ...draft, project_id: projectId });
+}
+
+/** Build a generated report patch payload from frontend builder state. */
+export function reportDraftToPatch(
+  draft: Partial<ReportDefinition>,
+): SavedReportPatch {
+  return zSavedReportPatch.parse(draft);
+}
+
+/** Return bindings that define a view and cannot be hidden in draft controls. */
+export function requiredViewBindingIds(view: InsightView): Set<string> {
   if (view.kind === "scatter") return new Set([view.x, view.y]);
   if (view.kind === "metric") return new Set([view.value]);
   if (view.kind === "heatmap") return new Set([view.x, view.y, view.value]);
@@ -319,88 +220,112 @@ export function requiredViewBindingIds(
   return new Set<string>();
 }
 
-function viewReferences(view: z.infer<typeof insightViewSchema>) {
-  const references = [...view.hidden_values];
-  if (view.kind === "table") {
-    references.push(
-      ...view.sorting.map((sort) => sort.by),
-      ...Object.keys(view.numeric_format),
-    );
-  } else if (view.kind === "scatter") {
-    references.push(
-      view.x,
-      view.y,
-      ...view.tooltips,
-      ...Object.keys(view.colors),
-    );
-  } else if (view.kind === "metric") {
-    references.push(view.value);
-  } else if (view.kind === "histogram") {
-    references.push(...Object.keys(view.colors));
-  } else if (view.kind === "heatmap") {
-    references.push(view.x, view.y, view.value, ...view.tooltips);
-  } else {
-    if (view.category) references.push(view.category);
-    references.push(...Object.keys(view.colors));
-    if ("tooltips" in view) references.push(...view.tooltips);
-  }
-  return [...new Set(references)];
+function normalizeDraftValue(value: ApiAnalysisValue): AnalysisValue {
+  const normalized = { ...value };
+  if (normalized.as === null) delete normalized.as;
+  if (normalized.label === null) delete normalized.label;
+  if (normalized.scope === null) delete normalized.scope;
+  return {
+    ...normalized,
+    aggregation: normalized.aggregation ?? "raw",
+    filters: (normalized.filters ?? []).map(materializeFilter),
+    scope: normalized.scope ? materializeScope(normalized.scope) : undefined,
+  } as AnalysisValue;
 }
 
-const reportInsightLayoutSchema = z
-  .object({
-    x: z.number().int().min(0),
-    y: z.number().int().min(0),
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-  })
-  .strict();
+function materializeScope(scope: ApiResultScope): ResultScope {
+  return {
+    ...scope,
+    selection: scope.selection ?? "latest_successful_per_sample",
+    analysis_type_ids: scope.analysis_type_ids ?? [],
+    method_ids: scope.method_ids ?? [],
+    method_versions: scope.method_versions ?? [],
+    run_ids: scope.run_ids ?? [],
+    statuses: scope.statuses ?? [],
+    run_contract_ids: scope.run_contract_ids ?? [],
+  };
+}
 
-const reportInsightSchema = z
-  .object({
-    id: z.string().min(1),
-    layout: reportInsightLayoutSchema,
-  })
-  .strict();
+function materializeFilter(filter: InsightFilter): DraftInsightFilter {
+  return { ...filter, operator: filter.operator ?? "eq" };
+}
 
-export const reportDefinitionShape = {
-  version: z.literal(1),
-  name: z.string().trim().min(1),
-  description: z.string().nullable().optional(),
-  filters: z.array(insightFilterSchema).default([]),
-  limit: z.number().int().min(1).max(10_000).nullable().optional(),
-  random: z.boolean().nullable().optional(),
-  layout: z
-    .object({
-      columns: z.number().int().min(1).max(48).default(12),
-      row_height: z.number().int().min(1).max(1_000).default(64),
-    })
-    .strict(),
-  insights: z.array(reportInsightSchema).min(1),
-  refresh_policy: z
-    .object({ mode: z.literal("manual").default("manual") })
-    .strict(),
-};
+function materializeInsightDraft(
+  value: z.output<typeof generatedInsightDefinitionSchema>,
+): InsightDraft {
+  return {
+    version: 1,
+    analysis: {
+      ...value.analysis,
+      grain: value.analysis.grain ?? "sample",
+      values: value.analysis.values.map(normalizeDraftValue),
+      filters: (value.analysis.filters ?? []).map(materializeFilter),
+      limit: value.analysis.limit ?? 1000,
+      random: value.analysis.random ?? false,
+    },
+    view: materializeView(value.view),
+  };
+}
 
-export const reportDefinitionSchema = z
-  .object(reportDefinitionShape)
-  .strict()
-  .superRefine((definition, context) => {
-    const ids = definition.insights.map((insight) => insight.id);
-    ids.forEach((id, index) => {
-      if (ids.indexOf(id) !== index) {
-        context.addIssue({
-          code: "custom",
-          message: `Report insight ids must be unique: ${id}.`,
-          path: ["insights", index, "id"],
-        });
-      }
-    });
-  });
+function materializeView(view: SavedInsightCreate["view"]): InsightView {
+  if (view.kind === "table") {
+    return {
+      ...view,
+      hidden_values: view.hidden_values ?? [],
+      kind: "table",
+      sorting: view.sorting ?? [],
+      null_format: view.null_format ?? "—",
+      numeric_format: view.numeric_format ?? {},
+    } as InsightView;
+  }
+  if (view.kind === "metric") {
+    return {
+      ...view,
+      hidden_values: view.hidden_values ?? [],
+      thresholds: view.thresholds ?? [],
+    } as InsightView;
+  }
+  if (view.kind === "heatmap") {
+    return {
+      ...view,
+      hidden_values: view.hidden_values ?? [],
+      colors: view.colors ?? [],
+      tooltips: view.tooltips ?? [],
+    } as InsightView;
+  }
+  if (view.kind === "boxplot") {
+    return {
+      ...view,
+      hidden_values: view.hidden_values ?? [],
+      colors: view.colors ?? {},
+    } as InsightView;
+  }
+  if (view.kind === "histogram") {
+    return {
+      ...view,
+      hidden_values: view.hidden_values ?? [],
+      bins: view.bins ?? 20,
+      colors: view.colors ?? {},
+    } as InsightView;
+  }
+  return {
+    ...view,
+    hidden_values: view.hidden_values ?? [],
+    colors: view.colors ?? {},
+    tooltips: view.tooltips ?? [],
+  } as InsightView;
+}
 
-export type AnalysisValue = z.infer<typeof analysisValueSchema>;
-export type InsightDraft = z.infer<typeof insightDefinitionSchema>;
-export type InsightView = z.infer<typeof insightViewSchema>;
-export type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
-export type ReportInsight = z.infer<typeof reportInsightSchema>;
-export type ResultScope = z.infer<typeof resultScopeSchema>;
+function materializeReportDraft(
+  value: z.output<typeof generatedReportDefinitionSchema>,
+): ReportDefinition {
+  return {
+    ...value,
+    filters: (value.filters ?? []).map(materializeFilter),
+    layout: {
+      columns: value.layout?.columns ?? 12,
+      row_height: value.layout?.row_height ?? 64,
+    },
+    refresh_policy: { mode: value.refresh_policy?.mode ?? "manual" },
+  };
+}

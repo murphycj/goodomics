@@ -6,37 +6,18 @@ import {
   useMemo,
   useState,
 } from "react";
-import { z } from "zod";
-import { queryClient } from "../../lib/queryClient";
-import { passwordPolicySchema } from "../../lib/passwordPolicy";
+import { ACCESS_TOKEN_KEY, AUTH_INVALID_EVENT } from "../../api/auth";
+import "../../api/client";
 import {
-  ACCESS_TOKEN_KEY,
-  AUTH_INVALID_EVENT,
-  apiFetch,
-} from "../../lib/authRequest";
+  login as apiLogin,
+  me,
+  setup,
+  updateProfile as apiUpdateProfile,
+} from "../../api/generated/sdk.gen";
+import type { MeRead } from "../../api/generated/types.gen";
+import { queryClient } from "../../lib/queryClient";
 
-// Schemas for validating the structure of the principal and session objects returned by the API.
-const principalSchema = z.object({
-  kind: z.enum(["local", "anonymous", "user"]),
-  user_id: z.string().nullable(),
-  email: z.string().nullable(),
-  display_name: z.string().nullable(),
-  is_admin: z.boolean(),
-  must_change_password: z.boolean(),
-  is_authenticated: z.boolean(),
-});
-
-const sessionSchema = z.object({
-  principal: principalSchema,
-  memberships: z.array(z.record(z.string(), z.unknown())),
-  permissions: z.record(z.string(), z.array(z.string())),
-  auth_enabled: z.boolean(),
-  signup_enabled: z.boolean(),
-  setup_required: z.boolean(),
-  password_policy: passwordPolicySchema,
-});
-
-export type Session = z.infer<typeof sessionSchema>;
+export type Session = MeRead;
 
 // Context value type for authentication-related state and actions.
 type AuthContextValue = {
@@ -67,10 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
 
     try {
-      const response = await apiFetch("/api/v1/auth/me");
-      if (!response.ok)
-        throw new Error(`Session request failed: ${response.status}`);
-      setSession(sessionSchema.parse(await response.json()));
+      setSession(await me({ throwOnError: true }));
       setError(null);
     } catch (value) {
       setSession(null);
@@ -96,22 +74,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Function to log in a user by sending credentials to the API, storing the access token, and refreshing the session.
   const login = useCallback(
     async (email: string, password: string) => {
-      const response = await apiFetch("/api/v1/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      const token = await apiLogin({
+        body: { email, password },
+        throwOnError: true,
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(
-          body && typeof body === "object" && "detail" in body
-            ? String(body.detail)
-            : "Login failed",
-        );
-      }
-      const token = z
-        .object({ access_token: z.string() })
-        .parse(await response.json());
       queryClient.clear();
       window.localStorage.setItem(ACCESS_TOKEN_KEY, token.access_token);
       await refresh();
@@ -122,22 +88,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Function to set up an admin user by sending the necessary information to the API, storing the access token, and refreshing the session.
   const setupAdmin = useCallback(
     async (displayName: string, email: string, password: string) => {
-      const response = await apiFetch("/api/v1/auth/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ display_name: displayName, email, password }),
+      const token = await setup({
+        body: { display_name: displayName, email, password },
+        throwOnError: true,
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(
-          body && typeof body === "object" && "detail" in body
-            ? String(body.detail)
-            : "Unable to complete setup",
-        );
-      }
-      const token = z
-        .object({ access_token: z.string() })
-        .parse(await response.json());
       queryClient.clear();
       window.localStorage.setItem(ACCESS_TOKEN_KEY, token.access_token);
       await refresh();
@@ -148,25 +102,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Function to update the current user's profile by sending the updated display name and email to the API, storing the new access token, and refreshing the session.
   const updateProfile = useCallback(
     async (displayName: string, email: string) => {
-      const response = await apiFetch("/api/v1/auth/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ display_name: displayName, email }),
+      const token = await apiUpdateProfile({
+        body: { display_name: displayName, email },
+        throwOnError: true,
       });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-
-        throw new Error(
-          body && typeof body === "object" && "detail" in body
-            ? String(body.detail)
-            : "Unable to update profile",
-        );
-      }
-
-      const token = z
-        .object({ access_token: z.string() })
-        .parse(await response.json());
       queryClient.clear();
       window.localStorage.setItem(ACCESS_TOKEN_KEY, token.access_token);
       await refresh();

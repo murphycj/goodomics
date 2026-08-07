@@ -8,14 +8,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from goodomics.schemas.field_references import parse_field_reference
+from goodomics.schemas.insights import (
+    InsightDocument,
+    InsightSpec,
+    ReportDocument,
+    ReportSpec,
+    normalize_insight_definition,
+)
 from goodomics.schemas.models import DataContract, DataContractField
 from goodomics.server.app import create_app
 from goodomics.server.insight_capabilities import metadata_fields
-from goodomics.server.insight_models import (
-    InsightDefinition,
-    ReportDefinition,
-    normalize_insight_definition,
-)
 from pydantic import ValidationError
 
 
@@ -90,7 +92,7 @@ def test_insight_definition_expands_defaults_and_rejects_removed_keys() -> None:
     assert selected_analysis["limit"] == 250
     assert selected_analysis["random"] is True
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -102,7 +104,7 @@ def test_insight_definition_expands_defaults_and_rejects_removed_keys() -> None:
             }
         )
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -113,7 +115,7 @@ def test_insight_definition_expands_defaults_and_rejects_removed_keys() -> None:
             }
         )
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 2,
                 "analysis": {
@@ -127,7 +129,7 @@ def test_insight_definition_expands_defaults_and_rejects_removed_keys() -> None:
             }
         )
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -189,7 +191,7 @@ def test_insight_definition_requires_canonical_field_reference(
     """Values accept only one source-bearing canonical field reference."""
 
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {"values": [value]},
@@ -202,7 +204,7 @@ def test_insight_definition_rejects_alias_collisions_and_unknown_bindings() -> N
     """Aliases are safe, unique, non-identity names referenced by the view."""
 
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -215,7 +217,7 @@ def test_insight_definition_rejects_alias_collisions_and_unknown_bindings() -> N
             }
         )
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {"values": [{"field": "metadata/sample/sample_name"}]},
@@ -228,7 +230,7 @@ def test_repeated_fields_require_aliases_only_for_distinct_references() -> None:
     """A field is its default reference and `as` disambiguates repeated uses."""
 
     with pytest.raises(ValidationError, match="add 'as' to repeated fields"):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -244,7 +246,7 @@ def test_repeated_fields_require_aliases_only_for_distinct_references() -> None:
             }
         )
 
-    definition = InsightDefinition.model_validate(
+    definition = InsightSpec.model_validate(
         {
             "version": 1,
             "analysis": {
@@ -276,7 +278,7 @@ def test_view_uses_one_hidden_list_and_rejects_removed_selection_lists() -> None
         {"as": "a", "field": "metadata/sample/sample_name"},
         {"as": "b", "field": "metadata/sample/subject_id"},
     ]
-    definition = InsightDefinition.model_validate(
+    definition = InsightSpec.model_validate(
         {
             "version": 1,
             "analysis": {"values": values},
@@ -291,7 +293,7 @@ def test_view_uses_one_hidden_list_and_rejects_removed_selection_lists() -> None
         {"kind": "pie", "values": ["a"]},
     ):
         with pytest.raises(ValidationError):
-            InsightDefinition.model_validate(
+            InsightSpec.model_validate(
                 {"version": 1, "analysis": {"values": values}, "view": view}
             )
 
@@ -311,7 +313,7 @@ def test_hidden_values_must_be_unique_values_and_not_required_bindings(
     """Visibility cannot remove identities or fields that define the view."""
 
     with pytest.raises(ValidationError):
-        InsightDefinition.model_validate(
+        InsightSpec.model_validate(
             {
                 "version": 1,
                 "analysis": {
@@ -444,7 +446,7 @@ def test_table_uses_analysis_order_and_hidden_values(
 def test_report_requires_unique_insight_references() -> None:
     """Each saved insight may occur only once in a report."""
 
-    report = ReportDefinition.model_validate(
+    report = ReportSpec.model_validate(
         {
             "version": 1,
             "limit": 250,
@@ -470,7 +472,7 @@ def test_report_requires_unique_insight_references() -> None:
     assert report.random is True
 
     with pytest.raises(ValidationError):
-        ReportDefinition.model_validate(
+        ReportSpec.model_validate(
             {
                 "version": 1,
                 "insights": [
@@ -487,7 +489,7 @@ def test_report_requires_unique_insight_references() -> None:
         )
 
     with pytest.raises(ValidationError):
-        ReportDefinition.model_validate(
+        ReportSpec.model_validate(
             {
                 "version": 1,
                 "layout": {"kind": "grid"},
@@ -501,7 +503,7 @@ def test_report_requires_unique_insight_references() -> None:
         )
 
     with pytest.raises(ValidationError):
-        ReportDefinition.model_validate(
+        ReportSpec.model_validate(
             {
                 "version": 1,
                 "items": [
@@ -519,4 +521,39 @@ def test_report_requires_at_least_one_insight() -> None:
     """An empty report is incomplete builder state and cannot be persisted."""
 
     with pytest.raises(ValidationError):
-        ReportDefinition.model_validate({"version": 1, "insights": []})
+        ReportSpec.model_validate({"version": 1, "insights": []})
+
+
+def test_portable_documents_keep_names_separate_from_executable_specs() -> None:
+    """Named portable documents serialize without changing executable specs."""
+
+    insight = InsightDocument.model_validate(
+        {
+            "version": 1,
+            "insight_id": "quality-table",
+            "name": "Quality table",
+            "description": "Portable definition",
+            "analysis": {
+                "values": [{"field": "metadata/sample/sample_name"}],
+            },
+            "view": {"kind": "table"},
+        }
+    )
+    report = ReportDocument.model_validate(
+        {
+            "version": 1,
+            "report_id": "quality-report",
+            "name": "Quality report",
+            "insights": [
+                {
+                    "id": "quality-table",
+                    "layout": {"x": 0, "y": 0, "width": 12, "height": 4},
+                }
+            ],
+        }
+    )
+
+    assert "name" not in insight.executable_config()
+    assert insight.model_dump(mode="json", by_alias=True)["name"] == "Quality table"
+    assert "name" not in report.executable_config()
+    assert report.model_dump(mode="json")["report_id"] == "quality-report"

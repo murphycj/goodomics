@@ -3,6 +3,23 @@
 Insight and report authoring is available through the server JSON API. Python
 applications can use `httpx` with ordinary dictionaries.
 
+For typed construction and local validation, import the canonical executable
+and portable-document contracts from `goodomics.schemas.insights`:
+
+```python
+from goodomics.schemas.insights import (
+    InsightDocument,
+    InsightSpec,
+    ReportDocument,
+    ReportSpec,
+)
+```
+
+`InsightSpec` and `ReportSpec` contain executable configuration.
+`InsightDocument` and `ReportDocument` add the names and identifiers needed for
+portable YAML or JSON files. The server's saved-resource request and response
+models reuse the same contracts.
+
 ```python
 import httpx
 

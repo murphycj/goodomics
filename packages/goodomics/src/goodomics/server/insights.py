@@ -28,6 +28,19 @@ from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from goodomics.schemas.field_references import parse_field_reference
+from goodomics.schemas.insights import (
+    AnalysisValue,
+    BoxplotView,
+    CategoryChartView,
+    HeatmapView,
+    HistogramView,
+    InsightSpec,
+    MetricView,
+    ReportSpec,
+    ScatterView,
+    normalize_insight_definition,
+    normalize_report_definition,
+)
 from goodomics.server.db.metadata import METADATA_MODELS
 from goodomics.server.db.models import (
     InsightRecord,
@@ -49,19 +62,6 @@ from goodomics.server.insight_capabilities import (
     normalize_linker,
     normalize_result_policy,
     validate_config_shape,
-)
-from goodomics.server.insight_models import (
-    AnalysisValue,
-    BoxplotView,
-    CategoryChartView,
-    HeatmapView,
-    HistogramView,
-    InsightDefinition,
-    MetricView,
-    ReportDefinition,
-    ScatterView,
-    normalize_insight_definition,
-    normalize_report_definition,
 )
 from goodomics.server.result_resolution import SampleSelection, resolve_contract_results
 from goodomics.storage.duckdb import (
@@ -163,7 +163,7 @@ def normalize_insight_config(config: Mapping[str, Any]) -> JsonObject:
     return cast(JsonObject, definition.executable_config())
 
 
-def _parse_insight_definition(config: Mapping[str, Any]) -> InsightDefinition:
+def _parse_insight_definition(config: Mapping[str, Any]) -> InsightSpec:
     """Parse public fields while excluding transient executor metadata."""
 
     return normalize_insight_definition(
@@ -217,7 +217,7 @@ async def validate_insight_definition_data(
     session: AsyncSession,
     project_id: str | None,
     config: Mapping[str, Any],
-) -> InsightDefinition:
+) -> InsightSpec:
     """Validate contract fields, metadata fields, types, and bindings."""
 
     definition = _parse_insight_definition(config)
@@ -315,7 +315,7 @@ async def validate_insight_definition_data(
 
 
 def _validate_view_value_types(
-    definition: InsightDefinition, value_types: Mapping[str, str]
+    definition: InsightSpec, value_types: Mapping[str, str]
 ) -> None:
     """Enforce numeric and cardinality constraints for the selected view."""
 
@@ -347,7 +347,7 @@ def _validate_view_value_types(
         raise ValueError(f"{view.kind} views require numeric value references.")
 
 
-def _visible_value_references(definition: InsightDefinition) -> list[str]:
+def _visible_value_references(definition: InsightSpec) -> list[str]:
     """Derive rendered references from analysis order and the shared hide list."""
 
     hidden = set(definition.view.hidden_values)
@@ -369,7 +369,7 @@ async def validate_report_definition_data(
     session: AsyncSession,
     project_id: str | None,
     config: Mapping[str, Any],
-) -> tuple[ReportDefinition, list[InsightRecord]]:
+) -> tuple[ReportSpec, list[InsightRecord]]:
     """Validate report dependencies, ownership, and every referenced insight."""
 
     definition = normalize_report_definition(dict(config))
@@ -1009,7 +1009,7 @@ async def _execute_values_query(
     return columns, rows
 
 
-def _value_identity(definition: InsightDefinition) -> str:
+def _value_identity(definition: InsightSpec) -> str:
     """Return the public identity column used to match selected values."""
 
     match_by = definition.analysis.match_by or definition.analysis.grain
@@ -1021,7 +1021,7 @@ async def _contract_value_rows(
     session: AsyncSession,
     analytics_store: DuckDBAnalyticsStore,
     project_id: str | None,
-    definition: InsightDefinition,
+    definition: InsightSpec,
     value: AnalysisValue,
     identity: str,
 ) -> tuple[list[JsonObject], list[JsonObject]]:
@@ -1111,7 +1111,7 @@ async def _metadata_value_rows(
     *,
     session: AsyncSession,
     project_id: str | None,
-    definition: InsightDefinition,
+    definition: InsightSpec,
     value: AnalysisValue,
     identity: str,
 ) -> list[JsonObject]:
@@ -1326,7 +1326,7 @@ def _aggregate_metadata_rows(
 
 
 def _unaligned_value_rows(
-    definition: InsightDefinition, value_rows: Sequence[Sequence[Mapping[str, Any]]]
+    definition: InsightSpec, value_rows: Sequence[Sequence[Mapping[str, Any]]]
 ) -> tuple[list[str], list[JsonObject]]:
     """Preserve independent distribution lengths for histogram values."""
 

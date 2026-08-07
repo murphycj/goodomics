@@ -6,16 +6,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from goodomics.schemas.base import BaseModel
 from goodomics.server.auth import (
     PERMISSIONS,
     Principal,
@@ -195,11 +196,33 @@ class AdminMembershipRead(BaseModel):
     role: RoleRead
 
 
+class PrincipalRead(BaseModel):
+    """Typed current principal fields exposed to the dashboard session."""
+
+    kind: Literal["anonymous", "local", "user"]
+    user_id: str | None = None
+    email: str | None = None
+    display_name: str | None = None
+    is_admin: bool
+    must_change_password: bool
+    is_authenticated: bool
+
+
+class SessionMembershipRead(BaseModel):
+    """Compact project membership included with the current session."""
+
+    membership_id: str
+    project_id: str
+    project_name: str
+    role_id: str
+    role_name: str
+
+
 class MeRead(BaseModel):
     """Current identity, membership, permission, and setup context."""
 
-    principal: dict[str, Any]
-    memberships: list[dict[str, Any]]
+    principal: PrincipalRead
+    memberships: list[SessionMembershipRead]
     permissions: dict[str, list[str]]
     auth_enabled: bool
     signup_enabled: bool
@@ -1019,18 +1042,18 @@ def _user_read(user: UserRecord) -> UserRead:
     return UserRead.model_validate(user, from_attributes=True)
 
 
-def _principal_dict(principal: Principal) -> dict[str, Any]:
+def _principal_dict(principal: Principal) -> PrincipalRead:
     """Serialize a resolved principal for the current-session response."""
 
-    return {
-        "kind": principal.kind,
-        "user_id": principal.user_id,
-        "email": principal.email,
-        "display_name": principal.display_name,
-        "is_admin": principal.is_admin,
-        "must_change_password": principal.must_change_password,
-        "is_authenticated": principal.is_authenticated,
-    }
+    return PrincipalRead(
+        kind=principal.kind,
+        user_id=principal.user_id,
+        email=principal.email,
+        display_name=principal.display_name,
+        is_admin=principal.is_admin,
+        must_change_password=principal.must_change_password,
+        is_authenticated=principal.is_authenticated,
+    )
 
 
 def _validate_permissions(permissions: list[str]) -> None:

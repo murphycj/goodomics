@@ -43,9 +43,53 @@ GOODOMICS_DATABASE_URL=sqlite+aiosqlite:///.goodomics/goodomics.db uv run --pack
 Run or build the dashboard:
 
 ```bash
+npm --prefix packages/goodomics/dashboard ci
 npm --prefix packages/goodomics/dashboard run dev
 npm --prefix packages/goodomics/dashboard run build
 ```
+
+## Maintain the API contract
+
+Goodomics has one API ownership chain:
+
+```text
+Pydantic models -> FastAPI OpenAPI -> generated TypeScript SDK and Zod schemas -> React
+```
+
+The canonical insight and report models live in
+`goodomics.schemas.insights`. The OpenAPI document and dashboard client are
+derived, committed artifacts. Do not edit
+`openapi/goodomics.openapi.json` or
+`packages/goodomics/dashboard/src/api/generated/` by hand.
+
+Export or regenerate each artifact independently with:
+
+```bash
+uv run python scripts/export-openapi.py
+npm --prefix packages/goodomics/dashboard run generate:api
+```
+
+Regenerate the full chain or check that committed artifacts are current with:
+
+```bash
+bash scripts/generate-api.sh
+bash scripts/check-api-codegen.sh
+```
+
+FastAPI route function names become generated operation names and are therefore
+part of the stable client contract. Give every JSON endpoint a named Pydantic
+request and response model, including `204` responses, then regenerate both
+artifacts and update dashboard callers and tests. Keep Pydantic semantic and
+cross-field validators authoritative; generated Zod schemas validate browser
+JSON boundaries.
+
+The dashboard's shared generated client owns bearer authentication, `401`
+session invalidation, response validation, and API error normalization. Use the
+small handwritten transport layer only for blobs and object URLs, multipart
+uploads, YAML/JSON/HTML exports, streaming, arbitrary paths, and intentionally
+dynamic result rows. These exceptions must use the same authentication and
+`401` lifecycle. Dashboard builds and container builds consume committed
+generated files and do not run Python code generation.
 
 ## Work on the documentation
 
@@ -72,6 +116,10 @@ uv run pytest
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
+bash scripts/check-api-codegen.sh
+npm --prefix packages/goodomics/dashboard run test
+npm --prefix packages/goodomics/dashboard run build
 uv run python -m build packages/goodomics
 uv run python -m build packages/goodomics-full
+uv run mkdocs build
 ```

@@ -20,7 +20,10 @@ export function UserMenu() {
 
   if (!principal || principal.kind === "local") return null;
 
-  const initials = accountInitials(principal.display_name, principal.email);
+  const initials = accountInitials(
+    principal.display_name ?? null,
+    principal.email ?? null,
+  );
 
   return (
     <>

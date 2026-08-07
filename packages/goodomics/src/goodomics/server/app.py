@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.routing import Route
 
@@ -25,6 +26,12 @@ from goodomics.storage.files import FileStoreRegistry
 STATIC_DIR = Path(__file__).parent / "web" / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
 INDEX_HTML = STATIC_DIR / "index.html"
+
+
+def _operation_id(route: APIRoute) -> str:
+    """Return the stable public operation ID owned by a route function name."""
+
+    return route.name
 
 
 def _dashboard_setup_response() -> HTMLResponse:
@@ -94,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sample groups, QC policies, MCP integrations, and the React dashboard."
         ),
         lifespan=lifespan,
+        generate_unique_id_function=_operation_id,
     )
     app.state.settings = settings
     app.state.store = store

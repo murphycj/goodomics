@@ -1053,7 +1053,7 @@ function parseFilterValue(
   value: string,
   operator: string,
   valueType?: string,
-): unknown {
+): AnalysisValue["filters"][number]["value"] {
   if (operator === "in" || operator === "not_in") {
     return value.split(",").map((item) => parseScalar(item.trim(), valueType));
   }

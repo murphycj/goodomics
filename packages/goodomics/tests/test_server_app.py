@@ -162,6 +162,9 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
         project["project_id"] == DEFAULT_PROJECT_ID
         for project in default_projects.json()
     )
+    assert all(
+        project["created_at"].endswith("Z") for project in default_projects.json()
+    )
 
     created = client.post(
         "/api/v1/projects",
@@ -171,6 +174,7 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     project = created.json()
     assert re.fullmatch(r"prj_[a-z]{20}", project["project_id"])
     assert project["slug"] == "rnaseq-core"
+    assert project["created_at"].endswith("Z")
 
     client.post(
         "/api/v1/runs",
@@ -203,6 +207,7 @@ def test_project_api_scopes_runs_and_searches_samples(client: TestClient) -> Non
     scoped_run = client.get(f"/api/v1/projects/{project['project_id']}/runs/rna-run")
     assert scoped_run.status_code == 200
     assert scoped_run.json()["project_id"] == project["project_id"]
+    assert scoped_run.json()["created_at"].endswith("Z")
 
     search = client.get(
         "/api/v1/search",
