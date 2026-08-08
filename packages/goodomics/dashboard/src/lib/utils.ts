@@ -25,6 +25,27 @@ export function formatDate(
   return new Date(value).toLocaleString();
 }
 
+/** Formats an API timestamp as a compact elapsed time for list views. */
+export function formatRelativeTime(value: string, now = new Date()) {
+  const timestamp = new Date(value);
+  const elapsedMilliseconds = now.getTime() - timestamp.getTime();
+  if (!Number.isFinite(elapsedMilliseconds)) return "—";
+
+  const future = elapsedMilliseconds < 0;
+  const elapsedHours = Math.abs(elapsedMilliseconds) / 3_600_000;
+  if (elapsedHours < 1) return future ? "in less than an hour" : "less than an hour ago";
+
+  const units = elapsedHours < 24
+    ? { label: "hour", value: Math.floor(elapsedHours) }
+    : elapsedHours < 24 * 30
+      ? { label: "day", value: Math.floor(elapsedHours / 24) }
+      : elapsedHours < 24 * 365
+        ? { label: "month", value: Math.floor(elapsedHours / (24 * 30)) }
+        : { label: "year", value: Math.floor(elapsedHours / (24 * 365)) };
+  const label = `${units.value} ${units.label}${units.value === 1 ? "" : "s"}`;
+  return future ? `in ${label}` : `${label} ago`;
+}
+
 export function formatBytes(value: number) {
   if (!value) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];

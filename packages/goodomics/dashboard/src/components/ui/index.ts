@@ -34,6 +34,7 @@ export { Page } from "./Page";
 export { PermissionDialog } from "./PermissionDialog";
 export { PaginationBar } from "./PaginationBar";
 export { SearchBox } from "./SearchBox";
+export { SelectionCheckbox } from "./SelectionCheckbox";
 export {
   SearchSuggestionInput,
   type SearchSuggestionOption,

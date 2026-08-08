@@ -531,6 +531,33 @@ class InsightCapabilitiesRead(BaseModel):
     result_rows: InsightResultRowsRead
 
 
+class SavedResourceDuplicateRequest(BaseModel):
+    """Request metadata for duplicating a project-scoped saved resource."""
+
+    project_id: str
+    name: NonBlankName | None = None
+
+
+class InsightBulkDeleteRequest(BaseModel):
+    """Saved insight references to delete in one project-scoped operation."""
+
+    project_id: str
+    insight_refs: list[str] = Field(min_length=1, max_length=100)
+
+
+class ReportBulkDeleteRequest(BaseModel):
+    """Saved report references to delete in one project-scoped operation."""
+
+    project_id: str
+    report_refs: list[str] = Field(min_length=1, max_length=100)
+
+
+class BulkDeleteRead(BaseModel):
+    """Identifiers removed by a completed bulk-delete operation."""
+
+    deleted_ids: list[str]
+
+
 class SampleGroupRead(BaseModel):
     """Canonical sample-group filter option."""
 
@@ -1998,6 +2025,34 @@ async def list_insights(
     return [_saved_insight_summary(row) for row in rows]
 
 
+@router.delete("/insights", response_model=BulkDeleteRead)
+async def bulk_delete_insights(
+    payload: InsightBulkDeleteRequest, request: Request
+) -> BulkDeleteRead:
+    """Delete multiple saved insights atomically within one project."""
+
+    project = await _require_project(request, payload.project_id)
+    await require_project_permission(
+        request, _session(request), project, "insight.delete"
+    )
+    async with _session_context(request) as session:
+        insights: list[InsightRecord] = []
+        seen_ids: set[str] = set()
+        for insight_ref in payload.insight_refs:
+            insight = await _get_insight_by_ref(session, insight_ref)
+            if insight is None or insight.project_id != payload.project_id:
+                raise HTTPException(status_code=404, detail="Insight not found")
+            if insight.insight_id not in seen_ids:
+                insights.append(insight)
+                seen_ids.add(insight.insight_id)
+
+        for insight in insights:
+            await _delete_insight_record(session, insight)
+        await session.commit()
+
+    return BulkDeleteRead(deleted_ids=[insight.insight_id for insight in insights])
+
+
 @router.get("/insights/capabilities", response_model=InsightCapabilitiesRead)
 async def get_insight_capabilities() -> InsightCapabilitiesRead:
     """Return the server-owned insight/report builder capabilities."""
@@ -2158,6 +2213,45 @@ async def patch_insight(
     return await get_insight(insight_ref, request)
 
 
+@router.post(
+    "/insights/{insight_ref}/duplicate",
+    response_model=SavedInsightRead,
+    status_code=201,
+)
+async def duplicate_insight(
+    insight_ref: str, payload: SavedResourceDuplicateRequest, request: Request
+) -> SavedInsightRead:
+    """Create a new saved insight from an existing validated definition."""
+
+    project = await _require_project(request, payload.project_id)
+    await require_project_permission(
+        request, _session(request), project, "insight.create"
+    )
+    async with _session_context(request) as session:
+        source = await _get_insight_by_ref(session, insight_ref)
+        if source is None or source.project_id != payload.project_id:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        await require_project_permission(
+            request, _session(request), project, "insight.read"
+        )
+        now = datetime.now(UTC)
+        duplicate = InsightRecord(
+            insight_id=_new_id("insight"),
+            project_id=source.project_id,
+            name=payload.name or f"{source.name} (copy)",
+            description=source.description,
+            config=dict(source.config),
+            created_at=now,
+            updated_at=now,
+            created_by_user_id=getattr(request.state.principal, "user_pk", None),
+            updated_by_user_id=getattr(request.state.principal, "user_pk", None),
+        )
+        session.add(duplicate)
+        await session.commit()
+
+    return await get_insight(duplicate.insight_id, request)
+
+
 @router.delete("/insights/{insight_ref}", status_code=204)
 async def delete_insight(insight_ref: str, request: Request) -> Response:
     """Delete a saved insight, its revisions, and cached results."""
@@ -2174,16 +2268,7 @@ async def delete_insight(insight_ref: str, request: Request) -> Response:
                 request, _session(request), project, "insight.delete"
             )
 
-        insight_id = insight.insight_id
-        insight_revision_id = cast(Any, InsightRevisionRecord.insight_id)
-        insight_cache_id = cast(Any, InsightResultCacheRecord.insight_id)
-        await session.exec(
-            delete(InsightRevisionRecord).where(insight_revision_id == insight_id)
-        )
-        await session.exec(
-            delete(InsightResultCacheRecord).where(insight_cache_id == insight_id)
-        )
-        await session.delete(insight)
+        await _delete_insight_record(session, insight)
         await session.commit()
 
     return Response(status_code=204)
@@ -2314,6 +2399,34 @@ async def list_reports(
                 )
         rows = (await session.exec(statement)).all()
     return [_saved_report_summary(row) for row in rows]
+
+
+@router.delete("/reports", response_model=BulkDeleteRead)
+async def bulk_delete_reports(
+    payload: ReportBulkDeleteRequest, request: Request
+) -> BulkDeleteRead:
+    """Delete multiple saved reports atomically within one project."""
+
+    project = await _require_project(request, payload.project_id)
+    await require_project_permission(
+        request, _session(request), project, "report.delete"
+    )
+    async with _session_context(request) as session:
+        reports: list[ReportRecord] = []
+        seen_ids: set[str] = set()
+        for report_ref in payload.report_refs:
+            report = await _get_report_by_ref(session, report_ref)
+            if report is None or report.project_id != payload.project_id:
+                raise HTTPException(status_code=404, detail="Report not found")
+            if report.report_id not in seen_ids:
+                reports.append(report)
+                seen_ids.add(report.report_id)
+
+        for report in reports:
+            await _delete_report_record(session, report)
+        await session.commit()
+
+    return BulkDeleteRead(deleted_ids=[report.report_id for report in reports])
 
 
 @router.post("/reports/validate", response_model=ReportValidationRead)
@@ -2538,6 +2651,45 @@ async def patch_report(
     return await get_saved_report(report_ref, request)
 
 
+@router.post(
+    "/reports/{report_ref}/duplicate",
+    response_model=SavedReportRead,
+    status_code=201,
+)
+async def duplicate_report(
+    report_ref: str, payload: SavedResourceDuplicateRequest, request: Request
+) -> SavedReportRead:
+    """Create a new saved report from an existing validated definition."""
+
+    project = await _require_project(request, payload.project_id)
+    await require_project_permission(
+        request, _session(request), project, "report.create"
+    )
+    async with _session_context(request) as session:
+        source = await _get_report_by_ref(session, report_ref)
+        if source is None or source.project_id != payload.project_id:
+            raise HTTPException(status_code=404, detail="Report not found")
+        await require_project_permission(
+            request, _session(request), project, "report.read"
+        )
+        now = datetime.now(UTC)
+        duplicate = ReportRecord(
+            report_id=_new_id("report"),
+            project_id=source.project_id,
+            name=payload.name or f"{source.name} (copy)",
+            description=source.description,
+            config=dict(source.config),
+            created_at=now,
+            updated_at=now,
+            created_by_user_id=getattr(request.state.principal, "user_pk", None),
+            updated_by_user_id=getattr(request.state.principal, "user_pk", None),
+        )
+        session.add(duplicate)
+        await session.commit()
+
+    return await get_saved_report(duplicate.report_id, request)
+
+
 @router.delete("/reports/{report_ref}", status_code=204)
 async def delete_report(report_ref: str, request: Request) -> Response:
     """Delete a saved report, its revisions, cached results, and default pointer."""
@@ -2553,29 +2705,7 @@ async def delete_report(report_ref: str, request: Request) -> Response:
                 request, _session(request), project, "report.delete"
             )
 
-        report_id = report.report_id
-        default_project_rows = (
-            await session.exec(
-                select(ProjectRecord).where(
-                    ProjectRecord.default_report_id == report_id
-                )
-            )
-        ).all()
-
-        for project_row in default_project_rows:
-            project_row.default_report_id = None
-            session.add(project_row)
-
-        report_revision_id = cast(Any, ReportRevisionRecord.report_id)
-        report_cache_id = cast(Any, ReportResultCacheRecord.report_id)
-
-        await session.exec(
-            delete(ReportRevisionRecord).where(report_revision_id == report_id)
-        )
-        await session.exec(
-            delete(ReportResultCacheRecord).where(report_cache_id == report_id)
-        )
-        await session.delete(report)
+        await _delete_report_record(session, report)
         await session.commit()
 
     return Response(status_code=204)
@@ -3582,6 +3712,45 @@ async def _get_report_by_ref(
         ),
         None,
     )
+
+
+async def _delete_insight_record(session: AsyncSession, insight: InsightRecord) -> None:
+    """Delete one insight row together with its revisions and cached results."""
+
+    insight_revision_id = cast(Any, InsightRevisionRecord.insight_id)
+    insight_cache_id = cast(Any, InsightResultCacheRecord.insight_id)
+    await session.exec(
+        delete(InsightRevisionRecord).where(insight_revision_id == insight.insight_id)
+    )
+    await session.exec(
+        delete(InsightResultCacheRecord).where(insight_cache_id == insight.insight_id)
+    )
+    await session.delete(insight)
+
+
+async def _delete_report_record(session: AsyncSession, report: ReportRecord) -> None:
+    """Delete one report, related revisions/caches, and default pointers."""
+
+    default_project_rows = (
+        await session.exec(
+            select(ProjectRecord).where(
+                ProjectRecord.default_report_id == report.report_id
+            )
+        )
+    ).all()
+    for project_row in default_project_rows:
+        project_row.default_report_id = None
+        session.add(project_row)
+
+    report_revision_id = cast(Any, ReportRevisionRecord.report_id)
+    report_cache_id = cast(Any, ReportResultCacheRecord.report_id)
+    await session.exec(
+        delete(ReportRevisionRecord).where(report_revision_id == report.report_id)
+    )
+    await session.exec(
+        delete(ReportResultCacheRecord).where(report_cache_id == report.report_id)
+    )
+    await session.delete(report)
 
 
 def _saved_entity_url_slug(

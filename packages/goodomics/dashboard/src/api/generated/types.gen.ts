@@ -333,6 +333,18 @@ export type BoxplotView = {
 };
 
 /**
+ * BulkDeleteRead
+ *
+ * Identifiers removed by a completed bulk-delete operation.
+ */
+export type BulkDeleteRead = {
+    /**
+     * Deleted Ids
+     */
+    deleted_ids: Array<string>;
+};
+
+/**
  * CategoryChartView
  *
  * Category/value bindings shared by bar, line, area, pie, and donut views.
@@ -927,6 +939,22 @@ export type HistogramView = {
     kind: 'histogram';
     x_axis?: AxisConfig | null;
     y_axis?: AxisConfig | null;
+};
+
+/**
+ * InsightBulkDeleteRequest
+ *
+ * Saved insight references to delete in one project-scoped operation.
+ */
+export type InsightBulkDeleteRequest = {
+    /**
+     * Insight Refs
+     */
+    insight_refs: Array<string>;
+    /**
+     * Project Id
+     */
+    project_id: string;
 };
 
 /**
@@ -1653,6 +1681,22 @@ export type RenderedReportRead = {
      * Run Id
      */
     run_id?: string | null;
+};
+
+/**
+ * ReportBulkDeleteRequest
+ *
+ * Saved report references to delete in one project-scoped operation.
+ */
+export type ReportBulkDeleteRequest = {
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Report Refs
+     */
+    report_refs: Array<string>;
 };
 
 /**
@@ -2990,6 +3034,22 @@ export type SavedReportSummary = {
 };
 
 /**
+ * SavedResourceDuplicateRequest
+ *
+ * Request metadata for duplicating a project-scoped saved resource.
+ */
+export type SavedResourceDuplicateRequest = {
+    /**
+     * Name
+     */
+    name?: string | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
  * ScatterView
  *
  * Two numeric value bindings rendered as a scatter plot.
@@ -3915,6 +3975,31 @@ export type HealthResponses = {
 
 export type HealthResponse = HealthResponses[keyof HealthResponses];
 
+export type BulkDeleteInsightsData = {
+    body: InsightBulkDeleteRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/insights';
+};
+
+export type BulkDeleteInsightsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type BulkDeleteInsightsError = BulkDeleteInsightsErrors[keyof BulkDeleteInsightsErrors];
+
+export type BulkDeleteInsightsResponses = {
+    /**
+     * Successful Response
+     */
+    200: BulkDeleteRead;
+};
+
+export type BulkDeleteInsightsResponse = BulkDeleteInsightsResponses[keyof BulkDeleteInsightsResponses];
+
 export type ListInsightsData = {
     body?: never;
     path?: never;
@@ -4127,6 +4212,36 @@ export type PatchInsightResponses = {
 };
 
 export type PatchInsightResponse = PatchInsightResponses[keyof PatchInsightResponses];
+
+export type DuplicateInsightData = {
+    body: SavedResourceDuplicateRequest;
+    path: {
+        /**
+         * Insight Ref
+         */
+        insight_ref: string;
+    };
+    query?: never;
+    url: '/api/v1/insights/{insight_ref}/duplicate';
+};
+
+export type DuplicateInsightErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DuplicateInsightError = DuplicateInsightErrors[keyof DuplicateInsightErrors];
+
+export type DuplicateInsightResponses = {
+    /**
+     * Successful Response
+     */
+    201: SavedInsightRead;
+};
+
+export type DuplicateInsightResponse = DuplicateInsightResponses[keyof DuplicateInsightResponses];
 
 export type ExecuteSavedInsightData = {
     body: InsightExecuteRequest;
@@ -5618,6 +5733,31 @@ export type ExportRenderedReportHtmlResponses = {
     200: unknown;
 };
 
+export type BulkDeleteReportsData = {
+    body: ReportBulkDeleteRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/reports';
+};
+
+export type BulkDeleteReportsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type BulkDeleteReportsError = BulkDeleteReportsErrors[keyof BulkDeleteReportsErrors];
+
+export type BulkDeleteReportsResponses = {
+    /**
+     * Successful Response
+     */
+    200: BulkDeleteRead;
+};
+
+export type BulkDeleteReportsResponse = BulkDeleteReportsResponses[keyof BulkDeleteReportsResponses];
+
 export type ListReportsData = {
     body?: never;
     path?: never;
@@ -5814,6 +5954,36 @@ export type PatchReportResponses = {
 };
 
 export type PatchReportResponse = PatchReportResponses[keyof PatchReportResponses];
+
+export type DuplicateReportData = {
+    body: SavedResourceDuplicateRequest;
+    path: {
+        /**
+         * Report Ref
+         */
+        report_ref: string;
+    };
+    query?: never;
+    url: '/api/v1/reports/{report_ref}/duplicate';
+};
+
+export type DuplicateReportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DuplicateReportError = DuplicateReportErrors[keyof DuplicateReportErrors];
+
+export type DuplicateReportResponses = {
+    /**
+     * Successful Response
+     */
+    201: SavedReportRead;
+};
+
+export type DuplicateReportResponse = DuplicateReportResponses[keyof DuplicateReportResponses];
 
 export type ExecuteSavedReportData = {
     body: ReportExecuteRequest;

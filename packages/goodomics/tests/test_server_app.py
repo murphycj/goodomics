@@ -1784,6 +1784,42 @@ def test_insight_and_report_round_trip_execute_and_cache(
     assert old_report_slug_after_rename.status_code == 200
     assert old_report_slug_after_rename.json()["name"] == "Project summary"
 
+    duplicated_insight = client.post(
+        f"/api/v1/insights/{insight_slug}/duplicate",
+        json={"project_id": project_id},
+    )
+    assert duplicated_insight.status_code == 201
+    duplicate_insight_id = duplicated_insight.json()["insight_id"]
+    assert duplicate_insight_id != "runs-by-kind"
+    assert duplicated_insight.json()["name"] == "Runs by kind (copy)"
+    assert duplicated_insight.json()["analysis"] == analytical_update.json()["analysis"]
+
+    duplicated_report = client.post(
+        f"/api/v1/reports/{report_slug}/duplicate",
+        json={"project_id": project_id, "name": "Project summary copy"},
+    )
+    assert duplicated_report.status_code == 201
+    duplicate_report_id = duplicated_report.json()["report_id"]
+    assert duplicate_report_id != report_id
+    assert duplicated_report.json()["name"] == "Project summary copy"
+    assert duplicated_report.json()["insights"] == renamed_report.json()["insights"]
+
+    bulk_deleted_reports = client.request(
+        "DELETE",
+        "/api/v1/reports",
+        json={"project_id": project_id, "report_refs": [duplicate_report_id]},
+    )
+    assert bulk_deleted_reports.status_code == 200
+    assert bulk_deleted_reports.json()["deleted_ids"] == [duplicate_report_id]
+
+    bulk_deleted_insights = client.request(
+        "DELETE",
+        "/api/v1/insights",
+        json={"project_id": project_id, "insight_refs": [duplicate_insight_id]},
+    )
+    assert bulk_deleted_insights.status_code == 200
+    assert bulk_deleted_insights.json()["deleted_ids"] == [duplicate_insight_id]
+
     deleted_report = client.delete(f"/api/v1/reports/{report_slug}")
     assert deleted_report.status_code == 204
     project_after_delete = client.get(f"/api/v1/projects/{project_id}")

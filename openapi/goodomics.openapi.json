@@ -773,6 +773,23 @@
         "title": "BoxplotView",
         "type": "object"
       },
+      "BulkDeleteRead": {
+        "description": "Identifiers removed by a completed bulk-delete operation.",
+        "properties": {
+          "deleted_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deleted Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deleted_ids"
+        ],
+        "title": "BulkDeleteRead",
+        "type": "object"
+      },
       "CategoryChartView": {
         "additionalProperties": false,
         "description": "Category/value bindings shared by bar, line, area, pie, and donut views.",
@@ -2013,6 +2030,30 @@
           "kind"
         ],
         "title": "HistogramView",
+        "type": "object"
+      },
+      "InsightBulkDeleteRequest": {
+        "description": "Saved insight references to delete in one project-scoped operation.",
+        "properties": {
+          "insight_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Insight Refs",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "insight_refs"
+        ],
+        "title": "InsightBulkDeleteRequest",
         "type": "object"
       },
       "InsightCapabilitiesRead": {
@@ -3590,6 +3631,30 @@
           "created_at"
         ],
         "title": "RenderedReportRead",
+        "type": "object"
+      },
+      "ReportBulkDeleteRequest": {
+        "description": "Saved report references to delete in one project-scoped operation.",
+        "properties": {
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "report_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Report Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "report_refs"
+        ],
+        "title": "ReportBulkDeleteRequest",
         "type": "object"
       },
       "ReportExecuteRequest": {
@@ -6167,6 +6232,32 @@
         "title": "SavedReportSummary",
         "type": "object"
       },
+      "SavedResourceDuplicateRequest": {
+        "description": "Request metadata for duplicating a project-scoped saved resource.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "title": "SavedResourceDuplicateRequest",
+        "type": "object"
+      },
       "ScatterView": {
         "additionalProperties": false,
         "description": "Two numeric value bindings rendered as a scatter plot.",
@@ -7604,6 +7695,43 @@
       }
     },
     "/api/v1/insights": {
+      "delete": {
+        "description": "Delete multiple saved insights atomically within one project.",
+        "operationId": "bulk_delete_insights",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsightBulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Delete Insights"
+      },
       "get": {
         "description": "List saved insights globally or for one project.",
         "operationId": "list_insights",
@@ -7905,6 +8033,56 @@
           }
         },
         "summary": "Patch Insight"
+      }
+    },
+    "/api/v1/insights/{insight_ref}/duplicate": {
+      "post": {
+        "description": "Create a new saved insight from an existing validated definition.",
+        "operationId": "duplicate_insight",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "insight_ref",
+            "required": true,
+            "schema": {
+              "title": "Insight Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedResourceDuplicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedInsightRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Duplicate Insight"
       }
     },
     "/api/v1/insights/{insight_ref}/execute": {
@@ -10182,6 +10360,43 @@
       }
     },
     "/api/v1/reports": {
+      "delete": {
+        "description": "Delete multiple saved reports atomically within one project.",
+        "operationId": "bulk_delete_reports",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportBulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Delete Reports"
+      },
       "get": {
         "description": "List saved reports globally or for one project.",
         "operationId": "list_reports",
@@ -10464,6 +10679,56 @@
           }
         },
         "summary": "Patch Report"
+      }
+    },
+    "/api/v1/reports/{report_ref}/duplicate": {
+      "post": {
+        "description": "Create a new saved report from an existing validated definition.",
+        "operationId": "duplicate_report",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_ref",
+            "required": true,
+            "schema": {
+              "title": "Report Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedResourceDuplicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedReportRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Duplicate Report"
       }
     },
     "/api/v1/reports/{report_ref}/execute": {

@@ -6,6 +6,8 @@ import {
   addMember as sdkAddMember,
   addProjectSampleGroupMembers as sdkAddProjectSampleGroupMembers,
   addUser as sdkAddUser,
+  bulkDeleteInsights as sdkBulkDeleteInsights,
+  bulkDeleteReports as sdkBulkDeleteReports,
   changePassword as sdkChangePassword,
   chatWithAi as sdkChatWithAi,
   createInsight as sdkCreateInsight,
@@ -16,6 +18,8 @@ import {
   deleteMember as sdkDeleteMember,
   deleteProjectSampleGroup as sdkDeleteProjectSampleGroup,
   deleteReport as sdkDeleteReport,
+  duplicateInsight as sdkDuplicateInsight,
+  duplicateReport as sdkDuplicateReport,
   executeAdhocInsight,
   executeSavedInsight,
   executeSavedReport,
@@ -350,8 +354,21 @@ export const createInsight = (payload: InsightDraft & { insight_id?: string; pro
   sdkCreateInsight({ body: insightDraftToCreate(payload, payload), ...throwing });
 export const patchInsight = (insightId: string, payload: SavedInsightPatch & InsightDraft) =>
   sdkPatchInsight({ path: { insight_ref: insightId }, body: insightDraftToPatch(payload, payload), ...throwing });
+export const renameInsight = (insightId: string, name: string) =>
+  sdkPatchInsight({ path: { insight_ref: insightId }, body: { name }, ...throwing });
 export const deleteInsight = (insightId: string) =>
   sdkDeleteInsight({ path: { insight_ref: insightId }, ...throwing });
+export const bulkDeleteInsights = (projectId: string, insightRefs: string[]) =>
+  sdkBulkDeleteInsights({
+    body: { project_id: projectId, insight_refs: insightRefs },
+    ...throwing,
+  });
+export const duplicateInsight = (projectId: string, insightRef: string) =>
+  sdkDuplicateInsight({
+    path: { insight_ref: insightRef },
+    body: { project_id: projectId },
+    ...throwing,
+  });
 export async function executeInsight({ insightId, projectId, config, name, description, limit, random, exportResult, refresh }: {
   insightId?: string; projectId: string; config?: InsightDraft; name?: string; description?: string | null;
   limit?: number; random?: boolean; exportResult?: boolean; refresh?: boolean;
@@ -377,6 +394,17 @@ export const patchReport = (reportId: string, payload: Partial<ReportDefinition>
   sdkPatchReport({ path: { report_ref: reportId }, body: reportDraftToPatch(payload), ...throwing });
 export const deleteReport = (reportId: string) =>
   sdkDeleteReport({ path: { report_ref: reportId }, ...throwing });
+export const bulkDeleteReports = (projectId: string, reportRefs: string[]) =>
+  sdkBulkDeleteReports({
+    body: { project_id: projectId, report_refs: reportRefs },
+    ...throwing,
+  });
+export const duplicateReport = (projectId: string, reportRef: string) =>
+  sdkDuplicateReport({
+    path: { report_ref: reportRef },
+    body: { project_id: projectId },
+    ...throwing,
+  });
 export async function executeReport({ reportId, projectId, limit, random, refresh }: {
   reportId: string; projectId: string; limit?: number; random?: boolean; refresh?: boolean;
 }) {

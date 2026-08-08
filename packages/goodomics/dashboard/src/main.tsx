@@ -290,7 +290,7 @@ function InsightNewRouteAdapter() {
 /** Route adapter for viewing an insight. */
 function InsightDetailRouteAdapter() {
   const { projectId, insightRef } = insightDetailRoute.useParams();
-  return <InsightsPage projectId={projectId} target={{ mode: "edit", insightRef }} />;
+  return <InsightsPage projectId={projectId} target={{ mode: "view", insightRef }} />;
 }
 
 /** Route adapter for editing an insight. */

@@ -1,8 +1,11 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { ArrowLeft, BarChart3, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  bulkDeleteInsights,
   createInsight,
+  deleteInsight,
+  duplicateInsight,
   executeInsight,
   getInsight,
   getInsightCapabilities,
@@ -10,6 +13,7 @@ import {
   listProjectDataContracts,
   listReports,
   patchInsight,
+  renameInsight,
   validateInsightConfig,
   type InsightSummary,
 } from "../api";
@@ -24,11 +28,13 @@ import {
   type ResultScope as EditorScope,
 } from "../components/insights/ResultScopeEditor";
 import { InsightListTable } from "../components/reports/InsightListTable";
+import { SavedItemRenameDialog } from "../components/reports/SavedItemRenameDialog";
 import {
   AsyncBlock,
   Button,
   Card,
   CardContent,
+  ConfirmDialog,
   Input,
   Page,
 } from "../components/ui";
@@ -50,6 +56,7 @@ import { queryClient } from "../lib/queryClient";
 type InsightTarget =
   | { mode: "list" }
   | { mode: "new" }
+  | { mode: "view"; insightRef: string }
   | { mode: "edit"; insightRef: string };
 
 const emptyDraft = (): InsightDraft => ({
@@ -97,12 +104,19 @@ export function InsightsPage({
     queryKey: ["insight-capabilities"],
     queryFn: getInsightCapabilities,
   });
+  const selectedInsightRef = target.mode === "edit" || target.mode === "view"
+    ? target.insightRef
+    : null;
   const selected = useQuery({
-    queryKey: ["insight", target.mode === "edit" ? target.insightRef : null],
-    queryFn: () => getInsight(target.mode === "edit" ? target.insightRef : ""),
-    enabled: target.mode === "edit",
+    queryKey: ["insight", selectedInsightRef],
+    queryFn: () => getInsight(selectedInsightRef ?? ""),
+    enabled: Boolean(selectedInsightRef),
   });
   const [search, setSearch] = useState("");
+  const [selectedInsightIds, setSelectedInsightIds] = useState<Set<string>>(new Set());
+  const [renameTarget, setRenameTarget] = useState<InsightSummary | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<InsightSummary[]>([]);
+  const [bulkInsightDelete, setBulkInsightDelete] = useState(false);
   const [name, setName] = useState("New insight");
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
@@ -182,10 +196,91 @@ export function InsightsPage({
     }
     return counts;
   }, [reports.data]);
+  const renameListInsight = useMutation({
+    mutationFn: ({ insightId, nextName }: { insightId: string; nextName: string }) =>
+      renameInsight(insightId, nextName),
+    onSuccess: () => {
+      setRenameTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ["insights", projectId] });
+    },
+  });
+  const duplicateListInsight = useMutation({
+    mutationFn: (insightRef: string) => duplicateInsight(projectId, insightRef),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["insights", projectId] });
+    },
+  });
+  const removeListInsights = useMutation({
+    mutationFn: async ({ ids, bulk }: { ids: string[]; bulk: boolean }) => {
+      if (bulk) await bulkDeleteInsights(projectId, ids);
+      else await deleteInsight(ids[0]!);
+    },
+    onSuccess: (_result, variables) => {
+      setDeleteTargets([]);
+      setBulkInsightDelete(false);
+      setSelectedInsightIds((current) => {
+        const next = new Set(current);
+        for (const id of variables.ids) next.delete(id);
+        return next;
+      });
+      void queryClient.invalidateQueries({ queryKey: ["insights", projectId] });
+    },
+  });
 
   if (target.mode === "list") {
+    const rows = filterInsights(insights.data ?? [], search);
+    const selectedRows = (insights.data ?? []).filter((insight) =>
+      selectedInsightIds.has(insight.insight_id),
+    );
+    const canEditInsights = can("insight.edit", projectId);
+    const canDeleteInsights = can("insight.delete", projectId);
     return (
       <Page title="Insights" subtitle="Create reusable values, tables, and charts.">
+        <SavedItemRenameDialog
+          error={renameListInsight.error?.message}
+          isPending={renameListInsight.isPending}
+          itemName={renameTarget?.name ?? ""}
+          noun="insight"
+          open={Boolean(renameTarget)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRenameTarget(null);
+              renameListInsight.reset();
+            }
+          }}
+          onRename={(nextName) => {
+            if (renameTarget) {
+              renameListInsight.mutate({
+                insightId: renameTarget.insight_id,
+                nextName,
+              });
+            }
+          }}
+        />
+        <ConfirmDialog
+          confirmLabel={deleteTargets.length > 1 ? "Delete insights" : "Delete insight"}
+          description={
+            bulkInsightDelete
+              ? `Delete ${deleteTargets.length} selected ${deleteTargets.length === 1 ? "insight" : "insights"}? This action cannot be undone.`
+              : `Delete “${deleteTargets[0]?.name ?? "this insight"}”? This action cannot be undone.`
+          }
+          error={removeListInsights.error?.message}
+          isPending={removeListInsights.isPending}
+          open={deleteTargets.length > 0}
+          title={bulkInsightDelete ? "Delete selected insights" : "Delete insight"}
+          tone="destructive"
+          onOpenChange={(open) => {
+            if (!open) {
+              setDeleteTargets([]);
+              setBulkInsightDelete(false);
+              removeListInsights.reset();
+            }
+          }}
+          onConfirm={() => {
+            const ids = deleteTargets.map((insight) => insight.insight_id);
+            if (ids.length) removeListInsights.mutate({ ids, bulk: bulkInsightDelete });
+          }}
+        />
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="relative w-full max-w-[320px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
@@ -196,22 +291,128 @@ export function InsightsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button onClick={() => (window.location.href = `/project/${projectId}/insights/new`)}>
-            <Plus className="h-4 w-4" /> New insight
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {selectedRows.length ? (
+              <>
+                <span className="text-sm text-[#657082]">
+                  {selectedRows.length} selected
+                </span>
+                <Button
+                  className="border-[#efb4ae] text-[#b42318] hover:border-[#dc8f87] hover:bg-[#fff1f2]"
+                  variant="outline"
+                  onClick={() => {
+                    setBulkInsightDelete(true);
+                    setDeleteTargets(selectedRows);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete selected
+                </Button>
+              </>
+            ) : null}
+            <Button onClick={() => (window.location.href = `/project/${projectId}/insights/new`)}>
+              <Plus className="h-4 w-4" /> New insight
+            </Button>
+          </div>
         </div>
         <AsyncBlock query={insights} empty="No saved insights yet.">
-          {(rows) => (
+          {() => (
             <InsightListTable
-              insights={filterInsights(rows, search)}
+              actions={{
+                canDelete: canDeleteInsights,
+                canDuplicate: can("insight.create", projectId),
+                canEdit: canEditInsights,
+                onDelete: (insight) => {
+                  setBulkInsightDelete(false);
+                  setDeleteTargets([insight]);
+                },
+                onDuplicate: (insight) => duplicateListInsight.mutate(insight.insight_id),
+                onEdit: (insight) => {
+                  window.location.href = `/project/${projectId}/insights/${encodeURIComponent(insight.url_slug)}/edit`;
+                },
+                onRename: (insight) => setRenameTarget(insight),
+                onView: (insight) => {
+                  window.location.href = `/project/${projectId}/insights/${encodeURIComponent(insight.url_slug)}`;
+                },
+              }}
+              insights={rows}
               reportCounts={reportCounts}
               onOpen={(insight) => {
-                window.location.href = `/project/${projectId}/insights/${encodeURIComponent(insight.url_slug)}/edit`;
+                window.location.href = `/project/${projectId}/insights/${encodeURIComponent(insight.url_slug)}`;
+              }}
+              selection={{
+                disabled: !canDeleteInsights,
+                selectedIds: selectedInsightIds,
+                onToggle: (insightId, selected) => {
+                  setSelectedInsightIds((current) => {
+                    const next = new Set(current);
+                    if (selected) next.add(insightId);
+                    else next.delete(insightId);
+                    return next;
+                  });
+                },
+                onToggleAll: (selected) => {
+                  setSelectedInsightIds((current) => {
+                    const next = new Set(current);
+                    for (const insight of rows) {
+                      if (selected) next.add(insight.insight_id);
+                      else next.delete(insight.insight_id);
+                    }
+                    return next;
+                  });
+                },
               }}
             />
           )}
         </AsyncBlock>
+        {duplicateListInsight.error ? (
+          <ErrorBanner message={duplicateListInsight.error.message} />
+        ) : null}
       </Page>
+    );
+  }
+
+  if (target.mode === "view") {
+    if (selected.error) {
+      return <ErrorBanner message={(selected.error as Error).message} />;
+    }
+    if (selected.isLoading || !selected.data) {
+      return <div className="p-4 text-sm text-[#657082]">Loading insight…</div>;
+    }
+    return (
+      <div className="flex h-[calc(100vh-48px)] min-h-0 flex-col gap-4">
+        <section className="shrink-0 border-b border-[#dce3eb] pb-4">
+          <div className="flex items-start gap-3">
+            <Button size="icon" variant="ghost" onClick={() => { window.location.href = `/project/${projectId}/insights`; }}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <BarChart3 className="mt-2 h-5 w-5 shrink-0 text-[#16784a]" />
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-xl font-semibold text-[#1d2430]">{selected.data.name}</h1>
+              {selected.data.description ? (
+                <p className="mt-2 max-w-[860px] text-sm text-[#526071]">{selected.data.description}</p>
+              ) : null}
+            </div>
+            {can("insight.edit", projectId) ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  window.location.href = `/project/${projectId}/insights/${encodeURIComponent(selected.data.url_slug)}/edit`;
+                }}
+              >
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+            ) : null}
+          </div>
+        </section>
+        <div className="min-h-0 flex-1">
+          <InsightPreviewPanel
+            config={draft as unknown as Record<string, unknown>}
+            error={(preview.error as Error | null) ?? null}
+            result={preview.data}
+            setupWarning={preview.isLoading ? "Loading insight…" : null}
+          />
+        </div>
+      </div>
     );
   }
 

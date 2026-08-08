@@ -18,8 +18,10 @@ import GridLayout, { type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import {
+  bulkDeleteReports,
   createReport,
   deleteReport,
+  duplicateReport,
   executeReport,
   getProject,
   getReport,
@@ -36,6 +38,7 @@ import {
 import { InsightListTable } from "../components/reports/InsightListTable";
 import { InsightPreview } from "../components/reports/InsightPreview";
 import { ReportListTable } from "../components/reports/ReportListTable";
+import { SavedItemRenameDialog } from "../components/reports/SavedItemRenameDialog";
 import {
   readReportInsights,
   type ReportInsight,
@@ -109,6 +112,10 @@ export function ReportsPage({
   const maySaveReport = isNewReport ? true : can("report.edit", projectId);
   const isEditingDetails = target.mode === "new" || target.mode === "edit";
   const [search, setSearch] = useState("");
+  const [selectedReportIds, setSelectedReportIds] = useState<Set<string>>(new Set());
+  const [renameListTarget, setRenameListTarget] = useState<ReportSummary | null>(null);
+  const [deleteListTargets, setDeleteListTargets] = useState<ReportSummary[]>([]);
+  const [bulkListDelete, setBulkListDelete] = useState(false);
   const selectedReportSummary = reports.data?.find(
     (report) =>
       target.mode !== "list" &&
@@ -233,6 +240,37 @@ export function ReportsPage({
       window.location.href = `/project/${projectId}/reports`;
     },
   });
+  const renameListReport = useMutation({
+    mutationFn: ({ reportId, nextName }: { reportId: string; nextName: string }) =>
+      patchReport(reportId, { name: nextName }),
+    onSuccess: () => {
+      setRenameListTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
+    },
+  });
+  const duplicateListReport = useMutation({
+    mutationFn: (reportRef: string) => duplicateReport(projectId, reportRef),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
+    },
+  });
+  const removeListReports = useMutation({
+    mutationFn: async ({ ids, bulk }: { ids: string[]; bulk: boolean }) => {
+      if (bulk) await bulkDeleteReports(projectId, ids);
+      else await deleteReport(ids[0]!);
+    },
+    onSuccess: (_result, variables) => {
+      setDeleteListTargets([]);
+      setBulkListDelete(false);
+      setSelectedReportIds((current) => {
+        const next = new Set(current);
+        for (const id of variables.ids) next.delete(id);
+        return next;
+      });
+      void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
+  });
   const layout = useMemo<Layout>(
     () =>
       reportInsights.map((insight) => ({
@@ -268,11 +306,62 @@ export function ReportsPage({
   );
 
   if (mode === "list") {
+    const rows = filterReports(reports.data ?? [], search);
+    const selectedRows = (reports.data ?? []).filter((report) =>
+      selectedReportIds.has(report.report_id),
+    );
+    const canEditReports = can("report.edit", projectId);
+    const canDeleteReports = can("report.delete", projectId);
     return (
       <Page
         title="Reports"
         subtitle="Create and manage reusable project reports."
       >
+        <SavedItemRenameDialog
+          error={renameListReport.error?.message}
+          isPending={renameListReport.isPending}
+          itemName={renameListTarget?.name ?? ""}
+          noun="report"
+          open={Boolean(renameListTarget)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRenameListTarget(null);
+              renameListReport.reset();
+            }
+          }}
+          onRename={(nextName) => {
+            if (renameListTarget) {
+              renameListReport.mutate({
+                reportId: renameListTarget.report_id,
+                nextName,
+              });
+            }
+          }}
+        />
+        <ConfirmDialog
+          confirmLabel={deleteListTargets.length > 1 ? "Delete reports" : "Delete report"}
+          description={
+            bulkListDelete
+              ? `Delete ${deleteListTargets.length} selected ${deleteListTargets.length === 1 ? "report" : "reports"}? This action cannot be undone.`
+              : `Delete “${deleteListTargets[0]?.name ?? "this report"}”? This action cannot be undone.`
+          }
+          error={removeListReports.error?.message}
+          isPending={removeListReports.isPending}
+          open={deleteListTargets.length > 0}
+          title={bulkListDelete ? "Delete selected reports" : "Delete report"}
+          tone="destructive"
+          onOpenChange={(open) => {
+            if (!open) {
+              setDeleteListTargets([]);
+              setBulkListDelete(false);
+              removeListReports.reset();
+            }
+          }}
+          onConfirm={() => {
+            const ids = deleteListTargets.map((report) => report.report_id);
+            if (ids.length) removeListReports.mutate({ ids, bulk: bulkListDelete });
+          }}
+        />
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="relative w-full max-w-[320px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#758195]" />
@@ -283,27 +372,84 @@ export function ReportsPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button
-            onClick={() => {
-              window.location.href = `/project/${projectId}/reports/new`;
-            }}
-          >
-            <Plus className="h-4 w-4" /> New report
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {selectedRows.length ? (
+              <>
+                <span className="text-sm text-[#657082]">{selectedRows.length} selected</span>
+                <Button
+                  className="border-[#efb4ae] text-[#b42318] hover:border-[#dc8f87] hover:bg-[#fff1f2]"
+                  variant="outline"
+                  onClick={() => {
+                    setBulkListDelete(true);
+                    setDeleteListTargets(selectedRows);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete selected
+                </Button>
+              </>
+            ) : null}
+            <Button onClick={() => { window.location.href = `/project/${projectId}/reports/new`; }}>
+              <Plus className="h-4 w-4" /> New report
+            </Button>
+          </div>
         </div>
         <AsyncBlock query={reports} empty="No saved reports yet.">
-          {(data) => (
+          {() => (
             <ReportListTable
+              actions={{
+                canDelete: canDeleteReports,
+                canDuplicate: can("report.create", projectId),
+                canEdit: canEditReports,
+                onDelete: (report) => {
+                  setBulkListDelete(false);
+                  setDeleteListTargets([report]);
+                },
+                onDuplicate: (report) => duplicateListReport.mutate(report.report_id),
+                onEdit: (report) => {
+                  window.location.href = `/project/${projectId}/reports/${encodeURIComponent(report.url_slug)}/edit`;
+                },
+                onRename: (report) => setRenameListTarget(report),
+                onView: (report) => {
+                  window.location.href = `/project/${projectId}/reports/${encodeURIComponent(report.url_slug)}`;
+                },
+              }}
               defaultReportId={project.data?.default_report_id ?? null}
-              reports={filterReports(data, search)}
+              reports={rows}
               onOpen={(report) => {
                 window.location.href = `/project/${projectId}/reports/${encodeURIComponent(
                   report.url_slug,
                 )}`;
               }}
+              selection={{
+                disabled: !canDeleteReports,
+                selectedIds: selectedReportIds,
+                onToggle: (reportId, selected) => {
+                  setSelectedReportIds((current) => {
+                    const next = new Set(current);
+                    if (selected) next.add(reportId);
+                    else next.delete(reportId);
+                    return next;
+                  });
+                },
+                onToggleAll: (selected) => {
+                  setSelectedReportIds((current) => {
+                    const next = new Set(current);
+                    for (const report of rows) {
+                      if (selected) next.add(report.report_id);
+                      else next.delete(report.report_id);
+                    }
+                    return next;
+                  });
+                },
+              }}
             />
           )}
         </AsyncBlock>
+        {duplicateListReport.error ? (
+          <div className="mt-3 rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-sm text-[#b42318]" role="alert">
+            {duplicateListReport.error.message}
+          </div>
+        ) : null}
       </Page>
     );
   }

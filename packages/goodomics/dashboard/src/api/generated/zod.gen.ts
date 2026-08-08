@@ -152,6 +152,15 @@ export const zBoxplotView = z.object({
 });
 
 /**
+ * BulkDeleteRead
+ *
+ * Identifiers removed by a completed bulk-delete operation.
+ */
+export const zBulkDeleteRead = z.object({
+    deleted_ids: z.array(z.string())
+});
+
+/**
  * CategoryChartView
  *
  * Category/value bindings shared by bar, line, area, pie, and donut views.
@@ -442,6 +451,16 @@ export const zHistogramView = z.object({
     kind: z.literal('histogram'),
     x_axis: zAxisConfig.nullish(),
     y_axis: zAxisConfig.nullish()
+});
+
+/**
+ * InsightBulkDeleteRequest
+ *
+ * Saved insight references to delete in one project-scoped operation.
+ */
+export const zInsightBulkDeleteRequest = z.object({
+    insight_refs: z.array(z.string()).min(1).max(100),
+    project_id: z.string()
 });
 
 /**
@@ -798,6 +817,16 @@ export const zRenderedReportRead = z.object({
     rendered_report_id: z.string(),
     report_id: z.string().nullish(),
     run_id: z.string().nullish()
+});
+
+/**
+ * ReportBulkDeleteRequest
+ *
+ * Saved report references to delete in one project-scoped operation.
+ */
+export const zReportBulkDeleteRequest = z.object({
+    project_id: z.string(),
+    report_refs: z.array(z.string()).min(1).max(100)
 });
 
 /**
@@ -1441,6 +1470,16 @@ export const zSavedReportSummary = z.object({
 });
 
 /**
+ * SavedResourceDuplicateRequest
+ *
+ * Request metadata for duplicating a project-scoped saved resource.
+ */
+export const zSavedResourceDuplicateRequest = z.object({
+    name: z.string().min(1).nullish(),
+    project_id: z.string()
+});
+
+/**
  * ScatterView
  *
  * Two numeric value bindings rendered as a scatter plot.
@@ -2012,6 +2051,13 @@ export const zGetFileContentPath = z.object({
  */
 export const zHealthResponse = z.record(z.string(), z.string());
 
+export const zBulkDeleteInsightsBody = zInsightBulkDeleteRequest;
+
+/**
+ * Successful Response
+ */
+export const zBulkDeleteInsightsResponse = zBulkDeleteRead;
+
 export const zListInsightsQuery = z.object({
     project_id: z.string().nullish()
 });
@@ -2077,6 +2123,17 @@ export const zPatchInsightPath = z.object({
  * Successful Response
  */
 export const zPatchInsightResponse = zSavedInsightRead;
+
+export const zDuplicateInsightBody = zSavedResourceDuplicateRequest;
+
+export const zDuplicateInsightPath = z.object({
+    insight_ref: z.string()
+});
+
+/**
+ * Successful Response
+ */
+export const zDuplicateInsightResponse = zSavedInsightRead;
 
 export const zExecuteSavedInsightBody = zInsightExecuteRequest;
 
@@ -2562,6 +2619,13 @@ export const zExportRenderedReportHtmlPath = z.object({
     rendered_report_id: z.string()
 });
 
+export const zBulkDeleteReportsBody = zReportBulkDeleteRequest;
+
+/**
+ * Successful Response
+ */
+export const zBulkDeleteReportsResponse = zBulkDeleteRead;
+
 export const zListReportsQuery = z.object({
     project_id: z.string().nullish()
 });
@@ -2622,6 +2686,17 @@ export const zPatchReportPath = z.object({
  * Successful Response
  */
 export const zPatchReportResponse = zSavedReportRead;
+
+export const zDuplicateReportBody = zSavedResourceDuplicateRequest;
+
+export const zDuplicateReportPath = z.object({
+    report_ref: z.string()
+});
+
+/**
+ * Successful Response
+ */
+export const zDuplicateReportResponse = zSavedReportRead;
 
 export const zExecuteSavedReportBody = zReportExecuteRequest;
 
