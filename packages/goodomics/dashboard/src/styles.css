@@ -190,6 +190,11 @@ code {
 }
 
 .report-card {
+  overflow: visible;
+}
+
+.report-card-surface {
+  height: 100%;
   overflow: hidden;
   border: 1px solid #dce3eb;
   border-radius: 8px;
@@ -205,7 +210,7 @@ code {
   cursor: default;
 }
 
-.report-grid-editing .report-card {
+.report-grid-editing .report-card-surface {
   border-color: #8edeb4;
   box-shadow: 0 0 0 2px rgb(43 191 122 / 0.12);
 }
@@ -218,6 +223,69 @@ code {
   cursor: grab;
 }
 
-.report-grid-editing .react-resizable-handle::after {
-  border-color: #16784a;
+.react-grid-item > .report-resize-handle {
+  z-index: 20;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #bdd8c9;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 0.96);
+  background-image: none;
+  color: #39805d;
+  box-shadow: 0 2px 7px rgb(25 32 43 / 0.1);
+  opacity: 0;
+  pointer-events: auto;
+  transition:
+    opacity 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+  transition-delay: 0ms;
+}
+
+.react-grid-item.report-layout-resizable:hover > .report-resize-handle {
+  opacity: 1;
+  transition-delay: 420ms, 420ms, 420ms;
+}
+
+.react-grid-item.resizing > .report-resize-handle {
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
+.react-grid-item > .report-resize-handle:hover {
+  border-color: #7dc9a1;
+  box-shadow:
+    0 0 0 2px rgb(43 191 122 / 0.08),
+    0 2px 7px rgb(25 32 43 / 0.1);
+}
+
+.react-grid-item > .report-resize-handle::after {
+  display: none;
+}
+
+.react-grid-item > .report-resize-handle.react-resizable-handle-e {
+  top: 50%;
+  right: 0;
+  width: 18px;
+  height: 28px;
+  margin-top: 0;
+  transform: translate(50%, -50%);
+}
+
+.react-grid-item > .report-resize-handle.react-resizable-handle-s {
+  bottom: 0;
+  left: 50%;
+  width: 28px;
+  height: 18px;
+  margin-left: 0;
+  transform: translate(-50%, 50%);
+}
+
+.react-grid-item > .report-resize-handle.react-resizable-handle-se {
+  right: 0;
+  bottom: 0;
+  transform: translate(50%, 50%);
 }

@@ -112,9 +112,7 @@ export function InsightBuilderToolbar({
               </SelectContent>
             </Select>
           </div>
-        </div>
-        <div className="flex items-end gap-1">
-          <div className="mr-1 space-y-1">
+          <div className="space-y-1">
             <Label className="text-[11px] font-bold uppercase tracking-wide text-[#657082]">
               View as
             </Label>
@@ -144,6 +142,8 @@ export function InsightBuilderToolbar({
               </SelectContent>
             </Select>
           </div>
+        </div>
+        <div className="flex items-end gap-1">
           <InsightSettingsButton
             draft={draft}
             result={result}

@@ -3,6 +3,9 @@ import {
   ArrowLeft,
   ChevronDown,
   ExternalLink,
+  Grip,
+  GripHorizontal,
+  GripVertical,
   LayoutGrid,
   MoreHorizontal,
   Pencil,
@@ -13,8 +16,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import GridLayout, { type Layout } from "react-grid-layout";
+import { useEffect, useMemo, useState, type Ref } from "react";
+import GridLayout, {
+  type Layout,
+  type ResizeHandleAxis,
+  useContainerWidth,
+} from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import {
@@ -40,15 +47,16 @@ import { InsightPreview } from "../components/reports/InsightPreview";
 import { ReportListTable } from "../components/reports/ReportListTable";
 import { SavedItemRenameDialog } from "../components/reports/SavedItemRenameDialog";
 import {
+  applyReportGridLayout,
   readReportInsights,
+  reportGridLayoutsEqual,
+  snapshotReportInsights,
   type ReportInsight,
 } from "../components/reports/reportUtils";
 import { reportDefinitionSchema } from "../lib/insightSchemas";
 import {
   AsyncBlock,
   Button,
-  Card,
-  CardContent,
   ConfirmDialog,
   Dialog,
   DialogContent,
@@ -76,6 +84,8 @@ import { cn } from "../lib/utils";
 import { isRecord, stringValue } from "../lib/valueUtils";
 
 type ReportMode = "list" | "detail";
+const REPORT_GRID_RESIZE_GUTTER = 10;
+const REPORT_REFRESH_ANIMATION_MS = 500;
 type ReportTarget =
   | { mode: "list" }
   | { mode: "new" }
@@ -146,6 +156,12 @@ export function ReportsPage({
   const [rowLimit, setRowLimit] = useState<number | undefined>();
   const [randomRows, setRandomRows] = useState<boolean | undefined>();
   const [reportInsights, setReportInsights] = useState<ReportInsight[]>([]);
+  const [isRefreshingReport, setIsRefreshingReport] = useState(false);
+  const [layoutSessionStart, setLayoutSessionStart] = useState<
+    ReportInsight[] | null
+  >(null);
+  const { containerRef: reportGridRef, width: reportGridWidth } =
+    useContainerWidth({ initialWidth: 1120 });
   const reportDefinition = useMemo(
     () => ({
       version: 1 as const,
@@ -188,6 +204,7 @@ export function ReportsPage({
       setRowLimit(undefined);
       setRandomRows(undefined);
       setReportInsights([]);
+      setLayoutSessionStart(null);
       setEditMode(true);
       return;
     }
@@ -200,6 +217,7 @@ export function ReportsPage({
     setRowLimit(selectedReport.limit ?? undefined);
     setRandomRows(selectedReport.random ?? undefined);
     setReportInsights(readReportInsights(selectedReport));
+    setLayoutSessionStart(null);
     setEditMode(target.mode === "edit");
   }, [isNewReport, selectedReport, target.mode]);
 
@@ -209,6 +227,21 @@ export function ReportsPage({
     enabled: mode === "detail" && Boolean(selectedReportId),
     retry: false,
   });
+  const refreshReport = async () => {
+    if (isRefreshingReport) return;
+    setIsRefreshingReport(true);
+    try {
+      await Promise.all([
+        result.refetch(),
+        new Promise<void>((resolve) => {
+          window.setTimeout(resolve, REPORT_REFRESH_ANIMATION_MS);
+        }),
+      ]);
+    } finally {
+      setIsRefreshingReport(false);
+    }
+  };
+  
   const saveReport = useMutation({
     mutationFn: async (continueEditing: boolean) => {
       const config = reportDefinition;
@@ -222,13 +255,21 @@ export function ReportsPage({
       });
     },
     onSuccess: (saved, continueEditing) => {
+      if (selectedReportRef) {
+        queryClient.setQueryData(["report", selectedReportRef], saved);
+      }
       void queryClient.invalidateQueries({ queryKey: ["reports", projectId] });
       void queryClient.invalidateQueries({
         queryKey: ["report-result", projectId, saved.report_id],
       });
-      window.location.href = continueEditing
-        ? `/project/${projectId}/reports/${encodeURIComponent(saved.url_slug)}/edit`
-        : `/project/${projectId}/reports`;
+      if (selectedReportId) {
+        setLayoutSessionStart(null);
+        setEditMode(false);
+        return;
+      }
+      window.location.href = `/project/${projectId}/reports/${encodeURIComponent(
+        saved.url_slug,
+      )}${continueEditing ? "/edit" : ""}`;
     },
   });
   const removeReport = useMutation({
@@ -271,6 +312,9 @@ export function ReportsPage({
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
     },
   });
+  const canMoveLayout = maySaveReport && editMode;
+  const canResizeLayout =
+    maySaveReport && (editMode || Boolean(selectedReportId));
   const layout = useMemo<Layout>(
     () =>
       reportInsights.map((insight) => ({
@@ -281,12 +325,39 @@ export function ReportsPage({
         h: insight.layout.height,
         minW: 3,
         minH: 3,
-        static: !editMode,
-        isDraggable: editMode,
-        isResizable: editMode,
+        static: false,
+        isDraggable: canMoveLayout,
+        isResizable: canResizeLayout,
       })),
-    [editMode, reportInsights],
+    [canMoveLayout, canResizeLayout, reportInsights],
   );
+
+  const updateLayout = (nextLayout: Layout) => {
+    if (!canMoveLayout && !canResizeLayout) return;
+    setReportInsights((current) =>
+      applyReportGridLayout(current, nextLayout),
+    );
+  };
+  const finishLayoutInteraction = (nextLayout: Layout) => {
+    const nextInsights = applyReportGridLayout(reportInsights, nextLayout);
+    if (reportGridLayoutsEqual(reportInsights, nextInsights)) return;
+    setReportInsights(nextInsights);
+  };
+  const beginLayoutSession = () => {
+    setLayoutSessionStart(
+      (current) => current ?? snapshotReportInsights(reportInsights),
+    );
+    setEditMode(true);
+  };
+  const cancelLayoutSession = () => {
+    if (layoutSessionStart) {
+      setReportInsights(snapshotReportInsights(layoutSessionStart));
+    }
+    setAddDialogOpen(false);
+    setLayoutSessionStart(null);
+    setEditMode(false);
+    saveReport.reset();
+  };
 
   const insightById = useMemo(() => {
     const insightResults = Array.isArray(result.data?.insights)
@@ -304,6 +375,7 @@ export function ReportsPage({
     () => new Set(reportInsights.map((insight) => insight.id)),
     [reportInsights],
   );
+  const reportSaveError = saveReport.error;
 
   if (mode === "list") {
     const rows = filterReports(reports.data ?? [], search);
@@ -496,13 +568,16 @@ export function ReportsPage({
           description={description}
           isDeleting={removeReport.isPending}
           isLayoutEditing={editMode}
+          isLayoutSaving={saveReport.isPending}
+          isRefreshing={isRefreshingReport}
           projectName={project.data?.name ?? projectId}
           report={selectedReport}
           name={name}
           onBack={() => {
             window.location.href = `/project/${projectId}/reports`;
           }}
-          onChangeLayout={() => setEditMode(true)}
+          onCancelLayout={cancelLayoutSession}
+          onChangeLayout={beginLayoutSession}
           onDelete={() => {
             removeReport.reset();
             setDeleteDialogOpen(true);
@@ -513,17 +588,17 @@ export function ReportsPage({
               selectedReport.url_slug,
             )}/edit`;
           }}
-          onRefresh={() => void result.refetch()}
+          onRefresh={() => void refreshReport()}
           onSaveLayout={() => saveReport.mutate(false)}
         />
       )}
 
-      {saveReport.error instanceof Error ? (
+      {reportSaveError instanceof Error ? (
         <div
           className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-sm text-[#b42318]"
           role="alert"
         >
-          {saveReport.error.message}
+          {reportSaveError.message}
         </div>
       ) : null}
 
@@ -615,16 +690,29 @@ export function ReportsPage({
                 </div>
               </DialogContent>
             </Dialog>
-            <Button
-              variant="secondary"
-              onClick={() => setEditMode((value) => !value)}
-            >
-              <LayoutGrid className="h-4 w-4" />{" "}
-              {editMode ? "View" : "Edit layout"}
-            </Button>
+            {isEditingDetails ? (
+              <Button
+                variant="secondary"
+                onClick={() => setEditMode((value) => !value)}
+              >
+                <LayoutGrid className="h-4 w-4" />{" "}
+                {editMode ? "View" : "Edit layout"}
+              </Button>
+            ) : null}
             {selectedReportId && isEditingDetails ? (
-              <Button variant="outline" onClick={() => void result.refetch()}>
-                <RefreshCw className="h-4 w-4" /> Refresh
+              <Button
+                aria-busy={isRefreshingReport}
+                disabled={isRefreshingReport}
+                variant="outline"
+                onClick={() => void refreshReport()}
+              >
+                <RefreshCw
+                  className={cn(
+                    "h-4 w-4",
+                    isRefreshingReport && "animate-spin",
+                  )}
+                />{" "}
+                {isRefreshingReport ? "Refreshing…" : "Refresh"}
               </Button>
             ) : null}
           </div>
@@ -640,93 +728,113 @@ export function ReportsPage({
         </section>
       ) : null}
 
-      <div className="min-h-0 flex-1">
-        <Card className="mt-0 min-h-0 overflow-auto p-0">
-          <CardContent className="min-h-full bg-[#f7f8fa] p-4">
-            {result.error ? (
-              <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
-                {(result.error as Error).message}
-              </div>
-            ) : reportInsights.length === 0 ? (
-              <div className="grid min-h-[360px] place-items-center rounded-lg border border-dashed border-[#cfd8e3] bg-white text-sm text-[#657082]">
-                Add saved insights to build this report.
-              </div>
-            ) : (
-              <GridLayout
-                className={cn("layout", editMode && "report-grid-editing")}
-                dragConfig={{
-                  enabled: editMode,
-                  handle: ".report-card-drag-handle",
-                  threshold: 3,
-                }}
-                gridConfig={{
-                  cols: 12,
-                  rowHeight: 64,
-                  margin: [14, 14],
-                  containerPadding: [0, 0],
-                }}
-                layout={layout}
-                onLayoutChange={(nextLayout) => {
-                  if (!editMode) return;
-                  setReportInsights((current) =>
-                    current.map((insight) => {
-                      const next = nextLayout.find(
-                        (layoutItem) => layoutItem.i === insight.id,
-                      );
-                      return next
-                        ? {
-                            ...insight,
-                            layout: {
-                              x: next.x,
-                              y: next.y,
-                              width: next.w,
-                              height: next.h,
-                            },
-                          }
-                        : insight;
-                    }),
-                  );
-                }}
-                resizeConfig={{ enabled: editMode, handles: ["se", "e", "s"] }}
-                width={1120}
-              >
-                {reportInsights.map((reportInsight) => (
-                  <div className="report-card" key={reportInsight.id}>
-                    <div className="report-card-header flex items-center justify-between gap-2 border-b border-[#dce3eb] px-3 py-2">
-                      <span className="report-card-drag-handle min-w-0 flex-1 truncate text-sm font-semibold">
-                        {insightTitle(insights.data ?? [], reportInsight.id)}
-                      </span>
-                      <InsightCardMenu
-                        insightRef={
-                          insights.data?.find(
-                            (insight) =>
-                              insight.insight_id === reportInsight.id,
-                          )?.url_slug ?? reportInsight.id
-                        }
-                        projectId={projectId}
-                        onRefresh={() => void result.refetch()}
-                        onRemove={() =>
-                          setReportInsights((current) =>
-                            current.filter(
-                              (candidate) => candidate.id !== reportInsight.id,
-                            ),
-                          )
-                        }
-                      />
-                    </div>
-                    <div className="h-[calc(100%-42px)] min-h-0 p-3">
-                      <InsightPreview
-                        result={insightById.get(reportInsight.id)}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </GridLayout>
+      <div className="min-h-0 flex-1 overflow-auto" ref={reportGridRef}>
+        {result.error ? (
+          <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
+            {(result.error as Error).message}
+          </div>
+        ) : reportInsights.length === 0 ? (
+          <div className="grid min-h-[360px] place-items-center rounded-lg border border-dashed border-[#cfd8e3] bg-white text-sm text-[#657082]">
+            Add saved insights to build this report.
+          </div>
+        ) : (
+          <GridLayout
+            className={cn(
+              "layout mb-2.5",
+              editMode && "report-grid-editing",
             )}
-          </CardContent>
-        </Card>
+            dragConfig={{
+              enabled: canMoveLayout,
+              handle: ".report-card-drag-handle",
+              threshold: 3,
+            }}
+            gridConfig={{
+              cols: 12,
+              rowHeight: 64,
+              margin: [14, 14],
+              containerPadding: [0, 0],
+            }}
+            layout={layout}
+            onDragStart={beginLayoutSession}
+            onDragStop={finishLayoutInteraction}
+            onLayoutChange={updateLayout}
+            onResizeStart={beginLayoutSession}
+            onResizeStop={finishLayoutInteraction}
+            resizeConfig={{
+              enabled: canResizeLayout,
+              handleComponent: renderReportResizeHandle,
+              handles: ["se", "e", "s"],
+            }}
+            width={Math.max(1, reportGridWidth - REPORT_GRID_RESIZE_GUTTER)}
+          >
+            {reportInsights.map((reportInsight) => (
+              <div
+                className={cn(
+                  "report-card",
+                  canResizeLayout && "report-layout-resizable",
+                )}
+                key={reportInsight.id}
+              >
+                <div className="report-card-surface">
+                  <div className="report-card-header flex items-center justify-between gap-2 border-b border-[#dce3eb] px-3 py-2">
+                    <span className="report-card-drag-handle min-w-0 flex-1 truncate text-sm font-semibold">
+                      {insightTitle(insights.data ?? [], reportInsight.id)}
+                    </span>
+                    <InsightCardMenu
+                      insightRef={
+                        insights.data?.find(
+                          (insight) => insight.insight_id === reportInsight.id,
+                        )?.url_slug ?? reportInsight.id
+                      }
+                      projectId={projectId}
+                      onRefresh={() => void refreshReport()}
+                      onRemove={() =>
+                        setReportInsights((current) =>
+                          current.filter(
+                            (candidate) => candidate.id !== reportInsight.id,
+                          ),
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="h-[calc(100%-42px)] min-h-0 p-3">
+                    <InsightPreview result={insightById.get(reportInsight.id)} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </GridLayout>
+        )}
       </div>
     </div>
+  );
+}
+
+/** Delayed, edge-aligned resize affordance for a report insight. */
+function renderReportResizeHandle(
+  axis: ResizeHandleAxis,
+  ref: Ref<HTMLElement>,
+) {
+  const label =
+    axis === "e"
+      ? "Drag to change insight width"
+      : axis === "s"
+        ? "Drag to change insight height"
+        : "Drag to change insight width and height";
+  const Icon =
+    axis === "e" ? GripVertical : axis === "s" ? GripHorizontal : Grip;
+  return (
+    <span
+      aria-label={label}
+      className={cn(
+        "react-resizable-handle report-resize-handle",
+        `react-resizable-handle-${axis}`,
+      )}
+      ref={ref as Ref<HTMLSpanElement>}
+      title={label}
+    >
+      <Icon aria-hidden="true" className="h-3 w-3" />
+    </span>
   );
 }
 
@@ -845,10 +953,13 @@ function ReportReadHeader({
   description,
   isDeleting,
   isLayoutEditing,
+  isLayoutSaving,
+  isRefreshing,
   projectName,
   report,
   name,
   onBack,
+  onCancelLayout,
   onChangeLayout,
   onDelete,
   onEdit,
@@ -858,10 +969,13 @@ function ReportReadHeader({
   description: string;
   isDeleting: boolean;
   isLayoutEditing: boolean;
+  isLayoutSaving: boolean;
+  isRefreshing: boolean;
   projectName: string;
   report: SavedReport | undefined;
   name: string;
   onBack: () => void;
+  onCancelLayout: () => void;
   onChangeLayout: () => void;
   onDelete: () => void;
   onEdit: () => void;
@@ -889,12 +1003,37 @@ function ReportReadHeader({
           ) : null}
         </div>
         {isLayoutEditing ? (
-          <Button onClick={onSaveLayout}>
-            <Save className="h-4 w-4" /> Save layout
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              disabled={isLayoutSaving}
+              variant="outline"
+              onClick={onCancelLayout}
+            >
+              <X className="h-4 w-4" /> Cancel
+            </Button>
+            <Button disabled={isLayoutSaving} onClick={onSaveLayout}>
+              <Save className="h-4 w-4" /> Save layout
+            </Button>
+          </div>
         ) : null}
-        <Button disabled={!report} variant="outline" onClick={onRefresh}>
-          <RefreshCw className="h-4 w-4" /> Refresh
+        {isLayoutSaving ? (
+          <span
+            aria-live="polite"
+            className="self-center text-xs font-medium text-[#657082]"
+          >
+            Saving layout…
+          </span>
+        ) : null}
+        <Button
+          aria-busy={isRefreshing}
+          disabled={!report || isRefreshing}
+          variant="outline"
+          onClick={onRefresh}
+        >
+          <RefreshCw
+            className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+          />{" "}
+          {isRefreshing ? "Refreshing…" : "Refresh"}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
