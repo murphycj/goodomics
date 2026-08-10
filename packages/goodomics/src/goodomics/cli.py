@@ -24,6 +24,7 @@ from goodomics.server.db.models import InsightRecord, ReportRecord
 from goodomics.server.insights import execute_report
 from goodomics.server.logging import build_uvicorn_log_config
 from goodomics.server.settings import Settings, ensure_config_file, load_settings
+from goodomics.sources import get_source
 from goodomics.storage.database import resolve_database_url
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import SQLModelGoodomicsStore, initialized_store
@@ -175,6 +176,14 @@ def _run_configured_ingest(
 
     settings = _load_setup_settings(config)
     try:
+        source = get_source(ingest_type)
+        default_project_provider = source.load_default_project_provider()
+        default_project = (
+            default_project_provider(results)
+            if project is None and default_project_provider is not None
+            else None
+        )
+        resolved_project = project or default_project
         resolved_database_url = database_url or settings.database_url
         resolved_analytics_path = analytics_path or (
             Path(settings.analytics_path) if settings.analytics_path else None
@@ -183,12 +192,13 @@ def _run_configured_ingest(
             resolved_analytics_path = _configured_project_analytics_path(
                 database_url=resolved_database_url,
                 analytics_root=settings.analytics_root,
-                project=project,
+                project=resolved_project,
+                project_name=default_project,
             )
         result = run_ingest(
             results,
             ingest_type=ingest_type,
-            project=project,
+            project=resolved_project,
             analysis_type_id=analysis_type_id,
             run_id=run_id,
             database_url=resolved_database_url,
@@ -203,7 +213,11 @@ def _run_configured_ingest(
 
 
 def _configured_project_analytics_path(
-    *, database_url: str, analytics_root: str, project: str | None
+    *,
+    database_url: str,
+    analytics_root: str,
+    project: str | None,
+    project_name: str | None = None,
 ) -> Path:
     """Return the configured analytics path for an ensured project."""
 
@@ -211,7 +225,7 @@ def _configured_project_analytics_path(
         """Ensure the project and derive its analytics path asynchronously."""
 
         async with initialized_store(database_url) as store:
-            project_record = await store.ensure_project(project)
+            project_record = await store.ensure_project(project, name=project_name)
             return analytics_path_for_project(analytics_root, project_record.project_id)
 
     return asyncio.run(resolve())

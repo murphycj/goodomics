@@ -40,6 +40,7 @@ class SourceSpec:
     ingest: CallableLike
     parser: CallableLike | None = None
     detector: CallableLike | None = None
+    default_project_provider: CallableLike | None = None
     data_contract_provider: CallableLike | Iterable[DataContract] | None = None
     result_printer: CallableLike | None = None
     # SourceSpec filters kwargs before dispatch so registry routing can support
@@ -52,6 +53,13 @@ class SourceSpec:
 
     def load_ingest(self) -> Callable[..., Any]:
         return _load_callable(self.ingest)
+
+    def load_default_project_provider(self) -> Callable[..., Any] | None:
+        """Load the source-specific default project provider when configured."""
+
+        if self.default_project_provider is None:
+            return None
+        return _load_callable(self.default_project_provider)
 
     def load_result_printer(self) -> Callable[..., Any] | None:
         if self.result_printer is None:

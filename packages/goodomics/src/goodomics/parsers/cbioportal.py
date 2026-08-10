@@ -117,6 +117,12 @@ class CbioPortalParseContext:
         return contract.data_contract_id
 
 
+def cbioportal_study_name(root: Path) -> str | None:
+    """Return the project display name declared by a cBioPortal study."""
+
+    return _read_meta_file(root.resolve() / "meta_study.txt").get("name") or None
+
+
 def parse_cbioportal_study(
     root: Path,
     *,

@@ -19,7 +19,6 @@ from goodomics.contracts.cbioportal import (
 )
 from goodomics.ingest.cbioportal import ingest_cbioportal_study
 from goodomics.parsers.cbioportal import parse_cbioportal_study
-from goodomics.projects import DEFAULT_PROJECT_ID
 from goodomics.schemas.models import (
     CopyNumberSegment,
     EntityAttribute,
@@ -36,6 +35,7 @@ from goodomics.storage.sqlalchemy import (
     DataImportRecord,
     FileLinkRecord,
     FileRecord,
+    ProjectRecord,
     RunRecord,
     SampleGroupMemberRecord,
     SampleGroupRecord,
@@ -302,6 +302,30 @@ def test_parse_cbioportal_studies_reuse_semantic_contracts(tmp_path: Path) -> No
     }
 
 
+def test_ingest_cbioportal_defaults_project_to_study_name(tmp_path: Path) -> None:
+    study = write_cbioportal_fixture(tmp_path / "study")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+    analytics_path = tmp_path / "state" / "analytics.duckdb"
+
+    ingest_cbioportal_study(
+        study,
+        data_import_id="run-cbio",
+        database_url=database_url,
+        analytics_path=analytics_path,
+    )
+
+    async def load_projects() -> list[ProjectRecord]:
+        """Load projects created by the cBioPortal import."""
+
+        async with initialized_store(database_url) as store, store.session() as session:
+            return list((await session.exec(select(ProjectRecord))).all())
+
+    projects = asyncio.run(load_projects())
+    assert len(projects) == 1
+    assert projects[0].slug == "demo-cbioportal-study"
+    assert projects[0].name == "Demo cBioPortal Study"
+
+
 def test_ingest_cbioportal_writes_metadata_and_analytics(tmp_path: Path) -> None:
     study = write_cbioportal_fixture(tmp_path / "study")
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
@@ -518,15 +542,25 @@ def test_cbioportal_run_files_include_inherited_import_files(
 
     assert asyncio.run(load_direct_run_links()) == []
 
+    async def load_project_id() -> str:
+        """Load the study-named project's public identifier."""
+
+        async with (
+            initialized_store(database_url) as metadata_store,
+            metadata_store.session() as session,
+        ):
+            project = (await session.exec(select(ProjectRecord))).one()
+        return project.project_id
+
+    project_id = asyncio.run(load_project_id())
+
     monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
     with TestClient(create_app()) as client:
         run_files = client.get("/api/v1/runs/run-cbio:S1/files")
-        sample_files = client.get(
-            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/files"
-        )
+        sample_files = client.get(f"/api/v1/projects/{project_id}/samples/S1/files")
         sample_run_files = client.get(
-            f"/api/v1/projects/{DEFAULT_PROJECT_ID}/samples/S1/runs/run-cbio:S1/files"
+            f"/api/v1/projects/{project_id}/samples/S1/runs/run-cbio:S1/files"
         )
 
     assert run_files.status_code == 200

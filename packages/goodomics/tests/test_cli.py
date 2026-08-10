@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fixtures import write_cbioportal_fixture, write_multiqc_fixture
 from goodomics.cli import app
-from goodomics.projects import DEFAULT_PROJECT_ID
+from goodomics.projects import DEFAULT_PROJECT_ID, analytics_path_for_project
 from goodomics.server.db.models import InstallationStateRecord
 from goodomics.storage.duckdb import DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
@@ -518,6 +518,47 @@ def test_ingest_command_accepts_cbioportal_type(tmp_path: Path) -> None:
     assert database_path.exists()
     assert analytics_path.exists()
     assert DuckDBAnalyticsStore(analytics_path).row_counts()["feature_value_numeric"]
+
+
+def test_ingest_command_uses_cbioportal_study_name_as_default_project(
+    tmp_path: Path,
+) -> None:
+    study_dir = write_cbioportal_fixture(tmp_path / "study")
+    database_path = tmp_path / "state" / "goodomics.db"
+    config_path = tmp_path / "goodomics.toml"
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest",
+            str(study_dir),
+            "--type",
+            "cbioportal",
+            "--run-id",
+            "cbio-run",
+            "--database-url",
+            f"sqlite+aiosqlite:///{database_path}",
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    async def load_projects() -> list[ProjectRecord]:
+        """Load projects created by the CLI import."""
+
+        database_url = f"sqlite+aiosqlite:///{database_path}"
+        async with initialized_store(database_url) as store, store.session() as session:
+            return list((await session.exec(select(ProjectRecord))).all())
+
+    projects = asyncio.run(load_projects())
+    assert len(projects) == 1
+    assert projects[0].name == "Demo cBioPortal Study"
+    assert projects[0].slug == "demo-cbioportal-study"
+    assert analytics_path_for_project(
+        tmp_path / ".goodomics", projects[0].project_id
+    ).is_file()
 
 
 def test_ingest_command_accepts_short_flags(tmp_path: Path) -> None:

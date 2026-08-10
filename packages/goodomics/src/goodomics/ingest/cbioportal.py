@@ -21,7 +21,7 @@ from rich.progress import (
 from rich.text import Text
 
 from goodomics.analysis import EXTERNAL_ONCOLOGY
-from goodomics.parsers.cbioportal import parse_cbioportal_study
+from goodomics.parsers.cbioportal import cbioportal_study_name, parse_cbioportal_study
 from goodomics.projects import analytics_path_for_project
 from goodomics.storage.analytics_resolution import (
     resolve_analytics_batch_metadata_ids,
@@ -133,7 +133,12 @@ async def _ingest_cbioportal_with_store(
 
     try:
         update_progress("Resolving project")
-        project_record = await metadata_store.ensure_project(project)
+        study_name = cbioportal_study_name(root)
+        resolved_project = project or study_name
+        project_record = await metadata_store.ensure_project(
+            resolved_project,
+            name=study_name if resolved_project == study_name else None,
+        )
         resolved_data_import_id = (
             f"{_study_identifier(root)}:{uuid4().hex[:12]}"
             if data_import_id is None

@@ -468,11 +468,20 @@ class SQLModelGoodomicsStore:
 
         return await self.ensure_project(DEFAULT_PROJECT_SLUG)
 
-    async def ensure_project(self, reference: str | None = None) -> Project:
+    async def ensure_project(
+        self,
+        reference: str | None = None,
+        *,
+        name: str | None = None,
+    ) -> Project:
         """Resolve or lazily create a project in a standalone transaction."""
 
         async with self.session() as session:
-            project = await self.ensure_project_with_session(session, reference)
+            project = await self.ensure_project_with_session(
+                session,
+                reference,
+                name=name,
+            )
             await session.commit()
             return project
 
@@ -480,6 +489,8 @@ class SQLModelGoodomicsStore:
         self,
         session: AsyncSession,
         reference: str | None = None,
+        *,
+        name: str | None = None,
     ) -> Project:
         """Resolve or lazily create a project using the caller's session."""
 
@@ -504,7 +515,7 @@ class SQLModelGoodomicsStore:
                 name=(
                     DEFAULT_PROJECT_NAME
                     if slug == DEFAULT_PROJECT_SLUG
-                    else display_name_from_slug(slug)
+                    else (name or "").strip() or display_name_from_slug(slug)
                 ),
                 created_at=datetime.now(UTC),
             )
