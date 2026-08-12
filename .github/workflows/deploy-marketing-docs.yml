@@ -1,0 +1,24 @@
+name: Deploy updated documentation
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "docs/**"
+            - "mkdocs.yml"
+            - "packages/goodomics/**"
+            - "pyproject.toml"
+            - "uv.lock"
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Trigger marketing deployment
+              env:
+                  GH_TOKEN: ${{ secrets.MARKETING_WORKFLOW_TOKEN }}
+              run: |
+                  gh api \
+                    --method POST \
+                    repos/murphycj/goodomics-marketing/actions/workflows/deploy-prod.yaml/dispatches \
+                    -f ref=main
