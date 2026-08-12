@@ -1,7 +1,7 @@
 # Insight configuration
 
 Goodomics stores insights as YAML files that describe what data is fetched and
-how it is filtered and visualized. The example below displays mapping metrics
+how it is filtered and visualized. The example insight configuration below displays mapping metrics
 as a table.
 
 ## Insight definition
