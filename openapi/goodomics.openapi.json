@@ -68,99 +68,12 @@
         "title": "AdminMembershipRead",
         "type": "object"
       },
-      "AnalysisConfig": {
+      "AggregationSpec": {
         "additionalProperties": false,
-        "description": "Grain, selected values, filters, and cross-value matching behavior.",
-        "properties": {
-          "filters": {
-            "items": {
-              "$ref": "#/components/schemas/InsightFilter"
-            },
-            "title": "Filters",
-            "type": "array"
-          },
-          "grain": {
-            "default": "sample",
-            "enum": [
-              "sample",
-              "subject",
-              "run",
-              "feature",
-              "variant",
-              "file"
-            ],
-            "title": "Grain",
-            "type": "string"
-          },
-          "join": {
-            "anyOf": [
-              {
-                "enum": [
-                  "outer",
-                  "inner"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Join"
-          },
-          "limit": {
-            "default": 1000,
-            "maximum": 10000.0,
-            "minimum": 1.0,
-            "title": "Limit",
-            "type": "integer"
-          },
-          "match_by": {
-            "anyOf": [
-              {
-                "enum": [
-                  "sample",
-                  "subject",
-                  "run",
-                  "feature",
-                  "variant",
-                  "file"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Match By"
-          },
-          "random": {
-            "default": false,
-            "title": "Random",
-            "type": "boolean"
-          },
-          "values": {
-            "items": {
-              "$ref": "#/components/schemas/AnalysisValue"
-            },
-            "minItems": 1,
-            "title": "Values",
-            "type": "array"
-          }
-        },
-        "required": [
-          "values"
-        ],
-        "title": "AnalysisConfig",
-        "type": "object"
-      },
-      "AnalysisValue": {
-        "additionalProperties": false,
-        "description": "One selected field addressed through the shared catalog grammar.",
+        "description": "Descriptive aggregation over one canonical field.",
         "properties": {
           "aggregation": {
-            "default": "raw",
             "enum": [
-              "raw",
               "count",
               "count_distinct",
               "sum",
@@ -186,13 +99,6 @@
             "title": "Field",
             "type": "string"
           },
-          "filters": {
-            "items": {
-              "$ref": "#/components/schemas/InsightFilter"
-            },
-            "title": "Filters",
-            "type": "array"
-          },
           "label": {
             "anyOf": [
               {
@@ -216,9 +122,96 @@
           }
         },
         "required": [
-          "field"
+          "field",
+          "aggregation"
         ],
-        "title": "AnalysisValue",
+        "title": "AggregationSpec",
+        "type": "object"
+      },
+      "AlterationMatrixQuery": {
+        "additionalProperties": false,
+        "description": "Feature-by-entity alteration states with coverage-aware eligibility.",
+        "properties": {
+          "alterations": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "minItems": 1,
+            "title": "Alterations",
+            "type": "array"
+          },
+          "cell_limit": {
+            "default": 250000,
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Cell Limit",
+            "type": "integer"
+          },
+          "entities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "feature_set_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Feature Set Ids",
+            "type": "array"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Features",
+            "type": "array"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "alteration_matrix",
+            "default": "alteration_matrix",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "features",
+          "alterations"
+        ],
+        "title": "AlterationMatrixQuery",
         "type": "object"
       },
       "AnalyticsMetricRead": {
@@ -613,6 +606,85 @@
         "title": "AnalyticsResultPayloadRead",
         "type": "object"
       },
+      "AssociationQuery": {
+        "additionalProperties": false,
+        "description": "Coverage-aware descriptive co-occurrence counts and percentages.",
+        "properties": {
+          "entities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "feature_set_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Feature Set Ids",
+            "type": "array"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "title": "Features",
+            "type": "array"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "association",
+            "default": "association",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "minItems": 1,
+            "title": "State",
+            "type": "array"
+          }
+        },
+        "required": [
+          "features",
+          "state"
+        ],
+        "title": "AssociationQuery",
+        "type": "object"
+      },
       "AxisConfig": {
         "additionalProperties": false,
         "description": "Portable chart-axis presentation settings.",
@@ -714,7 +786,7 @@
       },
       "BoxplotView": {
         "additionalProperties": false,
-        "description": "Numeric value bindings grouped by an optional category.",
+        "description": "Box or violin rendering for distribution results.",
         "properties": {
           "category": {
             "anyOf": [
@@ -742,7 +814,10 @@
             "type": "array"
           },
           "kind": {
-            "const": "boxplot",
+            "enum": [
+              "boxplot",
+              "violin"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -790,9 +865,49 @@
         "title": "BulkDeleteRead",
         "type": "object"
       },
+      "CalculationSpec": {
+        "additionalProperties": false,
+        "description": "Deterministic calculation over summary outputs.",
+        "properties": {
+          "as": {
+            "title": "As",
+            "type": "string"
+          },
+          "calculation": {
+            "enum": [
+              "percent_of_total",
+              "percent_of_eligible"
+            ],
+            "title": "Calculation",
+            "type": "string"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denominator"
+          },
+          "input": {
+            "title": "Input",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calculation",
+          "input",
+          "as"
+        ],
+        "title": "CalculationSpec",
+        "type": "object"
+      },
       "CategoryChartView": {
         "additionalProperties": false,
-        "description": "Category/value bindings shared by bar, line, area, pie, and donut views.",
+        "description": "Bar, line, area, pie, or donut rendering over compatible results.",
         "properties": {
           "category": {
             "anyOf": [
@@ -932,6 +1047,116 @@
         "title": "ChatResult",
         "type": "object"
       },
+      "ContractFieldCreate": {
+        "additionalProperties": false,
+        "description": "Semantic field definition nested in a contract creation request.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "display_name": {
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "domain_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domain Tags",
+            "type": "array"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "purpose": {
+            "default": "value",
+            "enum": [
+              "key",
+              "value",
+              "coordinate",
+              "annotation"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "scalar_type": {
+            "enum": [
+              "numeric",
+              "integer",
+              "string",
+              "boolean",
+              "categorical",
+              "date",
+              "datetime",
+              "json"
+            ],
+            "title": "Scalar Type",
+            "type": "string"
+          },
+          "semantic_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Type"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "field_id",
+          "display_name",
+          "scalar_type"
+        ],
+        "title": "ContractFieldCreate",
+        "type": "object"
+      },
       "ContractResultOptionsRead": {
         "description": "Bounded result-scope options compatible with one data contract.",
         "properties": {
@@ -1002,8 +1227,127 @@
         "title": "Credentials",
         "type": "object"
       },
+      "DataContractCreate": {
+        "additionalProperties": false,
+        "description": "Create a project dataset pinned to a published semantic shape.",
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Bindings",
+            "type": "object"
+          },
+          "data_contract_id": {
+            "title": "Data Contract Id",
+            "type": "string"
+          },
+          "data_shape_id": {
+            "title": "Data Shape Id",
+            "type": "string"
+          },
+          "data_shape_version": {
+            "minimum": 1.0,
+            "title": "Data Shape Version",
+            "type": "integer"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ContractFieldCreate"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "metadata_json": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Metadata Json",
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "search_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Search Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data_contract_id",
+          "name",
+          "data_shape_id",
+          "data_shape_version"
+        ],
+        "title": "DataContractCreate",
+        "type": "object"
+      },
       "DataContractFieldRead": {
-        "description": "Queryable field exposed by a data contract.",
+        "description": "Semantic field exposed by a data contract.",
         "properties": {
           "description": {
             "anyOf": [
@@ -1031,23 +1375,19 @@
             "title": "Display Name",
             "type": "string"
           },
-          "entity_scope": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Entity Scope"
+          "domain_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domain Tags",
+            "type": "array"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
           },
           "field_id": {
             "title": "Field Id",
-            "type": "string"
-          },
-          "field_role": {
-            "title": "Field Role",
             "type": "string"
           },
           "metadata_json": {
@@ -1081,52 +1421,10 @@
             "title": "Metadata Json",
             "type": "object"
           },
-          "physical_tables": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "items": {},
-                  "type": "array"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Physical Tables",
-            "type": "object"
-          },
-          "primary_table": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Primary Table"
-          },
           "priority": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -1134,67 +1432,24 @@
             ],
             "title": "Priority"
           },
-          "query_ref": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "items": {},
-                  "type": "array"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Query Ref",
-            "type": "object"
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
           },
-          "summary": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "items": {},
-                  "type": "array"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Summary",
-            "type": "object"
+          "scalar_type": {
+            "title": "Scalar Type",
+            "type": "string"
+          },
+          "semantic_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Type"
           },
           "unit": {
             "anyOf": [
@@ -1206,24 +1461,52 @@
               }
             ],
             "title": "Unit"
-          },
-          "value_type": {
-            "title": "Value Type",
-            "type": "string"
           }
         },
         "required": [
+          "field",
           "field_id",
-          "field_role",
           "display_name",
-          "value_type"
+          "purpose",
+          "scalar_type"
         ],
         "title": "DataContractFieldRead",
         "type": "object"
       },
       "DataContractRead": {
-        "description": "Data contract contract plus fields available to insight builders.",
+        "description": "Dataset-level semantics plus fields available to insight builders.",
         "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Bindings",
+            "type": "object"
+          },
           "compatible_analysis_type_ids": {
             "items": {
               "type": "string"
@@ -1233,10 +1516,6 @@
           },
           "data_contract_id": {
             "title": "Data Contract Id",
-            "type": "string"
-          },
-          "data_type": {
-            "title": "Data Type",
             "type": "string"
           },
           "description": {
@@ -1250,66 +1529,12 @@
             ],
             "title": "Description"
           },
-          "entity_grain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Entity Grain"
-          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/DataContractFieldRead"
             },
             "title": "Fields",
             "type": "array"
-          },
-          "intrinsic_producer_families": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "items": {},
-                  "type": "array"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Intrinsic Producer Families",
-            "type": "object"
-          },
-          "last_profiled_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Profiled At"
           },
           "metadata_json": {
             "additionalProperties": {
@@ -1346,7 +1571,14 @@
             "title": "Name",
             "type": "string"
           },
-          "query_modes": {
+          "search_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Search Tags",
+            "type": "array"
+          },
+          "shape_version": {
             "additionalProperties": {
               "anyOf": [
                 {
@@ -1374,67 +1606,13 @@
                 }
               ]
             },
-            "title": "Query Modes",
+            "title": "Shape Version",
             "type": "object"
-          },
-          "source_fingerprint": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Fingerprint"
-          },
-          "summary": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "items": {},
-                  "type": "array"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Summary",
-            "type": "object"
-          },
-          "value_semantics": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Value Semantics"
           }
         },
         "required": [
           "data_contract_id",
-          "name",
-          "data_type"
+          "name"
         ],
         "title": "DataContractRead",
         "type": "object"
@@ -1698,6 +1876,159 @@
         "title": "DatabaseTableRead",
         "type": "object"
       },
+      "DeterministicSampling": {
+        "additionalProperties": false,
+        "description": "Explicit deterministic sampling applied after query completion.",
+        "properties": {
+          "seed": {
+            "default": "goodomics",
+            "title": "Seed",
+            "type": "string"
+          },
+          "size": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size"
+        ],
+        "title": "DeterministicSampling",
+        "type": "object"
+      },
+      "DistributionQuery": {
+        "additionalProperties": false,
+        "description": "Raw numeric or categorical distribution with optional splitting.",
+        "properties": {
+          "bins": {
+            "anyOf": [
+              {
+                "maximum": 500.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bins"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "distribution",
+            "default": "distribution",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "split_by": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "title": "Split By",
+            "type": "array"
+          },
+          "summaries": {
+            "items": {
+              "enum": [
+                "count",
+                "min",
+                "max",
+                "avg"
+              ],
+              "type": "string"
+            },
+            "title": "Summaries",
+            "type": "array"
+          },
+          "value": {
+            "$ref": "#/components/schemas/FieldSelection"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "DistributionQuery",
+        "type": "object"
+      },
+      "FieldSelection": {
+        "additionalProperties": false,
+        "description": "Canonical field reference with a stable result alias and occurrence scope.",
+        "properties": {
+          "as": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "FieldSelection",
+        "type": "object"
+      },
       "FileRead": {
         "description": "File metadata plus the metadata link explaining why it is in scope.",
         "properties": {
@@ -1888,6 +2219,68 @@
         "title": "FileRead",
         "type": "object"
       },
+      "GenomeProfileQuery": {
+        "additionalProperties": false,
+        "description": "Values laid out over a genomic coordinate domain.",
+        "properties": {
+          "coordinate": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "group_by": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "title": "Group By",
+            "type": "array"
+          },
+          "kind": {
+            "const": "genome_profile",
+            "default": "genome_profile",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/FieldSelection"
+          }
+        },
+        "required": [
+          "coordinate",
+          "value"
+        ],
+        "title": "GenomeProfileQuery",
+        "type": "object"
+      },
       "GridLayout": {
         "additionalProperties": false,
         "description": "Report-wide grid geometry.",
@@ -1910,6 +2303,53 @@
         "title": "GridLayout",
         "type": "object"
       },
+      "GroupField": {
+        "additionalProperties": false,
+        "description": "Field used to define groups in a summary query.",
+        "properties": {
+          "as": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "GroupField",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1925,7 +2365,7 @@
       },
       "HeatmapView": {
         "additionalProperties": false,
-        "description": "Three bindings describing heatmap x, y, and cell values.",
+        "description": "Heatmap rendering for matrix-compatible results.",
         "properties": {
           "colors": {
             "items": {
@@ -1943,6 +2383,7 @@
           },
           "kind": {
             "const": "heatmap",
+            "default": "heatmap",
             "title": "Kind",
             "type": "string"
           },
@@ -1954,30 +2395,45 @@
             "type": "array"
           },
           "value": {
-            "title": "Value",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
           },
           "x": {
-            "title": "X",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
           },
           "y": {
-            "title": "Y",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
           }
         },
-        "required": [
-          "kind",
-          "x",
-          "y",
-          "value"
-        ],
         "title": "HeatmapView",
         "type": "object"
       },
       "HistogramView": {
         "additionalProperties": false,
-        "description": "One or more independently binned numeric distributions.",
+        "description": "Histogram rendering for distribution results.",
         "properties": {
           "bins": {
             "default": 20,
@@ -2002,6 +2458,7 @@
           },
           "kind": {
             "const": "histogram",
+            "default": "histogram",
             "title": "Kind",
             "type": "string"
           },
@@ -2026,9 +2483,6 @@
             ]
           }
         },
-        "required": [
-          "kind"
-        ],
         "title": "HistogramView",
         "type": "object"
       },
@@ -2171,6 +2625,40 @@
             "title": "Metadata Fields",
             "type": "array"
           },
+          "query_families": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Query Families",
+            "type": "array"
+          },
           "result_rows": {
             "$ref": "#/components/schemas/InsightResultRowsRead"
           },
@@ -2209,7 +2697,7 @@
             "type": "array"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           }
@@ -2219,6 +2707,7 @@
           "analysis_grains",
           "templates",
           "charts",
+          "query_families",
           "metadata_fields",
           "aggregations_by_type",
           "result_rows"
@@ -2230,16 +2719,6 @@
         "additionalProperties": false,
         "description": "Flat payload for executing an ad hoc or saved insight.",
         "properties": {
-          "analysis": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AnalysisConfig"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "description": {
             "anyOf": [
               {
@@ -2291,6 +2770,71 @@
             ],
             "title": "Project Id"
           },
+          "query": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "alteration_matrix": "#/components/schemas/AlterationMatrixQuery",
+                    "association": "#/components/schemas/AssociationQuery",
+                    "distribution": "#/components/schemas/DistributionQuery",
+                    "genome_profile": "#/components/schemas/GenomeProfileQuery",
+                    "matrix": "#/components/schemas/MatrixQuery",
+                    "relationship": "#/components/schemas/RelationshipQuery",
+                    "rows": "#/components/schemas/RowsQuery",
+                    "series": "#/components/schemas/SeriesQuery",
+                    "summary": "#/components/schemas/SummaryQuery",
+                    "survival": "#/components/schemas/SurvivalQuery",
+                    "timeline": "#/components/schemas/TimelineQuery",
+                    "variant_position": "#/components/schemas/VariantPositionQuery"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RowsQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SummaryQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RelationshipQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DistributionQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SeriesQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MatrixQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AlterationMatrixQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VariantPositionQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GenomeProfileQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SurvivalQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TimelineQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AssociationQuery"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
           "random": {
             "anyOf": [
               {
@@ -2310,7 +2854,7 @@
           "version": {
             "anyOf": [
               {
-                "const": 1,
+                "const": 2,
                 "type": "integer"
               },
               {
@@ -2325,17 +2869,24 @@
                 "discriminator": {
                   "mapping": {
                     "area": "#/components/schemas/CategoryChartView",
+                    "association_matrix": "#/components/schemas/SpecializedView",
                     "bar": "#/components/schemas/CategoryChartView",
                     "boxplot": "#/components/schemas/BoxplotView",
                     "donut": "#/components/schemas/CategoryChartView",
+                    "genome_profile": "#/components/schemas/SpecializedView",
                     "heatmap": "#/components/schemas/HeatmapView",
                     "histogram": "#/components/schemas/HistogramView",
                     "line": "#/components/schemas/CategoryChartView",
+                    "lollipop": "#/components/schemas/SpecializedView",
                     "metric": "#/components/schemas/MetricView",
+                    "oncoprint": "#/components/schemas/SpecializedView",
                     "pie": "#/components/schemas/CategoryChartView",
                     "scatter": "#/components/schemas/ScatterView",
                     "stacked_bar": "#/components/schemas/CategoryChartView",
-                    "table": "#/components/schemas/TableView"
+                    "survival": "#/components/schemas/SpecializedView",
+                    "table": "#/components/schemas/TableView",
+                    "timeline": "#/components/schemas/SpecializedView",
+                    "violin": "#/components/schemas/BoxplotView"
                   },
                   "propertyName": "kind"
                 },
@@ -2360,6 +2911,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/HeatmapView"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SpecializedView"
                   }
                 ]
               },
@@ -2375,7 +2929,7 @@
       },
       "InsightFilter": {
         "additionalProperties": false,
-        "description": "A typed predicate applied before aggregation and value joining.",
+        "description": "Typed predicate applied before query-family reshaping.",
         "properties": {
           "field": {
             "title": "Field",
@@ -2502,7 +3056,7 @@
         "description": "Shared validation/explanation response for UI and AI insight drafting.",
         "properties": {
           "capabilities_version": {
-            "default": 1,
+            "default": 2,
             "title": "Capabilities Version",
             "type": "integer"
           },
@@ -2593,9 +3147,6 @@
         "additionalProperties": false,
         "description": "Flat insight definition to validate and explain.",
         "properties": {
-          "analysis": {
-            "$ref": "#/components/schemas/AnalysisConfig"
-          },
           "description": {
             "anyOf": [
               {
@@ -2608,15 +3159,9 @@
             "title": "Description"
           },
           "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
           },
           "project_id": {
             "anyOf": [
@@ -2629,8 +3174,66 @@
             ],
             "title": "Project Id"
           },
+          "query": {
+            "discriminator": {
+              "mapping": {
+                "alteration_matrix": "#/components/schemas/AlterationMatrixQuery",
+                "association": "#/components/schemas/AssociationQuery",
+                "distribution": "#/components/schemas/DistributionQuery",
+                "genome_profile": "#/components/schemas/GenomeProfileQuery",
+                "matrix": "#/components/schemas/MatrixQuery",
+                "relationship": "#/components/schemas/RelationshipQuery",
+                "rows": "#/components/schemas/RowsQuery",
+                "series": "#/components/schemas/SeriesQuery",
+                "summary": "#/components/schemas/SummaryQuery",
+                "survival": "#/components/schemas/SurvivalQuery",
+                "timeline": "#/components/schemas/TimelineQuery",
+                "variant_position": "#/components/schemas/VariantPositionQuery"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RowsQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryQuery"
+              },
+              {
+                "$ref": "#/components/schemas/RelationshipQuery"
+              },
+              {
+                "$ref": "#/components/schemas/DistributionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SeriesQuery"
+              },
+              {
+                "$ref": "#/components/schemas/MatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AlterationMatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/VariantPositionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/GenomeProfileQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SurvivalQuery"
+              },
+              {
+                "$ref": "#/components/schemas/TimelineQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AssociationQuery"
+              }
+            ],
+            "title": "Query"
+          },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           },
@@ -2638,17 +3241,24 @@
             "discriminator": {
               "mapping": {
                 "area": "#/components/schemas/CategoryChartView",
+                "association_matrix": "#/components/schemas/SpecializedView",
                 "bar": "#/components/schemas/CategoryChartView",
                 "boxplot": "#/components/schemas/BoxplotView",
                 "donut": "#/components/schemas/CategoryChartView",
+                "genome_profile": "#/components/schemas/SpecializedView",
                 "heatmap": "#/components/schemas/HeatmapView",
                 "histogram": "#/components/schemas/HistogramView",
                 "line": "#/components/schemas/CategoryChartView",
+                "lollipop": "#/components/schemas/SpecializedView",
                 "metric": "#/components/schemas/MetricView",
+                "oncoprint": "#/components/schemas/SpecializedView",
                 "pie": "#/components/schemas/CategoryChartView",
                 "scatter": "#/components/schemas/ScatterView",
                 "stacked_bar": "#/components/schemas/CategoryChartView",
-                "table": "#/components/schemas/TableView"
+                "survival": "#/components/schemas/SpecializedView",
+                "table": "#/components/schemas/TableView",
+                "timeline": "#/components/schemas/SpecializedView",
+                "violin": "#/components/schemas/BoxplotView"
               },
               "propertyName": "kind"
             },
@@ -2673,17 +3283,132 @@
               },
               {
                 "$ref": "#/components/schemas/HeatmapView"
+              },
+              {
+                "$ref": "#/components/schemas/SpecializedView"
               }
             ],
             "title": "View"
           }
         },
         "required": [
+          "name",
           "version",
-          "analysis",
+          "query",
           "view"
         ],
         "title": "InsightValidationRequest",
+        "type": "object"
+      },
+      "ManagedRecordsReplace": {
+        "additionalProperties": false,
+        "description": "Complete replacement payload for one application-managed record dataset.",
+        "properties": {
+          "rows": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "ManagedRecordsReplace",
+        "type": "object"
+      },
+      "MatrixQuery": {
+        "additionalProperties": false,
+        "description": "Bounded raw-value pivot across row and column identities.",
+        "properties": {
+          "cell_limit": {
+            "default": 250000,
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Cell Limit",
+            "type": "integer"
+          },
+          "columns": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "matrix",
+            "default": "matrix",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "rows": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/FieldSelection"
+          }
+        },
+        "required": [
+          "rows",
+          "columns",
+          "value"
+        ],
+        "title": "MatrixQuery",
         "type": "object"
       },
       "MeRead": {
@@ -2794,7 +3519,7 @@
       },
       "MetricView": {
         "additionalProperties": false,
-        "description": "One value rendered as a headline metric.",
+        "description": "Single descriptive value rendering.",
         "properties": {
           "hidden_values": {
             "items": {
@@ -2805,6 +3530,7 @@
           },
           "kind": {
             "const": "metric",
+            "default": "metric",
             "title": "Kind",
             "type": "string"
           },
@@ -2826,20 +3552,23 @@
             "type": "array"
           },
           "value": {
-            "title": "Value",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
           }
         },
-        "required": [
-          "kind",
-          "value"
-        ],
         "title": "MetricView",
         "type": "object"
       },
       "NumberFormat": {
         "additionalProperties": false,
-        "description": "Portable numeric formatting owned by a view binding.",
+        "description": "Portable numeric formatting owned by a view.",
         "properties": {
           "decimals": {
             "anyOf": [
@@ -3382,6 +4111,37 @@
         "title": "ProjectRead",
         "type": "object"
       },
+      "ProviderSettings": {
+        "additionalProperties": false,
+        "description": "Explicit external analysis-provider selection and parameters.",
+        "properties": {
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "title": "ProviderSettings",
+        "type": "object"
+      },
       "QCPolicyCreate": {
         "description": "Payload for creating a QC policy definition.",
         "properties": {
@@ -3556,6 +4316,30 @@
         "title": "QCPolicyRead",
         "type": "object"
       },
+      "QueryOrder": {
+        "additionalProperties": false,
+        "description": "Deterministic ordering by a query output alias or grain identity.",
+        "properties": {
+          "by": {
+            "title": "By",
+            "type": "string"
+          },
+          "direction": {
+            "default": "asc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Direction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "by"
+        ],
+        "title": "QueryOrder",
+        "type": "object"
+      },
       "RefreshPolicy": {
         "additionalProperties": false,
         "description": "Saved report refresh behavior.",
@@ -3568,6 +4352,75 @@
           }
         },
         "title": "RefreshPolicy",
+        "type": "object"
+      },
+      "RelationshipQuery": {
+        "additionalProperties": false,
+        "description": "Matched two-measure relationship without inferential modeling.",
+        "properties": {
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "relationship",
+            "default": "relationship",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "match_by": {
+            "enum": [
+              "sample",
+              "subject",
+              "run",
+              "feature",
+              "variant",
+              "file",
+              "row"
+            ],
+            "title": "Match By",
+            "type": "string"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "y": {
+            "$ref": "#/components/schemas/FieldSelection"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "match_by"
+        ],
+        "title": "RelationshipQuery",
         "type": "object"
       },
       "RenderedReportRead": {
@@ -3707,7 +4560,7 @@
       },
       "ReportInsight": {
         "additionalProperties": false,
-        "description": "A uniquely placed saved-insight reference.",
+        "description": "Uniquely placed saved-insight reference.",
         "properties": {
           "id": {
             "minLength": 1,
@@ -3727,7 +4580,7 @@
       },
       "ReportInsightLayout": {
         "additionalProperties": false,
-        "description": "Placement of one report insight in grid coordinates.",
+        "description": "Placement of one saved insight in report grid coordinates.",
         "properties": {
           "height": {
             "exclusiveMinimum": 0.0,
@@ -3972,7 +4825,7 @@
         "description": "Report validation result used to gate dashboard persistence.",
         "properties": {
           "capabilities_version": {
-            "default": 1,
+            "default": 2,
             "title": "Capabilities Version",
             "type": "integer"
           },
@@ -4056,7 +4909,7 @@
       },
       "ReportValidationRequest": {
         "additionalProperties": false,
-        "description": "Complete project-aware version 1 report definition to validate.",
+        "description": "Complete project-aware version 2 report definition to validate.",
         "properties": {
           "description": {
             "anyOf": [
@@ -4131,7 +4984,7 @@
             "$ref": "#/components/schemas/RefreshPolicy"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           }
@@ -4146,7 +4999,7 @@
       },
       "ResultScope": {
         "additionalProperties": false,
-        "description": "Occurrence-selection constraints for one contract-backed value.",
+        "description": "Occurrence-selection constraints for contract-backed fields.",
         "properties": {
           "analysis_type_ids": {
             "items": {
@@ -4348,6 +5201,76 @@
           "permissions"
         ],
         "title": "RoleRead",
+        "type": "object"
+      },
+      "RowsQuery": {
+        "additionalProperties": false,
+        "description": "Identity-preserving retrieval of selected columns.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "minItems": 1,
+            "title": "Columns",
+            "type": "array"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "grain": {
+            "enum": [
+              "sample",
+              "subject",
+              "run",
+              "feature",
+              "variant",
+              "file",
+              "row"
+            ],
+            "title": "Grain",
+            "type": "string"
+          },
+          "kind": {
+            "const": "rows",
+            "default": "rows",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "grain",
+          "columns"
+        ],
+        "title": "RowsQuery",
         "type": "object"
       },
       "Run": {
@@ -5454,11 +6377,8 @@
       },
       "SavedInsightCreate": {
         "additionalProperties": false,
-        "description": "Request contract for creating a saved insight resource.",
+        "description": "Request contract for creating a saved v2 insight.",
         "properties": {
-          "analysis": {
-            "$ref": "#/components/schemas/AnalysisConfig"
-          },
           "description": {
             "anyOf": [
               {
@@ -5486,6 +6406,12 @@
             "title": "Name",
             "type": "string"
           },
+          "preview_fingerprint": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Preview Fingerprint",
+            "type": "string"
+          },
           "project_id": {
             "anyOf": [
               {
@@ -5497,8 +6423,66 @@
             ],
             "title": "Project Id"
           },
+          "query": {
+            "discriminator": {
+              "mapping": {
+                "alteration_matrix": "#/components/schemas/AlterationMatrixQuery",
+                "association": "#/components/schemas/AssociationQuery",
+                "distribution": "#/components/schemas/DistributionQuery",
+                "genome_profile": "#/components/schemas/GenomeProfileQuery",
+                "matrix": "#/components/schemas/MatrixQuery",
+                "relationship": "#/components/schemas/RelationshipQuery",
+                "rows": "#/components/schemas/RowsQuery",
+                "series": "#/components/schemas/SeriesQuery",
+                "summary": "#/components/schemas/SummaryQuery",
+                "survival": "#/components/schemas/SurvivalQuery",
+                "timeline": "#/components/schemas/TimelineQuery",
+                "variant_position": "#/components/schemas/VariantPositionQuery"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RowsQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryQuery"
+              },
+              {
+                "$ref": "#/components/schemas/RelationshipQuery"
+              },
+              {
+                "$ref": "#/components/schemas/DistributionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SeriesQuery"
+              },
+              {
+                "$ref": "#/components/schemas/MatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AlterationMatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/VariantPositionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/GenomeProfileQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SurvivalQuery"
+              },
+              {
+                "$ref": "#/components/schemas/TimelineQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AssociationQuery"
+              }
+            ],
+            "title": "Query"
+          },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           },
@@ -5506,17 +6490,24 @@
             "discriminator": {
               "mapping": {
                 "area": "#/components/schemas/CategoryChartView",
+                "association_matrix": "#/components/schemas/SpecializedView",
                 "bar": "#/components/schemas/CategoryChartView",
                 "boxplot": "#/components/schemas/BoxplotView",
                 "donut": "#/components/schemas/CategoryChartView",
+                "genome_profile": "#/components/schemas/SpecializedView",
                 "heatmap": "#/components/schemas/HeatmapView",
                 "histogram": "#/components/schemas/HistogramView",
                 "line": "#/components/schemas/CategoryChartView",
+                "lollipop": "#/components/schemas/SpecializedView",
                 "metric": "#/components/schemas/MetricView",
+                "oncoprint": "#/components/schemas/SpecializedView",
                 "pie": "#/components/schemas/CategoryChartView",
                 "scatter": "#/components/schemas/ScatterView",
                 "stacked_bar": "#/components/schemas/CategoryChartView",
-                "table": "#/components/schemas/TableView"
+                "survival": "#/components/schemas/SpecializedView",
+                "table": "#/components/schemas/TableView",
+                "timeline": "#/components/schemas/SpecializedView",
+                "violin": "#/components/schemas/BoxplotView"
               },
               "propertyName": "kind"
             },
@@ -5541,6 +6532,9 @@
               },
               {
                 "$ref": "#/components/schemas/HeatmapView"
+              },
+              {
+                "$ref": "#/components/schemas/SpecializedView"
               }
             ],
             "title": "View"
@@ -5548,27 +6542,18 @@
         },
         "required": [
           "version",
-          "analysis",
+          "name",
+          "query",
           "view",
-          "name"
+          "preview_fingerprint"
         ],
         "title": "SavedInsightCreate",
         "type": "object"
       },
       "SavedInsightPatch": {
         "additionalProperties": false,
-        "description": "Request contract for patching a saved insight resource.",
+        "description": "Request contract for patching a saved v2 insight.",
         "properties": {
-          "analysis": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AnalysisConfig"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "description": {
             "anyOf": [
               {
@@ -5592,10 +6577,88 @@
             ],
             "title": "Name"
           },
+          "preview_fingerprint": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Fingerprint"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "alteration_matrix": "#/components/schemas/AlterationMatrixQuery",
+                    "association": "#/components/schemas/AssociationQuery",
+                    "distribution": "#/components/schemas/DistributionQuery",
+                    "genome_profile": "#/components/schemas/GenomeProfileQuery",
+                    "matrix": "#/components/schemas/MatrixQuery",
+                    "relationship": "#/components/schemas/RelationshipQuery",
+                    "rows": "#/components/schemas/RowsQuery",
+                    "series": "#/components/schemas/SeriesQuery",
+                    "summary": "#/components/schemas/SummaryQuery",
+                    "survival": "#/components/schemas/SurvivalQuery",
+                    "timeline": "#/components/schemas/TimelineQuery",
+                    "variant_position": "#/components/schemas/VariantPositionQuery"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RowsQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SummaryQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RelationshipQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DistributionQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SeriesQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MatrixQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AlterationMatrixQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VariantPositionQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GenomeProfileQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SurvivalQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TimelineQuery"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AssociationQuery"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
           "version": {
             "anyOf": [
               {
-                "const": 1,
+                "const": 2,
                 "type": "integer"
               },
               {
@@ -5610,17 +6673,24 @@
                 "discriminator": {
                   "mapping": {
                     "area": "#/components/schemas/CategoryChartView",
+                    "association_matrix": "#/components/schemas/SpecializedView",
                     "bar": "#/components/schemas/CategoryChartView",
                     "boxplot": "#/components/schemas/BoxplotView",
                     "donut": "#/components/schemas/CategoryChartView",
+                    "genome_profile": "#/components/schemas/SpecializedView",
                     "heatmap": "#/components/schemas/HeatmapView",
                     "histogram": "#/components/schemas/HistogramView",
                     "line": "#/components/schemas/CategoryChartView",
+                    "lollipop": "#/components/schemas/SpecializedView",
                     "metric": "#/components/schemas/MetricView",
+                    "oncoprint": "#/components/schemas/SpecializedView",
                     "pie": "#/components/schemas/CategoryChartView",
                     "scatter": "#/components/schemas/ScatterView",
                     "stacked_bar": "#/components/schemas/CategoryChartView",
-                    "table": "#/components/schemas/TableView"
+                    "survival": "#/components/schemas/SpecializedView",
+                    "table": "#/components/schemas/TableView",
+                    "timeline": "#/components/schemas/SpecializedView",
+                    "violin": "#/components/schemas/BoxplotView"
                   },
                   "propertyName": "kind"
                 },
@@ -5645,6 +6715,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/HeatmapView"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SpecializedView"
                   }
                 ]
               },
@@ -5660,11 +6733,8 @@
       },
       "SavedInsightRead": {
         "additionalProperties": false,
-        "description": "Read contract containing persisted metadata and executable fields.",
+        "description": "Saved insight metadata with its complete v2 envelope.",
         "properties": {
-          "analysis": {
-            "$ref": "#/components/schemas/AnalysisConfig"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -5700,6 +6770,64 @@
             ],
             "title": "Project Id"
           },
+          "query": {
+            "discriminator": {
+              "mapping": {
+                "alteration_matrix": "#/components/schemas/AlterationMatrixQuery",
+                "association": "#/components/schemas/AssociationQuery",
+                "distribution": "#/components/schemas/DistributionQuery",
+                "genome_profile": "#/components/schemas/GenomeProfileQuery",
+                "matrix": "#/components/schemas/MatrixQuery",
+                "relationship": "#/components/schemas/RelationshipQuery",
+                "rows": "#/components/schemas/RowsQuery",
+                "series": "#/components/schemas/SeriesQuery",
+                "summary": "#/components/schemas/SummaryQuery",
+                "survival": "#/components/schemas/SurvivalQuery",
+                "timeline": "#/components/schemas/TimelineQuery",
+                "variant_position": "#/components/schemas/VariantPositionQuery"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RowsQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryQuery"
+              },
+              {
+                "$ref": "#/components/schemas/RelationshipQuery"
+              },
+              {
+                "$ref": "#/components/schemas/DistributionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SeriesQuery"
+              },
+              {
+                "$ref": "#/components/schemas/MatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AlterationMatrixQuery"
+              },
+              {
+                "$ref": "#/components/schemas/VariantPositionQuery"
+              },
+              {
+                "$ref": "#/components/schemas/GenomeProfileQuery"
+              },
+              {
+                "$ref": "#/components/schemas/SurvivalQuery"
+              },
+              {
+                "$ref": "#/components/schemas/TimelineQuery"
+              },
+              {
+                "$ref": "#/components/schemas/AssociationQuery"
+              }
+            ],
+            "title": "Query"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -5710,7 +6838,7 @@
             "type": "string"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           },
@@ -5718,17 +6846,24 @@
             "discriminator": {
               "mapping": {
                 "area": "#/components/schemas/CategoryChartView",
+                "association_matrix": "#/components/schemas/SpecializedView",
                 "bar": "#/components/schemas/CategoryChartView",
                 "boxplot": "#/components/schemas/BoxplotView",
                 "donut": "#/components/schemas/CategoryChartView",
+                "genome_profile": "#/components/schemas/SpecializedView",
                 "heatmap": "#/components/schemas/HeatmapView",
                 "histogram": "#/components/schemas/HistogramView",
                 "line": "#/components/schemas/CategoryChartView",
+                "lollipop": "#/components/schemas/SpecializedView",
                 "metric": "#/components/schemas/MetricView",
+                "oncoprint": "#/components/schemas/SpecializedView",
                 "pie": "#/components/schemas/CategoryChartView",
                 "scatter": "#/components/schemas/ScatterView",
                 "stacked_bar": "#/components/schemas/CategoryChartView",
-                "table": "#/components/schemas/TableView"
+                "survival": "#/components/schemas/SpecializedView",
+                "table": "#/components/schemas/TableView",
+                "timeline": "#/components/schemas/SpecializedView",
+                "violin": "#/components/schemas/BoxplotView"
               },
               "propertyName": "kind"
             },
@@ -5753,6 +6888,9 @@
               },
               {
                 "$ref": "#/components/schemas/HeatmapView"
+              },
+              {
+                "$ref": "#/components/schemas/SpecializedView"
               }
             ],
             "title": "View"
@@ -5760,11 +6898,11 @@
         },
         "required": [
           "version",
-          "analysis",
+          "name",
+          "query",
           "view",
           "insight_id",
           "url_slug",
-          "name",
           "created_at",
           "updated_at"
         ],
@@ -5773,7 +6911,7 @@
       },
       "SavedInsightSummary": {
         "additionalProperties": false,
-        "description": "Compact insight resource returned by list endpoints.",
+        "description": "Compact insight list response.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -5845,7 +6983,7 @@
       },
       "SavedReportCreate": {
         "additionalProperties": false,
-        "description": "Request contract for creating a saved report resource.",
+        "description": "Request contract for creating a saved report.",
         "properties": {
           "description": {
             "anyOf": [
@@ -5920,7 +7058,7 @@
             "$ref": "#/components/schemas/RefreshPolicy"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           }
@@ -5935,7 +7073,7 @@
       },
       "SavedReportPatch": {
         "additionalProperties": false,
-        "description": "Request contract for patching a saved report resource.",
+        "description": "Request contract for patching a saved report.",
         "properties": {
           "description": {
             "anyOf": [
@@ -6036,7 +7174,7 @@
           "version": {
             "anyOf": [
               {
-                "const": 1,
+                "const": 2,
                 "type": "integer"
               },
               {
@@ -6051,7 +7189,7 @@
       },
       "SavedReportRead": {
         "additionalProperties": false,
-        "description": "Read contract containing persisted metadata and executable fields.",
+        "description": "Saved report metadata with its complete definition.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -6143,7 +7281,7 @@
             "type": "string"
           },
           "version": {
-            "const": 1,
+            "const": 2,
             "title": "Version",
             "type": "integer"
           }
@@ -6162,7 +7300,7 @@
       },
       "SavedReportSummary": {
         "additionalProperties": false,
-        "description": "Compact report resource returned by list endpoints.",
+        "description": "Compact report list response.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -6260,7 +7398,7 @@
       },
       "ScatterView": {
         "additionalProperties": false,
-        "description": "Two numeric value bindings rendered as a scatter plot.",
+        "description": "Scatter rendering for relationship results.",
         "properties": {
           "colors": {
             "additionalProperties": {
@@ -6278,6 +7416,7 @@
           },
           "kind": {
             "const": "scatter",
+            "default": "scatter",
             "title": "Kind",
             "type": "string"
           },
@@ -6289,8 +7428,15 @@
             "type": "array"
           },
           "x": {
-            "title": "X",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
           },
           "x_axis": {
             "anyOf": [
@@ -6303,8 +7449,15 @@
             ]
           },
           "y": {
-            "title": "Y",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
           },
           "y_axis": {
             "anyOf": [
@@ -6317,11 +7470,6 @@
             ]
           }
         },
-        "required": [
-          "kind",
-          "x",
-          "y"
-        ],
         "title": "ScatterView",
         "type": "object"
       },
@@ -6392,6 +7540,73 @@
           "kind"
         ],
         "title": "SearchResultRead",
+        "type": "object"
+      },
+      "SeriesQuery": {
+        "additionalProperties": false,
+        "description": "Ordered measurements over a semantic position domain.",
+        "properties": {
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "series",
+            "default": "series",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "measurements": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "minItems": 1,
+            "title": "Measurements",
+            "type": "array"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "position": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "series_by": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "title": "Series By",
+            "type": "array"
+          }
+        },
+        "required": [
+          "position",
+          "measurements"
+        ],
+        "title": "SeriesQuery",
         "type": "object"
       },
       "SessionMembershipRead": {
@@ -6486,6 +7701,166 @@
         "title": "SetupStatusRead",
         "type": "object"
       },
+      "ShapeDraftCreate": {
+        "additionalProperties": false,
+        "description": "Project-scoped draft shape creation request.",
+        "properties": {
+          "adapter_key": {
+            "title": "Adapter Key",
+            "type": "string"
+          },
+          "data_shape_id": {
+            "title": "Data Shape Id",
+            "type": "string"
+          },
+          "definition": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Definition",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_shape_id",
+          "name",
+          "definition",
+          "adapter_key"
+        ],
+        "title": "ShapeDraftCreate",
+        "type": "object"
+      },
+      "ShapeDraftPatch": {
+        "additionalProperties": false,
+        "description": "Mutable fields accepted while a shape version remains a draft.",
+        "properties": {
+          "adapter_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter Key"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "representative_rows": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Representative Rows",
+            "type": "array"
+          }
+        },
+        "title": "ShapeDraftPatch",
+        "type": "object"
+      },
       "SignupRequest": {
         "description": "Credentials and optional profile name for public account creation.",
         "properties": {
@@ -6518,7 +7893,7 @@
       },
       "SortConfig": {
         "additionalProperties": false,
-        "description": "A table sort binding to an identity or value alias.",
+        "description": "Table sort binding retained as view formatting.",
         "properties": {
           "by": {
             "title": "By",
@@ -6538,6 +7913,191 @@
           "by"
         ],
         "title": "SortConfig",
+        "type": "object"
+      },
+      "SpecializedView": {
+        "additionalProperties": false,
+        "description": "Domain-aware rendering with bindings supplied by its typed query.",
+        "properties": {
+          "hidden_values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Values",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "oncoprint",
+              "lollipop",
+              "genome_profile",
+              "survival",
+              "timeline",
+              "association_matrix"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SpecializedView",
+        "type": "object"
+      },
+      "SummaryQuery": {
+        "additionalProperties": false,
+        "description": "Grouped descriptive aggregation with explicit calculations.",
+        "properties": {
+          "aggregations": {
+            "items": {
+              "$ref": "#/components/schemas/AggregationSpec"
+            },
+            "minItems": 1,
+            "title": "Aggregations",
+            "type": "array"
+          },
+          "calculations": {
+            "items": {
+              "$ref": "#/components/schemas/CalculationSpec"
+            },
+            "title": "Calculations",
+            "type": "array"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "grain": {
+            "enum": [
+              "sample",
+              "subject",
+              "run",
+              "feature",
+              "variant",
+              "file",
+              "row"
+            ],
+            "title": "Grain",
+            "type": "string"
+          },
+          "group_by": {
+            "items": {
+              "$ref": "#/components/schemas/GroupField"
+            },
+            "title": "Group By",
+            "type": "array"
+          },
+          "kind": {
+            "const": "summary",
+            "default": "summary",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "grain",
+          "aggregations"
+        ],
+        "title": "SummaryQuery",
+        "type": "object"
+      },
+      "SurvivalQuery": {
+        "additionalProperties": false,
+        "description": "Representable time-to-event input requiring a compatible provider.",
+        "properties": {
+          "duration": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "event": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "group_by": {
+            "items": {
+              "$ref": "#/components/schemas/FieldSelection"
+            },
+            "title": "Group By",
+            "type": "array"
+          },
+          "kind": {
+            "const": "survival",
+            "default": "survival",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderSettings"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "duration",
+          "event",
+          "provider"
+        ],
+        "title": "SurvivalQuery",
         "type": "object"
       },
       "TableCountRead": {
@@ -6561,7 +8121,7 @@
       },
       "TableView": {
         "additionalProperties": false,
-        "description": "Table formatting over grain identities and ordered analysis values.",
+        "description": "Tabular rendering for row-like typed results.",
         "properties": {
           "hidden_values": {
             "items": {
@@ -6601,7 +8161,7 @@
       },
       "Threshold": {
         "additionalProperties": false,
-        "description": "A metric display threshold with a stable severity label.",
+        "description": "Metric threshold with a stable label and optional color.",
         "properties": {
           "color": {
             "anyOf": [
@@ -6634,6 +8194,91 @@
           "value"
         ],
         "title": "Threshold",
+        "type": "object"
+      },
+      "TimelineQuery": {
+        "additionalProperties": false,
+        "description": "Subject events laid out over absolute or relative time.",
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "kind": {
+            "const": "timeline",
+            "default": "timeline",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "track": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "start"
+        ],
+        "title": "TimelineQuery",
         "type": "object"
       },
       "TokenRead": {
@@ -6879,6 +8524,78 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VariantPositionQuery": {
+        "additionalProperties": false,
+        "description": "Variant recurrence over transcript or protein position.",
+        "properties": {
+          "annotation_contract_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Annotation Contract Ids",
+            "type": "array"
+          },
+          "color_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/InsightFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "kind": {
+            "const": "variant_position",
+            "default": "variant_position",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "default": 1000,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "order_by": {
+            "items": {
+              "$ref": "#/components/schemas/QueryOrder"
+            },
+            "title": "Order By",
+            "type": "array"
+          },
+          "position": {
+            "$ref": "#/components/schemas/FieldSelection"
+          },
+          "sampling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeterministicSampling"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "position",
+          "frequency"
+        ],
+        "title": "VariantPositionQuery",
         "type": "object"
       }
     }
@@ -8361,6 +10078,649 @@
           }
         },
         "summary": "Patch Project"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/datasets": {
+      "get": {
+        "description": "List datasets in the request-scoped semantic runtime catalog.",
+        "operationId": "list_catalog_datasets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Catalog Datasets",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Catalog Datasets"
+      },
+      "post": {
+        "description": "Create a dataset pinned to a published shape with semantic-only fields.",
+        "operationId": "create_catalog_dataset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataContractCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Catalog Dataset",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Catalog Dataset"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}": {
+      "get": {
+        "description": "Describe one catalog dataset without physical storage metadata.",
+        "operationId": "describe_catalog_dataset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "data_contract_id",
+            "required": true,
+            "schema": {
+              "title": "Data Contract Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Describe Catalog Dataset",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Describe Catalog Dataset"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/profile": {
+      "post": {
+        "description": "Lazily recompute a disposable profile when its source fingerprint changes.",
+        "operationId": "profile_catalog_dataset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "data_contract_id",
+            "required": true,
+            "schema": {
+              "title": "Data Contract Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Profile Catalog Dataset",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Profile Catalog Dataset"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/records": {
+      "put": {
+        "description": "Validate and replace rows in an application-managed record dataset.",
+        "operationId": "replace_catalog_dataset_records",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "data_contract_id",
+            "required": true,
+            "schema": {
+              "title": "Data Contract Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedRecordsReplace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Replace Catalog Dataset Records",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Catalog Dataset Records"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/field-profile": {
+      "get": {
+        "description": "Read an optional disposable profile for one canonical field.",
+        "operationId": "get_catalog_field_profile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field",
+            "required": true,
+            "schema": {
+              "title": "Field",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Catalog Field Profile",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Catalog Field Profile"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/field-values": {
+      "get": {
+        "description": "List bounded categorical values from an optional disposable profile.",
+        "operationId": "list_catalog_field_values",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "field",
+            "required": true,
+            "schema": {
+              "title": "Field",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Catalog Field Values",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Catalog Field Values"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/fields": {
+      "get": {
+        "description": "Search canonical fields by semantics and typed-query compatibility.",
+        "operationId": "search_catalog_fields",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scalar_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scalar Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purpose",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Purpose"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Catalog Fields",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Catalog Fields"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/joins": {
+      "get": {
+        "description": "List joins using logical identities rather than physical foreign keys.",
+        "operationId": "list_catalog_joins",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data_contract_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Contract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Catalog Joins",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Catalog Joins"
+      }
+    },
+    "/api/v1/projects/{project_id}/catalog/query-families": {
+      "get": {
+        "description": "List available query families, views, and provider requirements.",
+        "operationId": "list_catalog_query_families",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Catalog Query Families",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Catalog Query Families"
       }
     },
     "/api/v1/projects/{project_id}/files": {
@@ -10279,6 +12639,188 @@
           }
         },
         "summary": "List Project Sample Run Files"
+      }
+    },
+    "/api/v1/projects/{project_id}/shapes/drafts": {
+      "post": {
+        "description": "Create the next mutable version of a project-owned data shape.",
+        "operationId": "create_shape_draft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShapeDraftCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Shape Draft",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Shape Draft"
+      }
+    },
+    "/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}": {
+      "patch": {
+        "description": "Validate and edit a draft while rejecting published-version mutation.",
+        "operationId": "patch_shape_draft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "data_shape_id",
+            "required": true,
+            "schema": {
+              "title": "Data Shape Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShapeDraftPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Patch Shape Draft",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Shape Draft"
+      }
+    },
+    "/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}/publish": {
+      "post": {
+        "description": "Publish a validated draft as an immutable contract-pinnable version.",
+        "operationId": "publish_shape_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "data_shape_id",
+            "required": true,
+            "schema": {
+              "title": "Data Shape Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Shape Version",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Shape Version"
       }
     },
     "/api/v1/rendered-reports/{rendered_report_id}": {

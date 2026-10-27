@@ -16,11 +16,14 @@ from goodomics import ParserOutput, parser, contract
 rnaseq_tpm = contract(
     "user:rnaseq:tpm",
     name="RNA-seq TPM values",
-    data_type="feature_matrix",
-    producer_tool="lab-notebook",
-    feature_type="gene",
-    value_type="numeric",
-    query_modes=["sample", "feature", "sample_group"],
+    data_shape_id="feature",
+    bindings={
+        "entity_type": "sample",
+        "feature_domain": "gene",
+        "observation_kind": "feature_matrix",
+    },
+    search_tags=["rna-seq", "tpm", "gene"],
+    metadata_json={"source": "lab-notebook"},
 )
 
 
@@ -96,9 +99,9 @@ reuse a built-in contract ID.
 A data contract is the semantic namespace for related analytical outputs. It
 groups fields under stable data semantics. Compatible analysis types are
 associated separately, while produced results record the actual method,
-version, and reference context. Contract fields carry the queryable details:
-display labels, units, value types, physical analytical table, and value-column
-lookup hints.
+version, and reference context. Contract fields carry queryable semantics such as
+purpose, scalar/semantic type, unit, direction, description, priority, and tags.
+Trusted shape adapters choose physical storage.
 
 Use a custom contract when the data shape is specific to your dataset or lab:
 
@@ -108,11 +111,14 @@ from goodomics import contract
 gene_tpm = contract(
     "user:rnaseq:tpm",
     name="RNA-seq TPM values",
-    data_type="feature_matrix",
-    producer_tool="lab-rnaseq",
-    feature_type="gene",
-    value_type="numeric",
-    query_modes=["sample", "feature", "sample_group"],
+    data_shape_id="feature",
+    bindings={
+        "entity_type": "sample",
+        "feature_domain": "gene",
+        "observation_kind": "feature_matrix",
+    },
+    search_tags=["rna-seq", "tpm", "gene"],
+    metadata_json={"source": "lab-rnaseq"},
 )
 ```
 

@@ -53,27 +53,30 @@ work in `packages/goodomics/dashboard`, also use
 
 ## Insight Builder
 
-- Keep one searchable field picker as the main data selection control. Present
-  **All / Results / Metadata** as understated source tabs below search, omit
-  fields that are incompatible with the current grain, and keep already-selected
-  incompatible fields visible with a warning. Use friendly result-source labels;
-  reserve data-contract identifiers for provenance and advanced details.
-- Split value editing, data picking, result scope, and diagnostics into focused
-  components instead of growing one page component indefinitely.
-- Fetch contract-compatible result options with bounded TanStack queries and
-  explicit loading, error, and empty states.
-- Store builder state in one typed version 1 insight draft. Field selection edits
-  `analysis.values`; switching views preserves values; table and chart series order
-  follows value order. Dragging or moving a field changes that canonical order.
-  Use `field` as a value's default reference and generate optional `as` aliases
-  only for duplicates or other cases that need a distinct short reference.
-- Use compact value rows with progressive disclosure. Tables use a column-oriented,
-  multi-select editor; charts use view-appropriate series or binding language. The
-  same visibility control edits `view.hidden_values` for tables and charts; disable
-  it for values currently used by a required role binding.
-- Keep **Analyze by** and **View as** in the builder toolbar. Separate per-field
-  settings from visualization and final result-row settings.
-- Show inferred **Results from** scope compactly; keep detailed overrides
-  collapsed until requested.
-- Never expose internal `run_sample` as an Analyze by grain, Matched by choice,
-  filter tab, template, or user-facing label.
+- Store one complete typed v2 draft: `version + name + query + view`.
+- Present query families as plain-language analysis types such as Build a table,
+  Summarize groups, Compare two fields, and Show a profile or trend. Use a visual
+  card selector for discovery, then keep the selected analysis type compact in the
+  builder toolbar.
+- Preserve the compact toolbar/editor/preview hierarchy: analysis type, logical
+  identity, and compatible view across the top; family-specific inputs on the
+  left; preview on the right.
+- Use family-specific editors for rows, summaries, relationships, distributions,
+  series, matrices, alteration matrices, variant positions, genomic profiles,
+  survival, timelines, and associations.
+- Group catalog fields by data contract in a searchable All / Results / Metadata
+  selector. Represent selected table columns as reorderable field cards with
+  visibility and action controls.
+- Search and filter canonical fields through the request-scoped runtime catalog.
+  Preserve returned `<contract>/<field>` and `metadata/<entity>/<field>` strings.
+- Filter view choices by typed-result compatibility. Switching family replaces
+  incompatible family-specific state instead of carrying generic value settings.
+- Fetch catalog choices with bounded TanStack queries and explicit loading, error,
+  and empty states. Keep heavy visualization modules out of initial list bundles
+  when practical.
+- Show deterministic query explanation, coverage/missingness diagnostics, and
+  provider requirements in the review step.
+- Require a successful preview of the exact current query fingerprint before save.
+- Keep occurrence selectors and scope controls separate from field references.
+- Never expose physical routing, SQL, adapter keys, internal integer IDs, or
+  `run_sample` as a user-facing grain or label.

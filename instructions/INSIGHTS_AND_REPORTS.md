@@ -2,124 +2,135 @@
 
 This file is the source of truth for saved insight and report behavior.
 
-## Builder model
+## Version 2 definition
 
-The workflow is **Analyze by** → filters → **Choose data** → per-value filters
-and **Results from** → **Matched by** → **View as**. Incomplete builder state remains client-side.
+Every surface uses the same complete, strict envelope:
 
-Public grains are `sample`, `subject`, `run`, `feature`, `variant`, and `file`.
-`run_sample` is internal and never appears in definitions or builder labels.
+```json
+{
+  "version": 2,
+  "name": "Cancer types",
+  "query": { "kind": "summary" },
+  "view": { "kind": "table" }
+}
+```
 
-Every selected field is one entry in `analysis.values`:
+There is no version 1 reader or universal `analysis.values` grammar. Definitions are
+normalized deterministically, omit empty/no-op properties in compact displays, and
+retain analytically important defaults. Physical tables, columns, adapters, SQL, and
+internal keys are never serialized.
 
-- `field` is the complete source-bearing reference;
-- analytical fields use `<contract>/<field>`, such as
-  `salmon:results/general_stats.salmon_percent_mapped`;
-- SQL metadata fields use `metadata/<entity>/<field>`, such as
-  `metadata/sample/sample_name`;
-- `/` is reserved in data-contract and contract-field machine IDs so references
-  never require escaping; display labels remain unrestricted;
-- contract values may add `scope`, while metadata values may not;
-- `field` is the default public reference used by views and result columns;
-- optional `as` replaces that reference with a short safe alias and is needed
-  when the same field is selected more than once;
-- effective references (`as` when present, otherwise `field`) must be unique;
-- `label` is the only insight-level field-label override;
-- `aggregation` defaults to `raw` and `filters` defaults to an empty list.
+Canonical field references are `<contract>/<field>` or
+`metadata/<entity>/<field>`. Keep feature, region, cohort, occurrence, and coverage
+selectors separate from field references. Effective output aliases use `as` when
+present and otherwise preserve the canonical field string; aliases must be unique.
 
-Do not expose physical tables, database columns, or freeform SQL through saved
-insights. Standalone database-browser routes are a separate inspection surface.
+## Query families
 
-## Metadata fields
+`query` is a discriminated union keyed by `kind`:
 
-The server capability response owns the metadata field allow list and returns
-the exact canonical `field` reference to store. The initial
-entities are subject, sample, run, and file. Public fields include stable public
-IDs and approved names, statuses, types, timestamps, file roles/formats/sizes,
-and storage-location labels. Never expose integer keys, foreign keys,
-`metadata_json`, parameters, paths, URIs, object keys, hashes, or arbitrary SQL
-columns.
+| Kind | Main bindings | Core behavior |
+|---|---|---|
+| `rows` | grain, columns | Identity-preserving retrieval |
+| `summary` | grain, groups, aggregations, calculations | Descriptive grouping |
+| `relationship` | X, Y, match identity | Matched raw measures |
+| `distribution` | value, split fields, bins/summaries | Raw distributions |
+| `series` | position, series fields, measurements | Ordered points |
+| `matrix` | row, column, raw value | Bounded pivot |
+| `alteration_matrix` | features, entities, states, coverage | OncoPrint states |
+| `variant_position` | position, frequency, color/annotations | Lollipop recurrence |
+| `genome_profile` | coordinate, value, groups | Genomic layout |
+| `survival` | duration, event, groups, provider | Provider-backed modeling |
+| `timeline` | subject, start/end, track, label | Subject-event layout |
+| `association` | features, states, entities, coverage | Descriptive co-occurrence |
 
-Metadata queries are always scoped to the current project. Analysis type and
-method keys resolve to their public labels. Metadata and contract values are
-resolved independently and joined using the same public grain identity.
+Common properties cover filters, ordering, bounded limits, deterministic sampling,
+and occurrence selection. `referenced_fields(query)` is the single internal source
+for permissions, resolution, provenance, explanation, and cache identity.
 
-## Result scope and joins
+Core may select, filter, sort, join, count, distinct-count, sum, average, min/max,
+calculate explicit eligible percentages, assemble histograms/categories, pivot raw
+matrices, and perform domain-aware descriptive layouts. Core never silently derives
+scientific measures or runs inferential/model-dependent methods.
 
-Every contract value owns `scope`. Sample-based grains default to
-`latest_successful_per_sample`; run grain defaults to `all_eligible`. Optional
-scope constraints include analysis types, methods, method versions, runs,
-statuses, time bounds, and pinned run-contract IDs.
+Mann–Whitney, Kruskal–Wallis, Fisher/chi-square significance, multiple-testing
+correction, Kaplan–Meier/log-rank, survival regression, differential expression,
+enrichment, clustering, normalization, batch correction, and mutual-exclusivity
+significance require a registered analysis provider or a precomputed result contract.
+Provider execution records method/version, parameters, inputs, resolved occurrences,
+output contract, time, and reference context.
 
-Tables default to an outer join. Missing values are null and diagnostics show
-coverage. Multiple distinct values for one value/identity pair produce a null
-cell and a duplicate-conflict diagnostic. Matching charts default to inner
-joins. Histograms preserve independent distributions without joining them.
+## Validation and execution
 
-Rendered snapshots pin exact resolved occurrences. Saved insights and reports
-remain dynamic and resolve again when their data changes.
+Validation proceeds through schema, reference parsing, catalog resolution,
+permissions/project scope, scalar and semantic bindings, joins/matching,
+coverage/occurrence checks, core/provider capability, query/view compatibility, and
+result-size limits. Errors identify the configuration path and canonical reference.
 
-## Views and result rows
+The runner registry is keyed by query kind. Runners resolve catalog fields, request
+trusted logical relations from adapters, compile parameterized SQL, and return a
+typed result with provenance, coverage, warnings, provider requirements, and cache
+fingerprints. Compiled SQL is never authoritative.
 
-`view` is a strict union keyed by `kind`. It owns all bindings, axes, colors,
-tooltips, thresholds, sorting, null display, numeric formatting, and the shared
-`hidden_values` visibility override. View bindings use each value's effective
-reference: `as` when present, otherwise `field`. `analysis.values` declaration order is the
-only value/series order. Tables derive columns as grain identities followed by
-visible values in that order. Charts infer their rendered series from the same
-ordered list, excluding role bindings such as `category` and entries in
-`hidden_values`. Hiding a value never removes it from analysis, resolution,
-diagnostics, fingerprints, or caches.
+Inline results default to 1,000 rows and hard-stop at 10,000. Full export is
+file-backed. Matrix limits default to 250,000 cells and hard-stop at 1,000,000.
+Sampling is deterministic and runs after query completion.
 
-Required role bindings cannot be hidden: scatter `x` and `y`, metric `value`,
-heatmap `x`, `y`, and `value`, and a value used as a chart `category`. Views do
-not accept separate `columns` or `values` selection lists.
+`explain_query` is deterministic application code for every family. It resolves
+display labels when possible and describes grain, grouping, calculations,
+denominator, matching, important filters, occurrence selection, and provider needs.
+Validation, preview, builder review, MCP, and AI all return the same explanation.
 
-`analysis.limit` controls the number of completed result rows returned and
-defaults to 1,000. `analysis.random` selects those final rows deterministically
-when true and defaults to false. Both operate only after filters, aggregation,
-and joining. Execution requests may override them. Full data export is a
-separate execution-time, file-backed action.
+## Representative insight catalog
 
-Chart constraints:
+These are architectural acceptance cases. All are representable; provider-backed
+cases remain explicit.
 
-- scatter binds exactly two numeric values;
-- line and area bind numeric values;
-- stacked bars bind at least two numeric values;
-- histograms bind one or more numeric distributions;
-- boxplots bind numeric values with an optional category;
-- pie and donut bind exactly one value;
-- tables accept any supported values.
+1. Entity metadata table — `rows`, core.
+2. Cross-assay feature scatter — `relationship`, core.
+3. Genomic burden scatter — `relationship`, core over precomputed burden fields.
+4. Categorical frequency summary — `summary`, core.
+5. Numeric distribution — `distribution`, core.
+6. Per-sample stacked QC bar — `rows`, core.
+7. General QC statistics table — `rows`, core.
+8. Positional QC profile — `series`, core.
+9. QC status heatmap — `matrix`, core.
+10. Feature-by-sample heatmap — `matrix`, core raw values.
+11. OncoPrint — `alteration_matrix`, core with coverage.
+12. Lollipop mutation plot — `variant_position`, core.
+13. Variant detail table — `rows`, core.
+14. Alteration-frequency summary — `summary`, core with eligible coverage.
+15. Copy-number genomic profile — `genome_profile`, core.
+16. Survival curve — `survival`, provider or precomputed result.
+17. Subject timeline — `timeline`, core.
+18. Group comparison — `distribution`, descriptive core; tests require provider.
+19. Co-occurrence/exclusivity matrix — `association`, descriptive core; significance
+    requires provider.
+20. Run-history trend — `series`, core.
 
-ECharts remains an implementation detail compiled from `view`.
+## Builder and views
 
-## Reports
+The builder starts with query family, then presents only that family's editor. It
+searches fields through the runtime catalog, stores canonical strings, filters views
+by typed-result compatibility, shows provider requirements and the deterministic
+explanation, and requires a successful preview of the exact query fingerprint before
+save. Switching family replaces incompatible family-specific properties.
 
-Reports are validated grids of saved insights. Each entry in `insights` has the
-saved insight's public `id` and a nested grid layout. An insight ID must be
-unique within a report, so one saved insight can occur in a report only once.
-The insight ID is also the render and grid identity.
+Views are a strict union keyed by `kind` and contain presentation only. Table,
+scatter, metric, histogram/category, box/violin, heatmap, and specialized views are
+compatible only with declared query result families. ECharts is an implementation
+detail. Coverage and missingness remain visible even when a value is hidden.
 
-Before persistence, validate dependency existence, project ownership,
-permissions, layout bounds, and filters. Never silently drop missing insights.
-Report filters intersect insight filters and cannot change grain, values,
-matching, aggregation, or occurrence scopes. Optional report `limit` and
-`random` values override the corresponding insight analysis defaults.
+## Reports, AI, and MCP
 
-Result-row precedence is execution request → saved report → saved insight →
-server default. Reports and insights store only complete valid definitions;
-executable changes archive the previous JSON definition while metadata-only
-changes do not create revisions.
+Reports are version 2 grids referencing saved insight IDs. Validate dependency
+existence, ownership, permissions, compatible report filters, and layout bounds.
+Report filters intersect insight filters and cannot change a query's family,
+bindings, matching, occurrence scope, or scientific meaning. Snapshots pin exact
+occurrences; saved definitions resolve dynamically.
 
-Complete report documents always require a nonblank `name`. The server
-generates `report_id`; create/import inputs and portable exports never own it.
-Report execution returns each configured insight as `{id, layout, result}`.
-The nested result omits the standalone insight result's `kind` and `insight_id`
-because the report entry already supplies that context.
-
-## Trust and size guardrails
-
-Inline results default to 1,000 rows and remain bounded at 10,000. Random row
-selection is deterministic, and full exports are file-backed. AI-created
-insights must produce the same validated version 1 draft and cannot bypass the
-metadata field allow list, resolver, joining, or result-row limits.
+REST, dashboard, MCP, and AI share catalog discovery, validation, explanation, and
+bounded preview. MCP/AI can search datasets/fields, read profiles/values, find joins,
+discover families/providers, validate, preview, and export exact provenance-bearing
+inputs. Saving is a distinct authorized action after successful preview. Logical SQL
+is deferred until permission-scoped logical views can hide storage completely.

@@ -8,17 +8,13 @@ and portable-document contracts from `goodomics.schemas.insights`:
 
 ```python
 from goodomics.schemas.insights import (
-    InsightDocument,
     InsightSpec,
-    ReportDocument,
     ReportSpec,
 )
 ```
 
-`InsightSpec` and `ReportSpec` contain executable configuration.
-`InsightDocument` and `ReportDocument` add the names and identifiers needed for
-portable YAML or JSON files. The server's saved-resource request and response
-models reuse the same contracts.
+`InsightSpec` and `ReportSpec` are the canonical executable v2 definitions. The
+server's saved-resource models add project ownership and persisted identifiers.
 
 ```python
 import httpx
@@ -29,32 +25,27 @@ project_id = "rnaseq-core"
 
 ## Discover selectable values
 
-Use `/insights/capabilities` for approved metadata fields and view constraints,
-and `/contracts` plus `/contracts/{contract}` for contract fields. Do not guess
+Use `/projects/{project}/catalog/datasets`, `/catalog/fields`, and
+`/catalog/query-families` for permission-scoped semantic discovery. Do not guess
 field IDs or send table and column names.
 
 ```python
-capabilities = client.get("/insights/capabilities").raise_for_status().json()
-run_fields = [
-    item for item in capabilities["metadata_fields"]
-    if item["entity"] == "run"
-]
-# Each item["field"] is ready to use, such as "metadata/run/status".
-
-salmon = client.get(
-    "/contracts/salmon:results",
-    params={"project_id": project_id},
-).raise_for_status().json()
+fields = client.get(
+    f"/projects/{project_id}/catalog/fields",
+    params={"query_kind": "rows", "search": "mapping"},
+).raise_for_status().json()["items"]
 ```
 
 ## Validate and execute an ad hoc insight
 
 ```python
 definition = {
-    "version": 1,
-    "analysis": {
+    "version": 2,
+    "name": "Sample QC overview",
+    "query": {
+        "kind": "rows",
         "grain": "sample",
-        "values": [
+        "columns": [
             {"field": "metadata/sample/sample_name"},
             {
                 "field": "salmon:results/general_stats.salmon_percent_mapped",
@@ -78,9 +69,9 @@ result = client.post(
 print(result["columns"], result["rows"][:5])
 ```
 
-The order of `analysis.values` is the table-column and chart-series order. A
-value's `field` is its default result and view reference. To hide a value
-without removing it from the analysis, add that reference to the shared view
+The order of a rows query's `columns` is table-column order. A selection's
+`field` is its default result and view reference. To hide a value
+without removing it from the query, add that reference to the shared view
 setting, for example `{"kind": "table", "hidden_values":
 ["metadata/sample/sample_name"]}`.
 
@@ -88,9 +79,8 @@ Add optional `"as": "percent_mapped"` when a field needs a shorter reference
 or when the same field appears more than once. View bindings use `as` when it is
 present and `field` otherwise.
 
-For a scatter chart, keep the same values and replace the view with explicit
-field or alias bindings. Matching charts use an inner join for independently
-resolved values by default.
+For a scatter chart, use a `relationship` query with explicit `x`, `y`, and
+`match_by`, then choose a compatible `scatter` view.
 
 ## Save and execute
 
@@ -101,7 +91,7 @@ saved = client.post(
         **definition,
         "insight_id": "sample-qc-overview",
         "project_id": project_id,
-        "name": "Sample QC overview",
+        "preview_fingerprint": result["preview_fingerprint"],
     },
 ).raise_for_status().json()
 
@@ -122,7 +112,7 @@ not analytical changes. Patch the saved insight to change its values or view.
 
 ```python
 report_definition = {
-    "version": 1,
+    "version": 2,
     "name": "RNA-seq QC",
     "layout": {"columns": 12, "row_height": 64},
     "insights": [

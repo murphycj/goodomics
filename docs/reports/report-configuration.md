@@ -8,7 +8,7 @@ definitions referenced by report insights.
 ## Example
 
 ```yaml
-version: 1
+version: 2
 name: RNA sequencing QC report
 description: Reusable project QC overview.
 
@@ -53,7 +53,7 @@ Optional explanatory text stored with the report and rendered snapshot.
 
 Optional. Uses the same `field`, `operator`, and `value`
 shape as
-[`analysis.filters`](insight-configuration.md#analysisfilters).
+[`query.filters`](insight-configuration.md#query-families).
 
 Report filters are added to each insight as AND conditions. They cannot change
 an insight's grain, values, aggregations, matching rules, join behavior, or

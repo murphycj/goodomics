@@ -12,7 +12,7 @@ Goodomics has two report paths:
 ```yaml
 project_id: rnaseq-core
 name: RNA-seq QC
-version: 1
+version: 2
 filters: []
 limit: 1000
 random: false
@@ -58,6 +58,6 @@ The standalone path remains a simple results-folder renderer:
 goodomics report ./results --template report.yaml --out report.html
 ```
 
-It does not execute version 1 saved insights against SQL/DuckDB data. Use a
+It does not execute saved semantic insights against SQL/DuckDB data. Use a
 saved server report for metadata values, occurrence scopes, matching, caching,
 or durable report history.
