@@ -16,9 +16,8 @@ Goodomics is useful in a few modes:
 - Local database mode for runs, samples, metrics, files, and reports.
 - API, dashboard, and MCP access for browsing and querying run context.
 
-!!! note "Initial adoption path"
-    The first Goodomics workflow should stay simple: point it at outputs,
-    generate a report, and add persistent context only when you need it.
+!!! note "Explore the demo"
+    [Try the Goodomics demo](https://demo.goodomics.com).
 
 ## Documentation map
 
