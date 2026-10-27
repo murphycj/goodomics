@@ -46,51 +46,15 @@ export type AdminMembershipRead = {
 };
 
 /**
- * AnalysisConfig
+ * AggregationSpec
  *
- * Grain, selected values, filters, and cross-value matching behavior.
+ * Descriptive aggregation over one canonical field.
  */
-export type AnalysisConfig = {
-    /**
-     * Filters
-     */
-    filters?: Array<InsightFilter>;
-    /**
-     * Grain
-     */
-    grain?: 'sample' | 'subject' | 'run' | 'feature' | 'variant' | 'file';
-    /**
-     * Join
-     */
-    join?: 'outer' | 'inner' | null;
-    /**
-     * Limit
-     */
-    limit?: number;
-    /**
-     * Match By
-     */
-    match_by?: 'sample' | 'subject' | 'run' | 'feature' | 'variant' | 'file' | null;
-    /**
-     * Random
-     */
-    random?: boolean;
-    /**
-     * Values
-     */
-    values: Array<AnalysisValue>;
-};
-
-/**
- * AnalysisValue
- *
- * One selected field addressed through the shared catalog grammar.
- */
-export type AnalysisValue = {
+export type AggregationSpec = {
     /**
      * Aggregation
      */
-    aggregation?: 'raw' | 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max';
+    aggregation: 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max';
     /**
      * As
      */
@@ -100,14 +64,55 @@ export type AnalysisValue = {
      */
     field: string;
     /**
-     * Filters
-     */
-    filters?: Array<InsightFilter>;
-    /**
      * Label
      */
     label?: string | null;
     scope?: ResultScope | null;
+};
+
+/**
+ * AlterationMatrixQuery
+ *
+ * Feature-by-entity alteration states with coverage-aware eligibility.
+ */
+export type AlterationMatrixQuery = {
+    /**
+     * Alterations
+     */
+    alterations: Array<FieldSelection>;
+    /**
+     * Cell Limit
+     */
+    cell_limit?: number;
+    /**
+     * Entities
+     */
+    entities?: Array<string>;
+    /**
+     * Feature Set Ids
+     */
+    feature_set_ids?: Array<string>;
+    /**
+     * Features
+     */
+    features: Array<string>;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'alteration_matrix';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
 };
 
 /**
@@ -259,6 +264,47 @@ export type AnalyticsResultPayloadRead = {
 };
 
 /**
+ * AssociationQuery
+ *
+ * Coverage-aware descriptive co-occurrence counts and percentages.
+ */
+export type AssociationQuery = {
+    /**
+     * Entities
+     */
+    entities?: Array<string>;
+    /**
+     * Feature Set Ids
+     */
+    feature_set_ids?: Array<string>;
+    /**
+     * Features
+     */
+    features: Array<string>;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'association';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+    /**
+     * State
+     */
+    state: Array<FieldSelection>;
+};
+
+/**
  * AxisConfig
  *
  * Portable chart-axis presentation settings.
@@ -307,7 +353,7 @@ export type BodyUploadProjectFile = {
 /**
  * BoxplotView
  *
- * Numeric value bindings grouped by an optional category.
+ * Box or violin rendering for distribution results.
  */
 export type BoxplotView = {
     /**
@@ -327,7 +373,7 @@ export type BoxplotView = {
     /**
      * Kind
      */
-    kind: 'boxplot';
+    kind: 'boxplot' | 'violin';
     x_axis?: AxisConfig | null;
     y_axis?: AxisConfig | null;
 };
@@ -345,9 +391,33 @@ export type BulkDeleteRead = {
 };
 
 /**
+ * CalculationSpec
+ *
+ * Deterministic calculation over summary outputs.
+ */
+export type CalculationSpec = {
+    /**
+     * As
+     */
+    as: string;
+    /**
+     * Calculation
+     */
+    calculation: 'percent_of_total' | 'percent_of_eligible';
+    /**
+     * Denominator
+     */
+    denominator?: string | null;
+    /**
+     * Input
+     */
+    input: string;
+};
+
+/**
  * CategoryChartView
  *
- * Category/value bindings shared by bar, line, area, pie, and donut views.
+ * Bar, line, area, pie, or donut rendering over compatible results.
  */
 export type CategoryChartView = {
     /**
@@ -422,6 +492,54 @@ export type ChatResult = {
 };
 
 /**
+ * ContractFieldCreate
+ *
+ * Semantic field definition nested in a contract creation request.
+ */
+export type ContractFieldCreate = {
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Direction
+     */
+    direction?: string | null;
+    /**
+     * Display Name
+     */
+    display_name: string;
+    /**
+     * Domain Tags
+     */
+    domain_tags?: Array<string>;
+    /**
+     * Field Id
+     */
+    field_id: string;
+    /**
+     * Priority
+     */
+    priority?: number | null;
+    /**
+     * Purpose
+     */
+    purpose?: 'key' | 'value' | 'coordinate' | 'annotation';
+    /**
+     * Scalar Type
+     */
+    scalar_type: 'numeric' | 'integer' | 'string' | 'boolean' | 'categorical' | 'date' | 'datetime' | 'json';
+    /**
+     * Semantic Type
+     */
+    semantic_type?: string | null;
+    /**
+     * Unit
+     */
+    unit?: string | null;
+};
+
+/**
  * ContractResultOptionsRead
  *
  * Bounded result-scope options compatible with one data contract.
@@ -472,9 +590,61 @@ export type Credentials = {
 };
 
 /**
+ * DataContractCreate
+ *
+ * Create a project dataset pinned to a published semantic shape.
+ */
+export type DataContractCreate = {
+    /**
+     * Bindings
+     */
+    bindings?: {
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    };
+    /**
+     * Data Contract Id
+     */
+    data_contract_id: string;
+    /**
+     * Data Shape Id
+     */
+    data_shape_id: string;
+    /**
+     * Data Shape Version
+     */
+    data_shape_version: number;
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Fields
+     */
+    fields?: Array<ContractFieldCreate>;
+    /**
+     * Metadata Json
+     */
+    metadata_json?: {
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    };
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Search Tags
+     */
+    search_tags?: Array<string>;
+};
+
+/**
  * DataContractFieldRead
  *
- * Queryable field exposed by a data contract.
+ * Semantic field exposed by a data contract.
  */
 export type DataContractFieldRead = {
     /**
@@ -490,17 +660,17 @@ export type DataContractFieldRead = {
      */
     display_name: string;
     /**
-     * Entity Scope
+     * Domain Tags
      */
-    entity_scope?: string | null;
+    domain_tags?: Array<string>;
+    /**
+     * Field
+     */
+    field: string;
     /**
      * Field Id
      */
     field_id: string;
-    /**
-     * Field Role
-     */
-    field_role: string;
     /**
      * Metadata Json
      */
@@ -510,53 +680,41 @@ export type DataContractFieldRead = {
         } | Array<unknown> | string | number | number | boolean | null;
     };
     /**
-     * Physical Tables
-     */
-    physical_tables?: {
-        [key: string]: {
-            [key: string]: unknown;
-        } | Array<unknown> | string | number | number | boolean | null;
-    };
-    /**
-     * Primary Table
-     */
-    primary_table?: string | null;
-    /**
      * Priority
      */
-    priority?: string | null;
+    priority?: number | null;
     /**
-     * Query Ref
+     * Purpose
      */
-    query_ref?: {
-        [key: string]: {
-            [key: string]: unknown;
-        } | Array<unknown> | string | number | number | boolean | null;
-    };
+    purpose: string;
     /**
-     * Summary
+     * Scalar Type
      */
-    summary?: {
-        [key: string]: {
-            [key: string]: unknown;
-        } | Array<unknown> | string | number | number | boolean | null;
-    };
+    scalar_type: string;
+    /**
+     * Semantic Type
+     */
+    semantic_type?: string | null;
     /**
      * Unit
      */
     unit?: string | null;
-    /**
-     * Value Type
-     */
-    value_type: string;
 };
 
 /**
  * DataContractRead
  *
- * Data contract contract plus fields available to insight builders.
+ * Dataset-level semantics plus fields available to insight builders.
  */
 export type DataContractRead = {
+    /**
+     * Bindings
+     */
+    bindings?: {
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    };
     /**
      * Compatible Analysis Type Ids
      */
@@ -566,33 +724,13 @@ export type DataContractRead = {
      */
     data_contract_id: string;
     /**
-     * Data Type
-     */
-    data_type: string;
-    /**
      * Description
      */
     description?: string | null;
     /**
-     * Entity Grain
-     */
-    entity_grain?: string | null;
-    /**
      * Fields
      */
     fields?: Array<DataContractFieldRead>;
-    /**
-     * Intrinsic Producer Families
-     */
-    intrinsic_producer_families?: {
-        [key: string]: {
-            [key: string]: unknown;
-        } | Array<unknown> | string | number | number | boolean | null;
-    };
-    /**
-     * Last Profiled At
-     */
-    last_profiled_at?: string | null;
     /**
      * Metadata Json
      */
@@ -606,29 +744,17 @@ export type DataContractRead = {
      */
     name: string;
     /**
-     * Query Modes
+     * Search Tags
      */
-    query_modes?: {
+    search_tags?: Array<string>;
+    /**
+     * Shape Version
+     */
+    shape_version?: {
         [key: string]: {
             [key: string]: unknown;
         } | Array<unknown> | string | number | number | boolean | null;
     };
-    /**
-     * Source Fingerprint
-     */
-    source_fingerprint?: string | null;
-    /**
-     * Summary
-     */
-    summary?: {
-        [key: string]: {
-            [key: string]: unknown;
-        } | Array<unknown> | string | number | number | boolean | null;
-    };
-    /**
-     * Value Semantics
-     */
-    value_semantics?: string | null;
 };
 
 /**
@@ -772,6 +898,81 @@ export type DatabaseTableRead = {
 };
 
 /**
+ * DeterministicSampling
+ *
+ * Explicit deterministic sampling applied after query completion.
+ */
+export type DeterministicSampling = {
+    /**
+     * Seed
+     */
+    seed?: string;
+    /**
+     * Size
+     */
+    size: number;
+};
+
+/**
+ * DistributionQuery
+ *
+ * Raw numeric or categorical distribution with optional splitting.
+ */
+export type DistributionQuery = {
+    /**
+     * Bins
+     */
+    bins?: number | null;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'distribution';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+    /**
+     * Split By
+     */
+    split_by?: Array<FieldSelection>;
+    /**
+     * Summaries
+     */
+    summaries?: Array<'count' | 'min' | 'max' | 'avg'>;
+    value: FieldSelection;
+};
+
+/**
+ * FieldSelection
+ *
+ * Canonical field reference with a stable result alias and occurrence scope.
+ */
+export type FieldSelection = {
+    /**
+     * As
+     */
+    as?: string | null;
+    /**
+     * Field
+     */
+    field: string;
+    /**
+     * Label
+     */
+    label?: string | null;
+    scope?: ResultScope | null;
+};
+
+/**
  * FileRead
  *
  * File metadata plus the metadata link explaining why it is in scope.
@@ -852,6 +1053,37 @@ export type FileRead = {
 };
 
 /**
+ * GenomeProfileQuery
+ *
+ * Values laid out over a genomic coordinate domain.
+ */
+export type GenomeProfileQuery = {
+    coordinate: FieldSelection;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Group By
+     */
+    group_by?: Array<FieldSelection>;
+    /**
+     * Kind
+     */
+    kind?: 'genome_profile';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+    value: FieldSelection;
+};
+
+/**
  * GridLayout
  *
  * Report-wide grid geometry.
@@ -868,6 +1100,27 @@ export type GridLayout = {
 };
 
 /**
+ * GroupField
+ *
+ * Field used to define groups in a summary query.
+ */
+export type GroupField = {
+    /**
+     * As
+     */
+    as?: string | null;
+    /**
+     * Field
+     */
+    field: string;
+    /**
+     * Label
+     */
+    label?: string | null;
+    scope?: ResultScope | null;
+};
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -880,7 +1133,7 @@ export type HttpValidationError = {
 /**
  * HeatmapView
  *
- * Three bindings describing heatmap x, y, and cell values.
+ * Heatmap rendering for matrix-compatible results.
  */
 export type HeatmapView = {
     /**
@@ -894,7 +1147,7 @@ export type HeatmapView = {
     /**
      * Kind
      */
-    kind: 'heatmap';
+    kind?: 'heatmap';
     /**
      * Tooltips
      */
@@ -902,21 +1155,21 @@ export type HeatmapView = {
     /**
      * Value
      */
-    value: string;
+    value?: string | null;
     /**
      * X
      */
-    x: string;
+    x?: string | null;
     /**
      * Y
      */
-    y: string;
+    y?: string | null;
 };
 
 /**
  * HistogramView
  *
- * One or more independently binned numeric distributions.
+ * Histogram rendering for distribution results.
  */
 export type HistogramView = {
     /**
@@ -936,7 +1189,7 @@ export type HistogramView = {
     /**
      * Kind
      */
-    kind: 'histogram';
+    kind?: 'histogram';
     x_axis?: AxisConfig | null;
     y_axis?: AxisConfig | null;
 };
@@ -993,6 +1246,14 @@ export type InsightCapabilitiesRead = {
             [key: string]: unknown;
         } | Array<unknown> | string | number | number | boolean | null;
     }>;
+    /**
+     * Query Families
+     */
+    query_families: Array<{
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    }>;
     result_rows: InsightResultRowsRead;
     /**
      * Templates
@@ -1005,7 +1266,7 @@ export type InsightCapabilitiesRead = {
     /**
      * Version
      */
-    version: 1;
+    version: 2;
 };
 
 /**
@@ -1014,7 +1275,6 @@ export type InsightCapabilitiesRead = {
  * Flat payload for executing an ad hoc or saved insight.
  */
 export type InsightExecuteRequest = {
-    analysis?: AnalysisConfig | null;
     /**
      * Description
      */
@@ -1036,6 +1296,34 @@ export type InsightExecuteRequest = {
      */
     project_id?: string | null;
     /**
+     * Query
+     */
+    query?: ({
+        kind: 'rows';
+    } & RowsQuery) | ({
+        kind: 'summary';
+    } & SummaryQuery) | ({
+        kind: 'relationship';
+    } & RelationshipQuery) | ({
+        kind: 'distribution';
+    } & DistributionQuery) | ({
+        kind: 'series';
+    } & SeriesQuery) | ({
+        kind: 'matrix';
+    } & MatrixQuery) | ({
+        kind: 'alteration_matrix';
+    } & AlterationMatrixQuery) | ({
+        kind: 'variant_position';
+    } & VariantPositionQuery) | ({
+        kind: 'genome_profile';
+    } & GenomeProfileQuery) | ({
+        kind: 'survival';
+    } & SurvivalQuery) | ({
+        kind: 'timeline';
+    } & TimelineQuery) | ({
+        kind: 'association';
+    } & AssociationQuery) | null;
+    /**
      * Random
      */
     random?: boolean | null;
@@ -1046,7 +1334,7 @@ export type InsightExecuteRequest = {
     /**
      * Version
      */
-    version?: 1 | null;
+    version?: 2 | null;
     /**
      * View
      */
@@ -1061,16 +1349,18 @@ export type InsightExecuteRequest = {
     } & HistogramView) | ({
         kind: 'area' | 'bar' | 'donut' | 'line' | 'pie' | 'stacked_bar';
     } & CategoryChartView) | ({
-        kind: 'boxplot';
+        kind: 'boxplot' | 'violin';
     } & BoxplotView) | ({
         kind: 'heatmap';
-    } & HeatmapView) | null;
+    } & HeatmapView) | ({
+        kind: 'association_matrix' | 'genome_profile' | 'lollipop' | 'oncoprint' | 'survival' | 'timeline';
+    } & SpecializedView) | null;
 };
 
 /**
  * InsightFilter
  *
- * A typed predicate applied before aggregation and value joining.
+ * Typed predicate applied before query-family reshaping.
  */
 export type InsightFilter = {
     /**
@@ -1167,7 +1457,6 @@ export type InsightValidationRead = {
  * Flat insight definition to validate and explain.
  */
 export type InsightValidationRequest = {
-    analysis: AnalysisConfig;
     /**
      * Description
      */
@@ -1175,15 +1464,43 @@ export type InsightValidationRequest = {
     /**
      * Name
      */
-    name?: string | null;
+    name: string;
     /**
      * Project Id
      */
     project_id?: string | null;
     /**
+     * Query
+     */
+    query: ({
+        kind: 'rows';
+    } & RowsQuery) | ({
+        kind: 'summary';
+    } & SummaryQuery) | ({
+        kind: 'relationship';
+    } & RelationshipQuery) | ({
+        kind: 'distribution';
+    } & DistributionQuery) | ({
+        kind: 'series';
+    } & SeriesQuery) | ({
+        kind: 'matrix';
+    } & MatrixQuery) | ({
+        kind: 'alteration_matrix';
+    } & AlterationMatrixQuery) | ({
+        kind: 'variant_position';
+    } & VariantPositionQuery) | ({
+        kind: 'genome_profile';
+    } & GenomeProfileQuery) | ({
+        kind: 'survival';
+    } & SurvivalQuery) | ({
+        kind: 'timeline';
+    } & TimelineQuery) | ({
+        kind: 'association';
+    } & AssociationQuery);
+    /**
      * Version
      */
-    version: 1;
+    version: 2;
     /**
      * View
      */
@@ -1198,10 +1515,60 @@ export type InsightValidationRequest = {
     } & HistogramView) | ({
         kind: 'area' | 'bar' | 'donut' | 'line' | 'pie' | 'stacked_bar';
     } & CategoryChartView) | ({
-        kind: 'boxplot';
+        kind: 'boxplot' | 'violin';
     } & BoxplotView) | ({
         kind: 'heatmap';
-    } & HeatmapView);
+    } & HeatmapView) | ({
+        kind: 'association_matrix' | 'genome_profile' | 'lollipop' | 'oncoprint' | 'survival' | 'timeline';
+    } & SpecializedView);
+};
+
+/**
+ * ManagedRecordsReplace
+ *
+ * Complete replacement payload for one application-managed record dataset.
+ */
+export type ManagedRecordsReplace = {
+    /**
+     * Rows
+     */
+    rows: Array<{
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    }>;
+};
+
+/**
+ * MatrixQuery
+ *
+ * Bounded raw-value pivot across row and column identities.
+ */
+export type MatrixQuery = {
+    /**
+     * Cell Limit
+     */
+    cell_limit?: number;
+    columns: FieldSelection;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'matrix';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    rows: FieldSelection;
+    sampling?: DeterministicSampling | null;
+    value: FieldSelection;
 };
 
 /**
@@ -1281,7 +1648,7 @@ export type MembershipRead = {
 /**
  * MetricView
  *
- * One value rendered as a headline metric.
+ * Single descriptive value rendering.
  */
 export type MetricView = {
     /**
@@ -1291,7 +1658,7 @@ export type MetricView = {
     /**
      * Kind
      */
-    kind: 'metric';
+    kind?: 'metric';
     number_format?: NumberFormat | null;
     /**
      * Thresholds
@@ -1300,13 +1667,13 @@ export type MetricView = {
     /**
      * Value
      */
-    value: string;
+    value?: string | null;
 };
 
 /**
  * NumberFormat
  *
- * Portable numeric formatting owned by a view binding.
+ * Portable numeric formatting owned by a view.
  */
 export type NumberFormat = {
     /**
@@ -1560,6 +1927,28 @@ export type ProjectRead = {
 };
 
 /**
+ * ProviderSettings
+ *
+ * Explicit external analysis-provider selection and parameters.
+ */
+export type ProviderSettings = {
+    /**
+     * Method
+     */
+    method: string;
+    /**
+     * Parameters
+     */
+    parameters?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Provider Id
+     */
+    provider_id?: string | null;
+};
+
+/**
  * QCPolicyCreate
  *
  * Payload for creating a QC policy definition.
@@ -1636,6 +2025,22 @@ export type QcPolicyRead = {
 };
 
 /**
+ * QueryOrder
+ *
+ * Deterministic ordering by a query output alias or grain identity.
+ */
+export type QueryOrder = {
+    /**
+     * By
+     */
+    by: string;
+    /**
+     * Direction
+     */
+    direction?: 'asc' | 'desc';
+};
+
+/**
  * RefreshPolicy
  *
  * Saved report refresh behavior.
@@ -1645,6 +2050,37 @@ export type RefreshPolicy = {
      * Mode
      */
     mode?: 'manual';
+};
+
+/**
+ * RelationshipQuery
+ *
+ * Matched two-measure relationship without inferential modeling.
+ */
+export type RelationshipQuery = {
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'relationship';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Match By
+     */
+    match_by: 'sample' | 'subject' | 'run' | 'feature' | 'variant' | 'file' | 'row';
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+    x: FieldSelection;
+    y: FieldSelection;
 };
 
 /**
@@ -1726,7 +2162,7 @@ export type ReportExecuteRequest = {
 /**
  * ReportInsight
  *
- * A uniquely placed saved-insight reference.
+ * Uniquely placed saved-insight reference.
  */
 export type ReportInsight = {
     /**
@@ -1739,7 +2175,7 @@ export type ReportInsight = {
 /**
  * ReportInsightLayout
  *
- * Placement of one report insight in grid coordinates.
+ * Placement of one saved insight in report grid coordinates.
  */
 export type ReportInsightLayout = {
     /**
@@ -1905,7 +2341,7 @@ export type ReportValidationRead = {
 /**
  * ReportValidationRequest
  *
- * Complete project-aware version 1 report definition to validate.
+ * Complete project-aware version 2 report definition to validate.
  */
 export type ReportValidationRequest = {
     /**
@@ -1941,13 +2377,13 @@ export type ReportValidationRequest = {
     /**
      * Version
      */
-    version: 1;
+    version: 2;
 };
 
 /**
  * ResultScope
  *
- * Occurrence-selection constraints for one contract-backed value.
+ * Occurrence-selection constraints for contract-backed fields.
  */
 export type ResultScope = {
     /**
@@ -2054,6 +2490,39 @@ export type RoleRead = {
      * Role Id
      */
     role_id: string;
+};
+
+/**
+ * RowsQuery
+ *
+ * Identity-preserving retrieval of selected columns.
+ */
+export type RowsQuery = {
+    /**
+     * Columns
+     */
+    columns: Array<FieldSelection>;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Grain
+     */
+    grain: 'sample' | 'subject' | 'run' | 'feature' | 'variant' | 'file' | 'row';
+    /**
+     * Kind
+     */
+    kind?: 'rows';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
 };
 
 /**
@@ -2665,10 +3134,9 @@ export type SampleRunRead = {
 /**
  * SavedInsightCreate
  *
- * Request contract for creating a saved insight resource.
+ * Request contract for creating a saved v2 insight.
  */
 export type SavedInsightCreate = {
-    analysis: AnalysisConfig;
     /**
      * Description
      */
@@ -2682,13 +3150,45 @@ export type SavedInsightCreate = {
      */
     name: string;
     /**
+     * Preview Fingerprint
+     */
+    preview_fingerprint: string;
+    /**
      * Project Id
      */
     project_id?: string | null;
     /**
+     * Query
+     */
+    query: ({
+        kind: 'rows';
+    } & RowsQuery) | ({
+        kind: 'summary';
+    } & SummaryQuery) | ({
+        kind: 'relationship';
+    } & RelationshipQuery) | ({
+        kind: 'distribution';
+    } & DistributionQuery) | ({
+        kind: 'series';
+    } & SeriesQuery) | ({
+        kind: 'matrix';
+    } & MatrixQuery) | ({
+        kind: 'alteration_matrix';
+    } & AlterationMatrixQuery) | ({
+        kind: 'variant_position';
+    } & VariantPositionQuery) | ({
+        kind: 'genome_profile';
+    } & GenomeProfileQuery) | ({
+        kind: 'survival';
+    } & SurvivalQuery) | ({
+        kind: 'timeline';
+    } & TimelineQuery) | ({
+        kind: 'association';
+    } & AssociationQuery);
+    /**
      * Version
      */
-    version: 1;
+    version: 2;
     /**
      * View
      */
@@ -2703,19 +3203,20 @@ export type SavedInsightCreate = {
     } & HistogramView) | ({
         kind: 'area' | 'bar' | 'donut' | 'line' | 'pie' | 'stacked_bar';
     } & CategoryChartView) | ({
-        kind: 'boxplot';
+        kind: 'boxplot' | 'violin';
     } & BoxplotView) | ({
         kind: 'heatmap';
-    } & HeatmapView);
+    } & HeatmapView) | ({
+        kind: 'association_matrix' | 'genome_profile' | 'lollipop' | 'oncoprint' | 'survival' | 'timeline';
+    } & SpecializedView);
 };
 
 /**
  * SavedInsightPatch
  *
- * Request contract for patching a saved insight resource.
+ * Request contract for patching a saved v2 insight.
  */
 export type SavedInsightPatch = {
-    analysis?: AnalysisConfig | null;
     /**
      * Description
      */
@@ -2725,9 +3226,41 @@ export type SavedInsightPatch = {
      */
     name?: string | null;
     /**
+     * Preview Fingerprint
+     */
+    preview_fingerprint?: string | null;
+    /**
+     * Query
+     */
+    query?: ({
+        kind: 'rows';
+    } & RowsQuery) | ({
+        kind: 'summary';
+    } & SummaryQuery) | ({
+        kind: 'relationship';
+    } & RelationshipQuery) | ({
+        kind: 'distribution';
+    } & DistributionQuery) | ({
+        kind: 'series';
+    } & SeriesQuery) | ({
+        kind: 'matrix';
+    } & MatrixQuery) | ({
+        kind: 'alteration_matrix';
+    } & AlterationMatrixQuery) | ({
+        kind: 'variant_position';
+    } & VariantPositionQuery) | ({
+        kind: 'genome_profile';
+    } & GenomeProfileQuery) | ({
+        kind: 'survival';
+    } & SurvivalQuery) | ({
+        kind: 'timeline';
+    } & TimelineQuery) | ({
+        kind: 'association';
+    } & AssociationQuery) | null;
+    /**
      * Version
      */
-    version?: 1 | null;
+    version?: 2 | null;
     /**
      * View
      */
@@ -2742,19 +3275,20 @@ export type SavedInsightPatch = {
     } & HistogramView) | ({
         kind: 'area' | 'bar' | 'donut' | 'line' | 'pie' | 'stacked_bar';
     } & CategoryChartView) | ({
-        kind: 'boxplot';
+        kind: 'boxplot' | 'violin';
     } & BoxplotView) | ({
         kind: 'heatmap';
-    } & HeatmapView) | null;
+    } & HeatmapView) | ({
+        kind: 'association_matrix' | 'genome_profile' | 'lollipop' | 'oncoprint' | 'survival' | 'timeline';
+    } & SpecializedView) | null;
 };
 
 /**
  * SavedInsightRead
  *
- * Read contract containing persisted metadata and executable fields.
+ * Saved insight metadata with its complete v2 envelope.
  */
 export type SavedInsightRead = {
-    analysis: AnalysisConfig;
     /**
      * Created At
      */
@@ -2776,6 +3310,34 @@ export type SavedInsightRead = {
      */
     project_id?: string | null;
     /**
+     * Query
+     */
+    query: ({
+        kind: 'rows';
+    } & RowsQuery) | ({
+        kind: 'summary';
+    } & SummaryQuery) | ({
+        kind: 'relationship';
+    } & RelationshipQuery) | ({
+        kind: 'distribution';
+    } & DistributionQuery) | ({
+        kind: 'series';
+    } & SeriesQuery) | ({
+        kind: 'matrix';
+    } & MatrixQuery) | ({
+        kind: 'alteration_matrix';
+    } & AlterationMatrixQuery) | ({
+        kind: 'variant_position';
+    } & VariantPositionQuery) | ({
+        kind: 'genome_profile';
+    } & GenomeProfileQuery) | ({
+        kind: 'survival';
+    } & SurvivalQuery) | ({
+        kind: 'timeline';
+    } & TimelineQuery) | ({
+        kind: 'association';
+    } & AssociationQuery);
+    /**
      * Updated At
      */
     updated_at: string;
@@ -2786,7 +3348,7 @@ export type SavedInsightRead = {
     /**
      * Version
      */
-    version: 1;
+    version: 2;
     /**
      * View
      */
@@ -2801,16 +3363,18 @@ export type SavedInsightRead = {
     } & HistogramView) | ({
         kind: 'area' | 'bar' | 'donut' | 'line' | 'pie' | 'stacked_bar';
     } & CategoryChartView) | ({
-        kind: 'boxplot';
+        kind: 'boxplot' | 'violin';
     } & BoxplotView) | ({
         kind: 'heatmap';
-    } & HeatmapView);
+    } & HeatmapView) | ({
+        kind: 'association_matrix' | 'genome_profile' | 'lollipop' | 'oncoprint' | 'survival' | 'timeline';
+    } & SpecializedView);
 };
 
 /**
  * SavedInsightSummary
  *
- * Compact insight resource returned by list endpoints.
+ * Compact insight list response.
  */
 export type SavedInsightSummary = {
     /**
@@ -2854,7 +3418,7 @@ export type SavedInsightSummary = {
 /**
  * SavedReportCreate
  *
- * Request contract for creating a saved report resource.
+ * Request contract for creating a saved report.
  */
 export type SavedReportCreate = {
     /**
@@ -2890,13 +3454,13 @@ export type SavedReportCreate = {
     /**
      * Version
      */
-    version: 1;
+    version: 2;
 };
 
 /**
  * SavedReportPatch
  *
- * Request contract for patching a saved report resource.
+ * Request contract for patching a saved report.
  */
 export type SavedReportPatch = {
     /**
@@ -2928,13 +3492,13 @@ export type SavedReportPatch = {
     /**
      * Version
      */
-    version?: 1 | null;
+    version?: 2 | null;
 };
 
 /**
  * SavedReportRead
  *
- * Read contract containing persisted metadata and executable fields.
+ * Saved report metadata with its complete definition.
  */
 export type SavedReportRead = {
     /**
@@ -2986,13 +3550,13 @@ export type SavedReportRead = {
     /**
      * Version
      */
-    version: 1;
+    version: 2;
 };
 
 /**
  * SavedReportSummary
  *
- * Compact report resource returned by list endpoints.
+ * Compact report list response.
  */
 export type SavedReportSummary = {
     /**
@@ -3052,7 +3616,7 @@ export type SavedResourceDuplicateRequest = {
 /**
  * ScatterView
  *
- * Two numeric value bindings rendered as a scatter plot.
+ * Scatter rendering for relationship results.
  */
 export type ScatterView = {
     /**
@@ -3068,7 +3632,7 @@ export type ScatterView = {
     /**
      * Kind
      */
-    kind: 'scatter';
+    kind?: 'scatter';
     /**
      * Tooltips
      */
@@ -3076,12 +3640,12 @@ export type ScatterView = {
     /**
      * X
      */
-    x: string;
+    x?: string | null;
     x_axis?: AxisConfig | null;
     /**
      * Y
      */
-    y: string;
+    y?: string | null;
     y_axis?: AxisConfig | null;
 };
 
@@ -3115,6 +3679,40 @@ export type SearchResultRead = {
      * Sample Name
      */
     sample_name?: string | null;
+};
+
+/**
+ * SeriesQuery
+ *
+ * Ordered measurements over a semantic position domain.
+ */
+export type SeriesQuery = {
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'series';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Measurements
+     */
+    measurements: Array<FieldSelection>;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    position: FieldSelection;
+    sampling?: DeterministicSampling | null;
+    /**
+     * Series By
+     */
+    series_by?: Array<FieldSelection>;
 };
 
 /**
@@ -3187,6 +3785,66 @@ export type SetupStatusRead = {
 };
 
 /**
+ * ShapeDraftCreate
+ *
+ * Project-scoped draft shape creation request.
+ */
+export type ShapeDraftCreate = {
+    /**
+     * Adapter Key
+     */
+    adapter_key: string;
+    /**
+     * Data Shape Id
+     */
+    data_shape_id: string;
+    /**
+     * Definition
+     */
+    definition: {
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    };
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
+ * ShapeDraftPatch
+ *
+ * Mutable fields accepted while a shape version remains a draft.
+ */
+export type ShapeDraftPatch = {
+    /**
+     * Adapter Key
+     */
+    adapter_key?: string | null;
+    /**
+     * Definition
+     */
+    definition?: {
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    } | null;
+    /**
+     * Representative Rows
+     */
+    representative_rows?: Array<{
+        [key: string]: {
+            [key: string]: unknown;
+        } | Array<unknown> | string | number | number | boolean | null;
+    }>;
+};
+
+/**
  * SignupRequest
  *
  * Credentials and optional profile name for public account creation.
@@ -3209,7 +3867,7 @@ export type SignupRequest = {
 /**
  * SortConfig
  *
- * A table sort binding to an identity or value alias.
+ * Table sort binding retained as view formatting.
  */
 export type SortConfig = {
     /**
@@ -3220,6 +3878,101 @@ export type SortConfig = {
      * Direction
      */
     direction?: 'asc' | 'desc';
+};
+
+/**
+ * SpecializedView
+ *
+ * Domain-aware rendering with bindings supplied by its typed query.
+ */
+export type SpecializedView = {
+    /**
+     * Hidden Values
+     */
+    hidden_values?: Array<string>;
+    /**
+     * Kind
+     */
+    kind: 'oncoprint' | 'lollipop' | 'genome_profile' | 'survival' | 'timeline' | 'association_matrix';
+    /**
+     * Options
+     */
+    options?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * SummaryQuery
+ *
+ * Grouped descriptive aggregation with explicit calculations.
+ */
+export type SummaryQuery = {
+    /**
+     * Aggregations
+     */
+    aggregations: Array<AggregationSpec>;
+    /**
+     * Calculations
+     */
+    calculations?: Array<CalculationSpec>;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Grain
+     */
+    grain: 'sample' | 'subject' | 'run' | 'feature' | 'variant' | 'file' | 'row';
+    /**
+     * Group By
+     */
+    group_by?: Array<GroupField>;
+    /**
+     * Kind
+     */
+    kind?: 'summary';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+};
+
+/**
+ * SurvivalQuery
+ *
+ * Representable time-to-event input requiring a compatible provider.
+ */
+export type SurvivalQuery = {
+    duration: FieldSelection;
+    event: FieldSelection;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Group By
+     */
+    group_by?: Array<FieldSelection>;
+    /**
+     * Kind
+     */
+    kind?: 'survival';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    provider: ProviderSettings;
+    sampling?: DeterministicSampling | null;
 };
 
 /**
@@ -3241,7 +3994,7 @@ export type TableCountRead = {
 /**
  * TableView
  *
- * Table formatting over grain identities and ordered analysis values.
+ * Tabular rendering for row-like typed results.
  */
 export type TableView = {
     /**
@@ -3271,7 +4024,7 @@ export type TableView = {
 /**
  * Threshold
  *
- * A metric display threshold with a stable severity label.
+ * Metric threshold with a stable label and optional color.
  */
 export type Threshold = {
     /**
@@ -3286,6 +4039,36 @@ export type Threshold = {
      * Value
      */
     value: number;
+};
+
+/**
+ * TimelineQuery
+ *
+ * Subject events laid out over absolute or relative time.
+ */
+export type TimelineQuery = {
+    end?: FieldSelection | null;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    /**
+     * Kind
+     */
+    kind?: 'timeline';
+    label?: FieldSelection | null;
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    sampling?: DeterministicSampling | null;
+    start: FieldSelection;
+    subject: FieldSelection;
+    track?: FieldSelection | null;
 };
 
 /**
@@ -3452,6 +4235,38 @@ export type ValidationError = {
      * Error Type
      */
     type: string;
+};
+
+/**
+ * VariantPositionQuery
+ *
+ * Variant recurrence over transcript or protein position.
+ */
+export type VariantPositionQuery = {
+    /**
+     * Annotation Contract Ids
+     */
+    annotation_contract_ids?: Array<string>;
+    color_by?: FieldSelection | null;
+    /**
+     * Filters
+     */
+    filters?: Array<InsightFilter>;
+    frequency: FieldSelection;
+    /**
+     * Kind
+     */
+    kind?: 'variant_position';
+    /**
+     * Limit
+     */
+    limit?: number;
+    /**
+     * Order By
+     */
+    order_by?: Array<QueryOrder>;
+    position: FieldSelection;
+    sampling?: DeterministicSampling | null;
 };
 
 export type ChatWithAiData = {
@@ -4437,6 +5252,415 @@ export type PatchProjectResponses = {
 };
 
 export type PatchProjectResponse = PatchProjectResponses[keyof PatchProjectResponses];
+
+export type ListCatalogDatasetsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: {
+        /**
+         * Search
+         */
+        search?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+    };
+    url: '/api/v1/projects/{project_id}/catalog/datasets';
+};
+
+export type ListCatalogDatasetsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListCatalogDatasetsError = ListCatalogDatasetsErrors[keyof ListCatalogDatasetsErrors];
+
+export type ListCatalogDatasetsResponses = {
+    /**
+     * Response List Catalog Datasets
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ListCatalogDatasetsResponse = ListCatalogDatasetsResponses[keyof ListCatalogDatasetsResponses];
+
+export type CreateCatalogDatasetData = {
+    body: DataContractCreate;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/catalog/datasets';
+};
+
+export type CreateCatalogDatasetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateCatalogDatasetError = CreateCatalogDatasetErrors[keyof CreateCatalogDatasetErrors];
+
+export type CreateCatalogDatasetResponses = {
+    /**
+     * Response Create Catalog Dataset
+     *
+     * Successful Response
+     */
+    201: {
+        [key: string]: unknown;
+    };
+};
+
+export type CreateCatalogDatasetResponse = CreateCatalogDatasetResponses[keyof CreateCatalogDatasetResponses];
+
+export type DescribeCatalogDatasetData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Data Contract Id
+         */
+        data_contract_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}';
+};
+
+export type DescribeCatalogDatasetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DescribeCatalogDatasetError = DescribeCatalogDatasetErrors[keyof DescribeCatalogDatasetErrors];
+
+export type DescribeCatalogDatasetResponses = {
+    /**
+     * Response Describe Catalog Dataset
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type DescribeCatalogDatasetResponse = DescribeCatalogDatasetResponses[keyof DescribeCatalogDatasetResponses];
+
+export type ProfileCatalogDatasetData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Data Contract Id
+         */
+        data_contract_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/profile';
+};
+
+export type ProfileCatalogDatasetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ProfileCatalogDatasetError = ProfileCatalogDatasetErrors[keyof ProfileCatalogDatasetErrors];
+
+export type ProfileCatalogDatasetResponses = {
+    /**
+     * Response Profile Catalog Dataset
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ProfileCatalogDatasetResponse = ProfileCatalogDatasetResponses[keyof ProfileCatalogDatasetResponses];
+
+export type ReplaceCatalogDatasetRecordsData = {
+    body: ManagedRecordsReplace;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Data Contract Id
+         */
+        data_contract_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/records';
+};
+
+export type ReplaceCatalogDatasetRecordsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReplaceCatalogDatasetRecordsError = ReplaceCatalogDatasetRecordsErrors[keyof ReplaceCatalogDatasetRecordsErrors];
+
+export type ReplaceCatalogDatasetRecordsResponses = {
+    /**
+     * Response Replace Catalog Dataset Records
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ReplaceCatalogDatasetRecordsResponse = ReplaceCatalogDatasetRecordsResponses[keyof ReplaceCatalogDatasetRecordsResponses];
+
+export type GetCatalogFieldProfileData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query: {
+        /**
+         * Field
+         */
+        field: string;
+    };
+    url: '/api/v1/projects/{project_id}/catalog/field-profile';
+};
+
+export type GetCatalogFieldProfileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetCatalogFieldProfileError = GetCatalogFieldProfileErrors[keyof GetCatalogFieldProfileErrors];
+
+export type GetCatalogFieldProfileResponses = {
+    /**
+     * Response Get Catalog Field Profile
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetCatalogFieldProfileResponse = GetCatalogFieldProfileResponses[keyof GetCatalogFieldProfileResponses];
+
+export type ListCatalogFieldValuesData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query: {
+        /**
+         * Field
+         */
+        field: string;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{project_id}/catalog/field-values';
+};
+
+export type ListCatalogFieldValuesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListCatalogFieldValuesError = ListCatalogFieldValuesErrors[keyof ListCatalogFieldValuesErrors];
+
+export type ListCatalogFieldValuesResponses = {
+    /**
+     * Response List Catalog Field Values
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ListCatalogFieldValuesResponse = ListCatalogFieldValuesResponses[keyof ListCatalogFieldValuesResponses];
+
+export type SearchCatalogFieldsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: {
+        /**
+         * Search
+         */
+        search?: string | null;
+        /**
+         * Query Kind
+         */
+        query_kind?: string | null;
+        /**
+         * Scalar Type
+         */
+        scalar_type?: Array<string> | null;
+        /**
+         * Purpose
+         */
+        purpose?: Array<string> | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+    };
+    url: '/api/v1/projects/{project_id}/catalog/fields';
+};
+
+export type SearchCatalogFieldsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SearchCatalogFieldsError = SearchCatalogFieldsErrors[keyof SearchCatalogFieldsErrors];
+
+export type SearchCatalogFieldsResponses = {
+    /**
+     * Response Search Catalog Fields
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type SearchCatalogFieldsResponse = SearchCatalogFieldsResponses[keyof SearchCatalogFieldsResponses];
+
+export type ListCatalogJoinsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: {
+        /**
+         * Data Contract Id
+         */
+        data_contract_id?: string | null;
+    };
+    url: '/api/v1/projects/{project_id}/catalog/joins';
+};
+
+export type ListCatalogJoinsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListCatalogJoinsError = ListCatalogJoinsErrors[keyof ListCatalogJoinsErrors];
+
+export type ListCatalogJoinsResponses = {
+    /**
+     * Response List Catalog Joins
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ListCatalogJoinsResponse = ListCatalogJoinsResponses[keyof ListCatalogJoinsResponses];
+
+export type ListCatalogQueryFamiliesData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/catalog/query-families';
+};
+
+export type ListCatalogQueryFamiliesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListCatalogQueryFamiliesError = ListCatalogQueryFamiliesErrors[keyof ListCatalogQueryFamiliesErrors];
+
+export type ListCatalogQueryFamiliesResponses = {
+    /**
+     * Response List Catalog Query Families
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ListCatalogQueryFamiliesResponse = ListCatalogQueryFamiliesResponses[keyof ListCatalogQueryFamiliesResponses];
 
 export type ListProjectFilesData = {
     body?: never;
@@ -5674,6 +6898,124 @@ export type ListProjectSampleRunFilesResponses = {
 };
 
 export type ListProjectSampleRunFilesResponse = ListProjectSampleRunFilesResponses[keyof ListProjectSampleRunFilesResponses];
+
+export type CreateShapeDraftData = {
+    body: ShapeDraftCreate;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/shapes/drafts';
+};
+
+export type CreateShapeDraftErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateShapeDraftError = CreateShapeDraftErrors[keyof CreateShapeDraftErrors];
+
+export type CreateShapeDraftResponses = {
+    /**
+     * Response Create Shape Draft
+     *
+     * Successful Response
+     */
+    201: {
+        [key: string]: unknown;
+    };
+};
+
+export type CreateShapeDraftResponse = CreateShapeDraftResponses[keyof CreateShapeDraftResponses];
+
+export type PatchShapeDraftData = {
+    body: ShapeDraftPatch;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Data Shape Id
+         */
+        data_shape_id: string;
+        /**
+         * Version
+         */
+        version: number;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}';
+};
+
+export type PatchShapeDraftErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PatchShapeDraftError = PatchShapeDraftErrors[keyof PatchShapeDraftErrors];
+
+export type PatchShapeDraftResponses = {
+    /**
+     * Response Patch Shape Draft
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PatchShapeDraftResponse = PatchShapeDraftResponses[keyof PatchShapeDraftResponses];
+
+export type PublishShapeVersionData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Data Shape Id
+         */
+        data_shape_id: string;
+        /**
+         * Version
+         */
+        version: number;
+    };
+    query?: never;
+    url: '/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}/publish';
+};
+
+export type PublishShapeVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PublishShapeVersionError = PublishShapeVersionErrors[keyof PublishShapeVersionErrors];
+
+export type PublishShapeVersionResponses = {
+    /**
+     * Response Publish Shape Version
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PublishShapeVersionResponse = PublishShapeVersionResponses[keyof PublishShapeVersionResponses];
 
 export type GetRenderedReportData = {
     body?: never;

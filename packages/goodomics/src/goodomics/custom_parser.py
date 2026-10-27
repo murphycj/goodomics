@@ -110,9 +110,15 @@ class ParserOutput:
         if isinstance(data_contract, DataContract):
             resolved = data_contract
         else:
+            kwargs.setdefault("data_shape_id", "entity")
+            kwargs.setdefault(
+                "bindings",
+                {"entity_type": "sample", "observation_kind": "generic_metrics"},
+            )
+            kwargs.setdefault("search_tags", [self.parser_key, "sample", "metric"])
+            kwargs.setdefault("metadata_json", {"source": self.parser_key})
             resolved = make_contract(
                 data_contract,
-                producer_tool=self.parser_key,
                 **kwargs,
             )
         resolved = resolved.model_copy(update={"project_id": self.project_id})
@@ -489,21 +495,11 @@ class ParserOutput:
         self.data_contract_fields[field_id] = DataContractField(
             data_contract_id=namespace,
             field_id=field_id,
-            field_role="metric",
-            entity_scope="sample",
             display_name=name,
-            value_type="numeric" if value_type == "numeric" else "string",
+            purpose="value",
+            scalar_type="numeric" if value_type == "numeric" else "string",
+            semantic_type="metric",
             unit=unit,
-            primary_table="sample_metrics",
-            physical_tables_json={"tables": ["sample_metrics"]},
-            query_ref_json={
-                "table": "sample_metrics",
-                "field_column": "field_id",
-                "field_value": field_id,
-                "value_column": (
-                    "value_numeric" if value_type == "numeric" else "value_string"
-                ),
-            },
             metadata_json={"producer_tool": self.parser_key},
         )
 
@@ -522,18 +518,10 @@ class ParserOutput:
         self.data_contract_fields[field_id] = DataContractField(
             data_contract_id=namespace,
             field_id=field_id,
-            field_role="payload",
-            entity_scope="sample",
             display_name=name,
-            value_type="json",
-            primary_table="result_payloads",
-            physical_tables_json={"tables": ["result_payloads"]},
-            query_ref_json={
-                "table": "result_payloads",
-                "field_column": "field_id",
-                "field_value": field_id,
-                "value_column": "data_json",
-            },
+            purpose="value",
+            scalar_type="json",
+            semantic_type="structured_payload",
             metadata_json={
                 "producer_tool": self.parser_key,
                 "payload_kind": payload_kind,
@@ -726,11 +714,10 @@ def default_metric_contract(parser_key: str) -> DataContract:
     return make_contract(
         f"user:{parser_key}:metrics",
         name=f"{parser_key} metrics",
-        data_type="generic_metrics",
-        producer_tool=parser_key,
-        feature_type="metric",
-        value_type="mixed",
-        query_modes=["sample", "metric", "sample_group"],
+        data_shape_id="entity",
+        bindings={"entity_type": "sample", "observation_kind": "generic_metrics"},
+        search_tags=[parser_key, "sample", "metric"],
+        metadata_json={"source": parser_key},
         description=f"Custom metrics emitted by the {parser_key} parser.",
     )
 
@@ -752,11 +739,10 @@ def _contract_from_id(value: str, parser_key: str) -> DataContract:
     return make_contract(
         value,
         name=value,
-        data_type="generic_metrics",
-        producer_tool=parser_key,
-        feature_type="metric",
-        value_type="mixed",
-        query_modes=["sample", "metric", "sample_group"],
+        data_shape_id="entity",
+        bindings={"entity_type": "sample", "observation_kind": "generic_metrics"},
+        search_tags=[parser_key, "sample", "metric"],
+        metadata_json={"source": parser_key},
     )
 
 

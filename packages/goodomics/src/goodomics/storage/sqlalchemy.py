@@ -42,6 +42,7 @@ from goodomics.schemas.models import (
     SampleGroupMember,
     Subject,
 )
+from goodomics.semantic import built_in_data_shape_versions, built_in_data_shapes
 from goodomics.storage.database import create_async_database_engine
 
 RecordT = TypeVar("RecordT", bound=SQLModel)
@@ -58,6 +59,8 @@ class MetadataWriteResult:
     samples: list[SampleRecord]
     run_samples: list[RunSampleRecord]
     run_relationships: list[RunRelationshipRecord]
+    data_shapes: list[DataShapeRecord]
+    data_shape_versions: list[DataShapeVersionRecord]
     data_contracts: list[DataContractRecord]
     data_contract_analysis_types: list[DataContractAnalysisTypeRecord]
     run_contracts: list[RunContractRecord]
@@ -199,6 +202,43 @@ class RunRelationshipRecord(SQLModel, table=True):
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
+class DataShapeRecord(SQLModel, table=True):
+    """Stable global or project-owned semantic shape identity."""
+
+    __tablename__ = "data_shapes"
+    __table_args__ = (
+        UniqueConstraint("project_id", "data_shape_id", name="uq_data_shapes_owner_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    data_shape_id: str = Field(max_length=255, index=True)
+    project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
+    built_in: bool = Field(default=False, index=True)
+    name: str = Field(max_length=255)
+    description: str | None = None
+    created_at: datetime
+
+
+class DataShapeVersionRecord(SQLModel, table=True):
+    """Draft or immutable published semantic shape version."""
+
+    __tablename__ = "data_shape_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_shape_id", "version", name="uq_data_shape_versions_shape_version"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    data_shape_id: int = Field(foreign_key="data_shapes.id", index=True)
+    version: int = Field(index=True)
+    status: str = Field(default="draft", max_length=32, index=True)
+    definition_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    adapter_key: str = Field(max_length=255, index=True)
+    created_at: datetime
+    published_at: datetime | None = None
+
+
 class DataContractRecord(SQLModel, table=True):
     __tablename__ = "data_contracts"
     __table_args__ = (
@@ -213,19 +253,9 @@ class DataContractRecord(SQLModel, table=True):
     data_contract_id: str = Field(max_length=255, index=True)
     project_id: int | None = Field(default=None, foreign_key="projects.id", index=True)
     name: str = Field(max_length=255)
-    data_type: str = Field(max_length=128, index=True)
-    feature_type: str | None = Field(default=None, max_length=128)
-    value_type: str | None = Field(default=None, max_length=128)
-    unit: str | None = Field(default=None, max_length=64)
-    entity_grain: str | None = Field(default=None, max_length=128)
-    value_semantics: str | None = Field(default=None, max_length=128)
-    summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    last_profiled_at: datetime | None = None
-    source_fingerprint: str | None = Field(default=None, max_length=255)
-    query_modes_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    intrinsic_producer_families_json: dict[str, Any] = Field(
-        default_factory=dict, sa_type=JSON
-    )
+    data_shape_version_id: int = Field(foreign_key="data_shape_versions.id", index=True)
+    shape_bindings_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    search_tags_json: list[str] = Field(default_factory=list, sa_type=JSON)
     description: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
@@ -284,23 +314,67 @@ class RunContractSampleRecord(SQLModel, table=True):
 
 class DataContractFieldRecord(SQLModel, table=True):
     __tablename__ = "data_contract_fields"
+    __table_args__ = (
+        UniqueConstraint("data_contract_id", "field_id", name="uq_contract_field"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     data_contract_id: int = Field(foreign_key="data_contracts.id", index=True)
     field_id: str = Field(max_length=255, index=True)
-    field_role: str = Field(default="metric", max_length=64, index=True)
-    entity_scope: str | None = Field(default=None, max_length=128)
     display_name: str = Field(max_length=255)
-    value_type: str = Field(default="numeric", max_length=64, index=True)
+    purpose: str = Field(default="value", max_length=32, index=True)
+    scalar_type: str = Field(default="numeric", max_length=32, index=True)
+    semantic_type: str | None = Field(default=None, max_length=128, index=True)
     unit: str | None = Field(default=None, max_length=64)
     direction: str | None = Field(default=None, max_length=64)
     description: str | None = None
-    priority: str | None = Field(default=None, max_length=64)
-    primary_table: str | None = Field(default=None, max_length=128)
-    physical_tables_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    query_ref_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
-    summary_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+    priority: int | None = Field(default=None)
+    domain_tags_json: list[str] = Field(default_factory=list, sa_type=JSON)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
+
+
+class DataContractProfileRecord(SQLModel, table=True):
+    """Disposable discovery profile for one project-visible dataset."""
+
+    __tablename__ = "data_contract_profiles"
+    __table_args__ = (
+        UniqueConstraint("project_id", "data_contract_id", name="uq_contract_profile"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    data_contract_id: int = Field(foreign_key="data_contracts.id", index=True)
+    source_fingerprint: str = Field(max_length=255, index=True)
+    profiled_at: datetime
+    row_count: int
+    distinct_entity_count: int | None = None
+    feature_set_coverage_json: dict[str, Any] = Field(
+        default_factory=dict, sa_type=JSON
+    )
+
+
+class DataContractFieldProfileRecord(SQLModel, table=True):
+    """Disposable bounded profile for one dataset field."""
+
+    __tablename__ = "data_contract_field_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "data_contract_field_id", name="uq_contract_field_profile"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    data_contract_field_id: int = Field(
+        foreign_key="data_contract_fields.id", index=True
+    )
+    source_fingerprint: str = Field(max_length=255, index=True)
+    profiled_at: datetime
+    missing_value_count: int = 0
+    numeric_minimum: float | None = None
+    numeric_maximum: float | None = None
+    categorical_distinct_count: int | None = None
+    top_values_json: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
 
 
 class DataImportRecord(SQLModel, table=True):
@@ -458,10 +532,13 @@ class SQLModelGoodomicsStore:
         await self._engine.dispose()
 
     async def ensure_schema(self) -> None:
-        """Create any missing SQL metadata tables."""
+        """Create metadata tables and seed immutable built-in shape versions."""
 
         async with self._engine.begin() as connection:
             await connection.run_sync(SQLModel.metadata.create_all)
+        async with self.session() as session:
+            await _upsert_built_in_shapes(session)
+            await session.commit()
 
     async def ensure_default_project(self) -> Project:
         """Return the lazily created default project."""
@@ -755,8 +832,23 @@ class SQLModelGoodomicsStore:
             session.add_all(run_relationship_rows)
             await session.flush()
 
+            shape_rows, shape_version_rows = await _upsert_built_in_shapes(session)
+            shape_version_pk_by_key = {
+                (
+                    next(
+                        row.data_shape_id
+                        for row in shape_rows
+                        if row.id == version.data_shape_id
+                    ),
+                    version.version,
+                ): _record_id(version)
+                for version in shape_version_rows
+            }
             contract_rows = await _upsert_data_contracts(
-                session, data_contracts or [], project_pk
+                session,
+                data_contracts or [],
+                project_pk,
+                shape_version_pk_by_key=shape_version_pk_by_key,
             )
             contract_pk_by_label = _id_map(contract_rows, "data_contract_id")
             contract_field_rows = await _upsert_data_contract_fields(
@@ -907,6 +999,8 @@ class SQLModelGoodomicsStore:
                 samples=_snapshot_records(sample_rows),
                 run_samples=_snapshot_records(run_sample_rows),
                 run_relationships=_snapshot_records(run_relationship_rows),
+                data_shapes=_snapshot_records(shape_rows),
+                data_shape_versions=_snapshot_records(shape_version_rows),
                 data_contracts=_snapshot_records(contract_rows),
                 data_contract_analysis_types=_snapshot_records(
                     contract_analysis_type_rows
@@ -1304,6 +1398,8 @@ async def _upsert_data_contracts(
     session: AsyncSession,
     contracts: list[DataContract],
     project_id: int,
+    *,
+    shape_version_pk_by_key: dict[tuple[str, int], int],
 ) -> list[DataContractRecord]:
     existing = await _data_contract_records_by_label(
         session,
@@ -1319,38 +1415,22 @@ async def _upsert_data_contracts(
                 data_contract_id=contract.data_contract_id,
                 project_id=contract_project_id,
                 name=contract.name,
-                data_type=contract.data_type,
-                feature_type=contract.feature_type,
-                value_type=contract.value_type,
-                unit=contract.unit,
-                entity_grain=contract.entity_grain,
-                value_semantics=contract.value_semantics,
-                summary_json=dict(contract.summary_json),
-                last_profiled_at=contract.last_profiled_at,
-                source_fingerprint=contract.source_fingerprint,
-                query_modes_json=dict(contract.query_modes_json),
-                intrinsic_producer_families_json=dict(
-                    contract.intrinsic_producer_families_json
-                ),
+                data_shape_version_id=shape_version_pk_by_key[
+                    (contract.data_shape_id, contract.data_shape_version)
+                ],
+                shape_bindings_json=dict(contract.shape_bindings_json),
+                search_tags_json=list(contract.search_tags),
                 description=contract.description,
                 metadata_json=dict(contract.metadata_json),
             )
         else:
             row.project_id = contract_project_id
             row.name = contract.name
-            row.data_type = contract.data_type
-            row.feature_type = contract.feature_type
-            row.value_type = contract.value_type
-            row.unit = contract.unit
-            row.entity_grain = contract.entity_grain
-            row.value_semantics = contract.value_semantics
-            row.summary_json = dict(contract.summary_json)
-            row.last_profiled_at = contract.last_profiled_at
-            row.source_fingerprint = contract.source_fingerprint
-            row.query_modes_json = dict(contract.query_modes_json)
-            row.intrinsic_producer_families_json = dict(
-                contract.intrinsic_producer_families_json
-            )
+            row.data_shape_version_id = shape_version_pk_by_key[
+                (contract.data_shape_id, contract.data_shape_version)
+            ]
+            row.shape_bindings_json = dict(contract.shape_bindings_json)
+            row.search_tags_json = list(contract.search_tags)
             row.description = contract.description
             row.metadata_json = dict(contract.metadata_json)
         rows.append(row)
@@ -1382,18 +1462,15 @@ async def _upsert_data_contract_fields(
         DataContractFieldRecord(
             data_contract_id=contract_pk_by_label[field.data_contract_id],
             field_id=field.field_id,
-            field_role=field.field_role,
-            entity_scope=field.entity_scope,
             display_name=field.display_name,
-            value_type=field.value_type,
+            purpose=field.purpose,
+            scalar_type=field.scalar_type,
+            semantic_type=field.semantic_type,
             unit=field.unit,
             direction=field.direction,
             description=field.description,
             priority=field.priority,
-            primary_table=field.primary_table,
-            physical_tables_json=dict(field.physical_tables_json),
-            query_ref_json=dict(field.query_ref_json),
-            summary_json=dict(field.summary_json),
+            domain_tags_json=list(field.domain_tags),
             metadata_json=dict(field.metadata_json),
         )
         for field in fields
@@ -1402,6 +1479,59 @@ async def _upsert_data_contract_fields(
     session.add_all(rows)
     await session.flush()
     return rows
+
+
+async def _upsert_built_in_shapes(
+    session: AsyncSession,
+) -> tuple[list[DataShapeRecord], list[DataShapeVersionRecord]]:
+    """Ensure immutable built-in shape identities and published versions exist."""
+
+    shape_rows: list[DataShapeRecord] = []
+    shape_pk_by_label: dict[str, int] = {}
+    for shape in built_in_data_shapes():
+        row = await get_record_where(
+            session,
+            DataShapeRecord,
+            DataShapeRecord.data_shape_id == shape.data_shape_id,
+            cast(Any, DataShapeRecord.project_id).is_(None),
+        )
+        if row is None:
+            row = DataShapeRecord(
+                data_shape_id=shape.data_shape_id,
+                project_id=None,
+                built_in=True,
+                name=shape.name,
+                description=shape.description,
+                created_at=shape.created_at,
+            )
+            session.add(row)
+            await session.flush()
+        shape_rows.append(row)
+        shape_pk_by_label[shape.data_shape_id] = _record_id(row)
+
+    version_rows: list[DataShapeVersionRecord] = []
+    for version in built_in_data_shape_versions():
+        shape_pk = shape_pk_by_label[version.data_shape_id]
+        row = await get_record_where(
+            session,
+            DataShapeVersionRecord,
+            DataShapeVersionRecord.data_shape_id == shape_pk,
+            DataShapeVersionRecord.version == version.version,
+        )
+        if row is None:
+            row = DataShapeVersionRecord(
+                data_shape_id=shape_pk,
+                version=version.version,
+                status="published",
+                definition_json=dict(version.definition_json),
+                adapter_key=version.adapter_key,
+                created_at=version.created_at,
+                published_at=version.published_at or version.created_at,
+            )
+            session.add(row)
+            await session.flush()
+        version_rows.append(row)
+    return shape_rows, version_rows
 
 
 async def _upsert_files(

@@ -54,11 +54,6 @@ contracts:
         display_name: Copy number
         value_type: numeric
         description: Continuous gene-level copy-number measurement.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:copy_number:log2
     name: cBioPortal log2 copy number
@@ -75,11 +70,6 @@ contracts:
         display_name: Log2 copy number
         value_type: numeric
         description: Gene-level copy number on a log2 scale.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mutations:maf
     name: cBioPortal mutation calls
@@ -105,11 +95,6 @@ contracts:
         display_name: Expression
         value_type: numeric
         description: Continuous mRNA expression measurement for a gene.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:mrna_expression:z_score
     name: cBioPortal mRNA expression z-scores
@@ -127,11 +112,6 @@ contracts:
         value_type: numeric
         unit: z-score
         description: Standardized mRNA expression score for a gene.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:methylation:continuous_beta
     name: cBioPortal methylation beta
@@ -149,11 +129,6 @@ contracts:
         value_type: numeric
         unit: beta
         description: Continuous methylation beta measurement for a feature.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:log2
     name: cBioPortal protein abundance
@@ -170,11 +145,6 @@ contracts:
         display_name: Protein abundance
         value_type: numeric
         description: Continuous abundance measurement for a protein feature.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:protein_level:z_score
     name: cBioPortal protein abundance z-scores
@@ -192,11 +162,6 @@ contracts:
         value_type: numeric
         unit: z-score
         description: Standardized abundance score for a protein feature.
-        primary_table: feature_value_numeric
-        physical_tables: [feature_value_numeric]
-        query_ref_json:
-          table: feature_value_numeric
-          value_column: value
     metadata_json: *cbio_metadata
   - data_contract_id: cbioportal:structural_variants
     name: cBioPortal structural variants

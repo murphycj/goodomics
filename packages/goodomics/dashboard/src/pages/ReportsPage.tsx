@@ -94,9 +94,11 @@ type ReportTarget =
 
 /** Report index and grid-layout builder for composing saved insights. */
 export function ReportsPage({
+  isProjectHomeView = false,
   projectId,
   target = { mode: "list" },
 }: {
+  isProjectHomeView?: boolean;
   projectId: string;
   target?: ReportTarget;
 }) {
@@ -164,7 +166,7 @@ export function ReportsPage({
     useContainerWidth({ initialWidth: 1120 });
   const reportDefinition = useMemo(
     () => ({
-      version: 1 as const,
+      version: 2 as const,
       name,
       description,
       layout: { columns: 12, row_height: 64 },
@@ -569,6 +571,7 @@ export function ReportsPage({
           isDeleting={removeReport.isPending}
           isLayoutEditing={editMode}
           isLayoutSaving={saveReport.isPending}
+          isProjectHomeView={isProjectHomeView}
           isRefreshing={isRefreshingReport}
           projectName={project.data?.name ?? projectId}
           report={selectedReport}
@@ -833,7 +836,9 @@ function renderReportResizeHandle(
       ref={ref as Ref<HTMLSpanElement>}
       title={label}
     >
-      <Icon aria-hidden="true" className="h-3 w-3" />
+      <span aria-hidden="true" className="report-resize-control">
+        <Icon className="h-3 w-3" />
+      </span>
     </span>
   );
 }
@@ -954,6 +959,7 @@ function ReportReadHeader({
   isDeleting,
   isLayoutEditing,
   isLayoutSaving,
+  isProjectHomeView,
   isRefreshing,
   projectName,
   report,
@@ -970,6 +976,7 @@ function ReportReadHeader({
   isDeleting: boolean;
   isLayoutEditing: boolean;
   isLayoutSaving: boolean;
+  isProjectHomeView: boolean;
   isRefreshing: boolean;
   projectName: string;
   report: SavedReport | undefined;
@@ -985,9 +992,11 @@ function ReportReadHeader({
   return (
     <section className="shrink-0 border-b border-[#dce3eb] pb-4">
       <div className="flex items-start gap-3">
-        <Button size="icon" variant="ghost" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        {!isProjectHomeView ? (
+          <Button size="icon" variant="ghost" onClick={onBack}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
         <LayoutGrid className="mt-2 h-5 w-5 shrink-0 text-[#16784a]" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-semibold text-[#1d2430]">
@@ -1024,17 +1033,19 @@ function ReportReadHeader({
             Saving layout…
           </span>
         ) : null}
-        <Button
-          aria-busy={isRefreshing}
-          disabled={!report || isRefreshing}
-          variant="outline"
-          onClick={onRefresh}
-        >
-          <RefreshCw
-            className={cn("h-4 w-4", isRefreshing && "animate-spin")}
-          />{" "}
-          {isRefreshing ? "Refreshing…" : "Refresh"}
-        </Button>
+        {!isProjectHomeView ? (
+          <Button
+            aria-busy={isRefreshing}
+            disabled={!report || isRefreshing}
+            variant="outline"
+            onClick={onRefresh}
+          >
+            <RefreshCw
+              className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+            />{" "}
+            {isRefreshing ? "Refreshing…" : "Refresh"}
+          </Button>
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -1048,6 +1059,14 @@ function ReportReadHeader({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Report</DropdownMenuLabel>
+            {isProjectHomeView ? (
+              <DropdownMenuItem disabled={isRefreshing} onClick={onRefresh}>
+                <RefreshCw
+                  className={cn("h-4 w-4", isRefreshing && "animate-spin")}
+                />{" "}
+                {isRefreshing ? "Refreshing…" : "Refresh data"}
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem onClick={onEdit}>
               <Pencil className="h-4 w-4" /> Edit details
             </DropdownMenuItem>

@@ -181,7 +181,7 @@ class GoodomicsQueryTools:
                     for contract in contracts
                     if term in _normalize(contract.name)
                     or term in _normalize(contract.data_contract_id)
-                    or term in _normalize(contract.data_type)
+                    or any(term in _normalize(tag) for tag in contract.search_tags_json)
                 ]
             contract_ids = [
                 contract.id for contract in contracts if contract.id is not None
@@ -200,7 +200,7 @@ class GoodomicsQueryTools:
                             )
                         )
                         .order_by(
-                            DataContractFieldRecord.field_role,
+                            DataContractFieldRecord.purpose,
                             DataContractFieldRecord.field_id,
                         )
                     )
@@ -218,6 +218,175 @@ class GoodomicsQueryTools:
                     for contract in contracts
                 ]
             }
+
+    @_tool_invocation
+    async def search_datasets(
+        self,
+        project: str,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search the request-scoped semantic catalog for project datasets."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "items": [], "total": 0}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            return await RuntimeCatalog(session, project_id).list_datasets(
+                search=query, limit=limit, offset=offset
+            )
+
+    @_tool_invocation
+    async def describe_dataset(
+        self, project: str, data_contract_id: str
+    ) -> dict[str, Any]:
+        """Describe one semantic dataset without exposing physical routing."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "dataset": None}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            dataset = await RuntimeCatalog(session, project_id).describe_dataset(
+                data_contract_id
+            )
+        return {"dataset": dataset}
+
+    @_tool_invocation
+    async def search_fields(
+        self,
+        project: str,
+        query: str | None = None,
+        query_kind: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search canonical contract and metadata fields by query capability."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "items": [], "total": 0}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            return await RuntimeCatalog(session, project_id).search_fields(
+                search=query, query_kind=query_kind, limit=limit, offset=offset
+            )
+
+    @_tool_invocation
+    async def find_dataset_joins(
+        self, project: str, data_contract_id: str | None = None
+    ) -> dict[str, Any]:
+        """Find permission-filtered joins expressed only as logical identities."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "joins": []}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            joins = await RuntimeCatalog(session, project_id).find_joins(
+                data_contract_id
+            )
+        return {"joins": joins}
+
+    @_tool_invocation
+    async def list_field_values(
+        self, project: str, field: str, limit: int = 20
+    ) -> dict[str, Any]:
+        """List bounded observed values from an optional field profile."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "values": []}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            return await RuntimeCatalog(session, project_id).sampled_values(
+                field, limit=limit
+            )
+
+    @_tool_invocation
+    async def read_field_profile(self, project: str, field: str) -> dict[str, Any]:
+        """Read one optional disposable semantic field profile."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "profile": None}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            profile = await RuntimeCatalog(session, project_id).field_profile(field)
+        return {"profile": profile}
+
+    @_tool_invocation
+    async def list_query_families(self, project: str) -> dict[str, Any]:
+        """List valid query families, compatible views, and provider requirements."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "query_families": []}
+        from goodomics.server.runtime_catalog import RuntimeCatalog
+
+        async with self._session() as session:
+            return await RuntimeCatalog(session, project_id).supported_query_families()
+
+    @_tool_invocation
+    async def validate_insight_draft(
+        self, project: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Validate and explain the exact v2 definition shared by all surfaces."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "valid": False}
+        from goodomics.server.insights import (
+            validate_and_explain_config,
+            validate_insight_definition_data,
+        )
+
+        validation = validate_and_explain_config(definition)
+        if validation["valid"]:
+            try:
+                async with self._session() as session:
+                    await validate_insight_definition_data(
+                        session=session, project_id=project_id, config=definition
+                    )
+            except ValueError as error:
+                validation["valid"] = False
+                validation["messages"] = [
+                    {
+                        "level": "error",
+                        "code": "invalid_semantic_binding",
+                        "message": str(error),
+                    }
+                ]
+        return validation
+
+    @_tool_invocation
+    async def preview_insight_draft(
+        self, project: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute a bounded preview without persisting or saving the draft."""
+
+        project_id, resolution = await self._required_project_id(project)
+        if project_id is None:
+            return {"project_resolution": resolution, "result": None}
+        from goodomics.server.insights import execute_insight
+
+        async with self._session() as session:
+            result = await execute_insight(
+                session=session,
+                analytics_store=self._analytics_store(project_id),
+                project_id=project_id,
+                config=definition,
+                persist_results=False,
+            )
+        return {"result": result, "editable_definition": definition}
 
     @_tool_invocation
     async def resolve_project(self, reference: str, limit: int = 5) -> dict[str, Any]:
@@ -1152,35 +1321,30 @@ def _data_result_payload(
     contract: DataContractRecord,
     fields: list[DataContractFieldRecord],
 ) -> dict[str, Any]:
-    # Data contracts are semantic query contracts. Include a bounded field list so
-    # agents can discover available measures without loading every raw row.
+    # Physical routing is deliberately absent; runtime capabilities come from
+    # the trusted adapter registry.
     return {
         "data_contract_id": contract.data_contract_id,
         "name": contract.name,
-        "data_type": contract.data_type,
-        "intrinsic_producer_families": contract.intrinsic_producer_families_json,
-        "entity_grain": contract.entity_grain,
-        "value_semantics": contract.value_semantics,
+        "data_shape_version_id": contract.data_shape_version_id,
+        "bindings": contract.shape_bindings_json,
+        "search_tags": contract.search_tags_json,
         "description": contract.description,
-        "summary": contract.summary_json,
         "fields": [_data_contract_field_payload(field) for field in fields],
     }
 
 
 def _data_contract_field_payload(field: DataContractFieldRecord) -> dict[str, Any]:
-    # Field metadata explains how to query and display an individual metric or
-    # attribute within a contract.
+    # Field metadata is semantic only and includes its exact canonical reference.
     return {
         "field_id": field.field_id,
-        "field_role": field.field_role,
-        "entity_scope": field.entity_scope,
         "display_name": field.display_name,
-        "value_type": field.value_type,
+        "purpose": field.purpose,
+        "scalar_type": field.scalar_type,
+        "semantic_type": field.semantic_type,
         "unit": field.unit,
         "direction": field.direction,
         "description": field.description,
-        "primary_table": field.primary_table,
-        "physical_tables": field.physical_tables_json,
-        "summary": field.summary_json,
-        "query_ref": field.query_ref_json,
+        "priority": field.priority,
+        "domain_tags": field.domain_tags_json,
     }

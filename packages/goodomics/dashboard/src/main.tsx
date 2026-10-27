@@ -11,6 +11,8 @@ import { AuthProvider } from "./components/auth/AuthProvider";
 import { Layout } from "./components/layout/Layout";
 import { getProject } from "./api";
 import { queryClient } from "./lib/queryClient";
+import { QUERY_KINDS } from "./lib/insightBuilder";
+import type { QueryKind } from "./lib/insightSchemas";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { DatabasePage } from "./pages/DatabasePage";
 import { HomePage } from "./pages/HomePage";
@@ -121,6 +123,9 @@ const insightNewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/project/$projectId/insights/new",
   component: InsightNewRouteAdapter,
+  validateSearch: (search: Record<string, unknown>) => ({
+    analysis: queryKindFromSearch(search.analysis),
+  }),
 });
 const insightDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -187,6 +192,7 @@ function ProjectRouteAdapter() {
   if (project.data?.default_report_id) {
     return (
       <ReportsPage
+        isProjectHomeView
         target={{ mode: "view", reportRef: project.data.default_report_id }}
         projectId={projectId}
       />
@@ -284,7 +290,14 @@ function InsightsRouteAdapter() {
 /** Route adapter for creating an insight. */
 function InsightNewRouteAdapter() {
   const { projectId } = insightNewRoute.useParams();
-  return <InsightsPage projectId={projectId} target={{ mode: "new" }} />;
+  const { analysis } = insightNewRoute.useSearch();
+  return <InsightsPage projectId={projectId} target={{ mode: "new", queryKind: analysis }} />;
+}
+
+function queryKindFromSearch(value: unknown): QueryKind | undefined {
+  return typeof value === "string" && QUERY_KINDS.includes(value as QueryKind)
+    ? value as QueryKind
+    : undefined;
 }
 
 /** Route adapter for viewing an insight. */

@@ -175,11 +175,9 @@ def test_decorated_custom_parser_ingests_without_packaging(tmp_path: Path) -> No
     rnaseq_tpm = contract(
         "user:rnaseq:tpm",
         name="RNA-seq TPM values",
-        data_type="feature_matrix",
-        producer_tool="notebook-parser",
-        feature_type="gene",
-        value_type="numeric",
-        query_modes=["sample", "feature", "sample_group"],
+        data_shape_id="feature",
+        bindings={"feature_type": "gene", "entity_type": "sample"},
+        search_tags=["notebook-parser", "numeric"],
     )
 
     @parser(key="notebook-parser", label="Notebook parser", contracts=[rnaseq_tpm])

@@ -297,6 +297,24 @@ class GoodomicsChatService:
             return await self.query_tools.list_projects(**arguments)
         if call.name == "list_data_contracts":
             return await self.query_tools.list_data_contracts(**arguments)
+        if call.name == "search_datasets":
+            return await self.query_tools.search_datasets(**arguments)
+        if call.name == "describe_dataset":
+            return await self.query_tools.describe_dataset(**arguments)
+        if call.name == "search_fields":
+            return await self.query_tools.search_fields(**arguments)
+        if call.name == "find_dataset_joins":
+            return await self.query_tools.find_dataset_joins(**arguments)
+        if call.name == "list_field_values":
+            return await self.query_tools.list_field_values(**arguments)
+        if call.name == "read_field_profile":
+            return await self.query_tools.read_field_profile(**arguments)
+        if call.name == "list_query_families":
+            return await self.query_tools.list_query_families(**arguments)
+        if call.name == "validate_insight_draft":
+            return await self.query_tools.validate_insight_draft(**arguments)
+        if call.name == "preview_insight_draft":
+            return await self.query_tools.preview_insight_draft(**arguments)
         if call.name == "resolve_project":
             return await self.query_tools.resolve_project(**arguments)
         if call.name == "get_project_summary":
@@ -335,6 +353,81 @@ def tool_schemas() -> list[dict[str, Any]]:
                 "query": _string(),
                 "limit": _int(),
                 "field_limit": _int(),
+            },
+        ),
+        _tool(
+            "search_datasets",
+            "Search the project semantic runtime catalog.",
+            {
+                "project": _string(required=True),
+                "query": _string(),
+                "limit": _int(),
+                "offset": _int(),
+            },
+        ),
+        _tool(
+            "describe_dataset",
+            "Describe one semantic dataset, fields, coverage, joins, and capabilities.",
+            {
+                "project": _string(required=True),
+                "data_contract_id": _string(required=True),
+            },
+        ),
+        _tool(
+            "search_fields",
+            "Search canonical semantic fields compatible with a typed query family.",
+            {
+                "project": _string(required=True),
+                "query": _string(),
+                "query_kind": _string(),
+                "limit": _int(),
+                "offset": _int(),
+            },
+        ),
+        _tool(
+            "find_dataset_joins",
+            "Find permission-filtered joins by logical identity.",
+            {
+                "project": _string(required=True),
+                "data_contract_id": _string(),
+            },
+        ),
+        _tool(
+            "list_field_values",
+            "List bounded observed values for one canonical field.",
+            {
+                "project": _string(required=True),
+                "field": _string(required=True),
+                "limit": _int(),
+            },
+        ),
+        _tool(
+            "read_field_profile",
+            "Read an optional disposable profile for one canonical field.",
+            {
+                "project": _string(required=True),
+                "field": _string(required=True),
+            },
+        ),
+        _tool(
+            "list_query_families",
+            "List valid query families, views, and analysis-provider requirements.",
+            {"project": _string(required=True)},
+        ),
+        _tool(
+            "validate_insight_draft",
+            "Validate and explain a complete editable version 2 insight draft.",
+            {
+                "project": _string(required=True),
+                "definition": _object(required=True),
+            },
+        ),
+        _tool(
+            "preview_insight_draft",
+            "Execute a bounded version 2 insight preview without saving it.",
+            {
+                "project": _string(required=True),
+                "definition": _object(required=True),
             },
         ),
         _tool(
@@ -431,6 +524,12 @@ def _int() -> dict[str, Any]:
     return {"type": "integer", "minimum": 1, "maximum": 50}
 
 
+def _object(*, required: bool = False) -> dict[str, Any]:
+    """Return a freeform JSON object schema for the shared v2 definition."""
+
+    return {"type": "object", "__required": required}
+
+
 def _parse_arguments(arguments: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(arguments, dict):
         return arguments
@@ -451,7 +550,11 @@ def _system_prompt(*, project_id: str | None) -> str:
     return (
         "You are Goodomics Ask AI, an evidence-grounded assistant for omics run "
         "history. Use read-only Goodomics tools when answering questions about "
-        "projects, runs, samples, files, or metrics. Do not invent data. If a "
+        "projects, runs, samples, files, metrics, or insight drafts. Use the semantic "
+        "catalog and canonical field references before drafting a version 2 query. "
+        "Prefer native descriptive query families. For inferential or modeled "
+        "analysis, report the required analysis provider and never silently "
+        "approximate it. Do not invent data. If a "
         "project reference is ambiguous, explain the candidate projects and ask "
         "the user to choose. When tool results include app_path or markdown_link "
         "for projects, runs, or samples, present those items as Markdown links "

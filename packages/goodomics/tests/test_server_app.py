@@ -995,15 +995,17 @@ def test_contract_browser_and_contract_first_insight_execution(
             json={
                 "refresh": True,
                 "name": "Average mapping",
-                "version": 1,
-                "analysis": {
+                "version": 2,
+                "query": {
+                    "kind": "summary",
                     "grain": "sample",
-                    "values": [
+                    "aggregations": [
                         {
                             "field": (
                                 "salmon:results/general_stats.salmon_percent_mapped"
                             ),
                             "aggregation": "avg",
+                            "as": "average_mapping",
                         }
                     ],
                 },
@@ -1020,18 +1022,16 @@ def test_contract_browser_and_contract_first_insight_execution(
         for item in contract.json()["fields"]
         if item["field_id"] == "general_stats.salmon_percent_mapped"
     )
-    assert field["value_type"] == "numeric"
-    assert field["summary"]["non_null_count"] > 0
+    assert field["scalar_type"] == "numeric"
+    assert "primary_table" not in field
     assert result.status_code == 200, result.text
     result_body = result.json()["result"]
     assert result_body["name"] == "Average mapping"
     assert "title" not in result_body
     rows = result_body["rows"]
     assert rows
-    assert result_body["columns"] == [
-        "sample_id",
-        "salmon:results/general_stats.salmon_percent_mapped",
-    ]
+    assert result_body["columns"] == ["average_mapping"]
+    assert result_body["typed_result"]["kind"] == "summary"
 
 
 def test_contract_series_charts_match_metadata_field_ids(
@@ -1051,43 +1051,34 @@ def test_contract_series_charts_match_metadata_field_ids(
     monkeypatch.setenv("GOODOMICS_ANALYTICS_PATH", str(analytics_path))
 
     field_id = "general_stats.salmon_percent_mapped"
-    base_config = {
-        "version": 1,
-        "analysis": {
+    table_config = {
+        "version": 2,
+        "query": {
+            "kind": "rows",
             "grain": "sample",
-            "values": [
+            "columns": [
                 {
                     "as": "percent_mapped",
                     "field": f"salmon:results/{field_id}",
-                    "aggregation": "raw",
                 }
             ],
         },
+        "view": {"kind": "table"},
+    }
+    histogram_config = {
+        "version": 2,
+        "query": {
+            "kind": "distribution",
+            "value": {
+                "as": "percent_mapped",
+                "field": f"salmon:results/{field_id}",
+            },
+        },
+        "view": {"kind": "histogram"},
     }
 
     with TestClient(create_app()) as test_client:
         project_id = test_client.get("/api/v1/projects").json()[0]["project_id"]
-        table_config = {
-            **base_config,
-            "analysis": {
-                **base_config["analysis"],
-                "filters": [
-                    {
-                        "field": "sample",
-                        "operator": "in",
-                        "value": [
-                            {"kind": "sample", "id": "S1"},
-                            {"kind": "sample_group", "id": "missing-group"},
-                        ],
-                    }
-                ],
-            },
-            "view": {"kind": "table"},
-        }
-        histogram_config = {
-            **base_config,
-            "view": {"kind": "histogram"},
-        }
         table_response = test_client.post(
             "/api/v1/insights/execute",
             json={"project_id": project_id, "refresh": True, **table_config},
@@ -1105,11 +1096,7 @@ def test_contract_series_charts_match_metadata_field_ids(
     table_result = table_response.json()["result"]
     assert table_result["rows"]
     assert "context" not in table_result
-    assert table_result["analysis"]["filters"][0]["value"] == [
-        {"kind": "sample", "id": "S1"},
-        {"kind": "sample_group", "id": "missing-group"},
-    ]
-    assert table_result["analysis"]["grain"] == "sample"
+    assert table_result["query"]["grain"] == "sample"
     assert table_result["columns"] == ["sample_id", "percent_mapped"]
     assert table_result["column_labels"] == {
         "sample_id": "Sample",
@@ -1139,10 +1126,9 @@ def test_contract_browser_scopes_contracts_and_fields_to_project(
     shared_contract = contract(
         "user:shared:metrics",
         name="Shared project metrics",
-        data_type="sample_metrics",
-        producer_tool="project-scope-test",
-        value_type="numeric",
-        query_modes=["sample", "sample_group"],
+        data_shape_id="entity",
+        bindings={"entity_kind": "sample"},
+        search_tags=["project-scope-test", "numeric"],
     )
 
     @parser(key="project-scope-test", contracts=[shared_contract])
@@ -1202,68 +1188,77 @@ def test_contract_browser_scopes_contracts_and_fields_to_project(
     assert beta_fields == {"user:shared:metrics:beta_metric"}
 
 
-def test_contract_browser_keeps_legacy_default_project_contracts_visible(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'state' / 'goodomics.db'}"
+def test_managed_record_dataset_round_trip_and_profile(client: TestClient) -> None:
+    """Managed rows retain semantic field IDs while hiding physical storage."""
 
-    async def seed_legacy_contract():
-        async with initialized_store(database_url) as store:
-            default_project = await store.ensure_default_project()
-            other_project = await store.ensure_project("other")
-            async with store.session() as session:
-                contract = DataContractRecord(
-                    data_contract_id="multiqc:legacy",
-                    project_id=None,
-                    name="Legacy MultiQC",
-                    data_type="sample_metrics",
-                )
-                session.add(contract)
-                await session.flush()
-                assert contract.id is not None
-                session.add(
-                    DataContractFieldRecord(
-                        data_contract_id=contract.id,
-                        field_id="legacy_metric",
-                        field_role="metric",
-                        display_name="Legacy metric",
-                        value_type="numeric",
-                    )
-                )
-                await session.commit()
-            return default_project, other_project
-
-    default_project, other_project = asyncio.run(seed_legacy_contract())
-    monkeypatch.setenv("GOODOMICS_DATABASE_URL", database_url)
-
-    with TestClient(create_app()) as test_client:
-        default_contracts = test_client.get(
-            "/api/v1/contracts",
-            params={"project_id": default_project.project_id},
-        )
-        default_contract = test_client.get(
-            "/api/v1/contracts/multiqc:legacy",
-            params={"project_id": default_project.project_id},
-        )
-        other_contracts = test_client.get(
-            "/api/v1/contracts",
-            params={"project_id": other_project.project_id},
-        )
-
-    assert default_contracts.status_code == 200
-    assert any(
-        item["data_contract_id"] == "multiqc:legacy"
-        for item in default_contracts.json()
+    project_id = client.get("/api/v1/projects").json()[0]["project_id"]
+    created = client.post(
+        f"/api/v1/projects/{project_id}/catalog/datasets",
+        json={
+            "data_contract_id": "user:records:demo",
+            "name": "Demo records",
+            "data_shape_id": "records",
+            "data_shape_version": 1,
+            "bindings": {"row_identity": "row_id"},
+            "fields": [
+                {
+                    "field_id": "score",
+                    "display_name": "Score",
+                    "purpose": "value",
+                    "scalar_type": "numeric",
+                },
+                {
+                    "field_id": "group",
+                    "display_name": "Group",
+                    "purpose": "annotation",
+                    "scalar_type": "categorical",
+                },
+            ],
+        },
     )
-    assert default_contract.status_code == 200
-    assert {field["field_id"] for field in default_contract.json()["fields"]} == {
-        "legacy_metric"
-    }
-    assert other_contracts.status_code == 200
-    assert all(
-        item["data_contract_id"] != "multiqc:legacy" for item in other_contracts.json()
+    assert created.status_code == 201, created.text
+    assert "physical" not in created.text
+
+    replaced = client.put(
+        f"/api/v1/projects/{project_id}/catalog/datasets/user:records:demo/records",
+        json={
+            "rows": [
+                {"row_id": "r1", "score": 2.5, "group": "A"},
+                {"row_id": "r2", "score": 4, "group": "B"},
+            ]
+        },
     )
+    assert replaced.status_code == 200, replaced.text
+
+    executed = client.post(
+        "/api/v1/insights/execute",
+        json={
+            "project_id": project_id,
+            "refresh": True,
+            "version": 2,
+            "name": "Managed rows",
+            "query": {
+                "kind": "rows",
+                "grain": "row",
+                "columns": [
+                    {"field": "user:records:demo/score", "as": "score"},
+                    {"field": "user:records:demo/group", "as": "group"},
+                ],
+            },
+            "view": {"kind": "table"},
+        },
+    )
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["result"]["rows"] == [
+        {"row_id": "r1", "score": 2.5, "group": "A"},
+        {"row_id": "r2", "score": 4.0, "group": "B"},
+    ]
+
+    profile = client.post(
+        f"/api/v1/projects/{project_id}/catalog/datasets/user:records:demo/profile"
+    )
+    assert profile.status_code == 200, profile.text
+    assert profile.json()["row_count"] == 2
 
 
 def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
@@ -1316,16 +1311,19 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "project_id": project_id,
                 "refresh": True,
                 "name": "Patients by sex",
-                "version": 1,
-                "analysis": {
+                "version": 2,
+                "query": {
+                    "kind": "summary",
                     "grain": "subject",
-                    "values": [
+                    "group_by": [
                         {
                             "as": "sex",
                             "field": (
                                 f"{CBIOPORTAL_CLINICAL_PATIENT_ATTRIBUTES}/subject:sex"
                             ),
-                        },
+                        }
+                    ],
+                    "aggregations": [
                         {
                             "as": "patient_count",
                             "field": (
@@ -1347,14 +1345,17 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "project_id": project_id,
                 "refresh": True,
                 "name": "Mutations by genotype",
-                "version": 1,
-                "analysis": {
+                "version": 2,
+                "query": {
+                    "kind": "summary",
                     "grain": "variant",
-                    "values": [
+                    "group_by": [
                         {
                             "as": "genotype",
                             "field": f"{CBIOPORTAL_MUTATIONS_MAF}/genotype",
-                        },
+                        }
+                    ],
+                    "aggregations": [
                         {
                             "as": "variant_count",
                             "field": f"{CBIOPORTAL_MUTATIONS_MAF}/genotype",
@@ -1375,10 +1376,11 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "refresh": True,
                 "name": "Expression by feature",
                 **{
-                    "version": 1,
-                    "analysis": {
+                    "version": 2,
+                    "query": {
+                        "kind": "rows",
                         "grain": "feature",
-                        "values": [
+                        "columns": [
                             {
                                 "as": "expression",
                                 "field": (
@@ -1398,18 +1400,15 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
                 "project_id": project_id,
                 "refresh": False,
                 **{
-                    "version": 1,
-                    "analysis": {
-                        "grain": "feature",
-                        "values": [
-                            {
-                                "as": "expression",
-                                "field": (
-                                    f"{CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS}/"
-                                    "expression"
-                                ),
-                            }
-                        ],
+                    "version": 2,
+                    "query": {
+                        "kind": "distribution",
+                        "value": {
+                            "as": "expression",
+                            "field": (
+                                f"{CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS}/expression"
+                            ),
+                        },
                     },
                     "view": {"kind": "histogram"},
                 },
@@ -1443,30 +1442,18 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
     )
     expression_contract = contracts[CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS].json()
     assert expression_contract["name"] == "cBioPortal mRNA expression"
-    assert expression_contract["fields"] == [
-        {
-            "field_id": "expression",
-            "field_role": "measure",
-            "entity_scope": "feature",
-            "display_name": "Expression",
-            "value_type": "numeric",
-            "unit": None,
-            "direction": None,
-            "description": "Continuous mRNA expression measurement for a gene.",
-            "priority": None,
-            "primary_table": "feature_value_numeric",
-            "physical_tables": {"tables": ["feature_value_numeric"]},
-            "query_ref": {
-                "table": "feature_value_numeric",
-                "value_column": "value",
-            },
-            "summary": {},
-            "metadata_json": {},
-        }
-    ]
+    assert len(expression_contract["fields"]) == 1
+    expression_field = expression_contract["fields"][0]
+    assert expression_field["field"] == (
+        f"{CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS}/expression"
+    )
+    assert expression_field["purpose"] == "value"
+    assert expression_field["scalar_type"] == "numeric"
+    assert "primary_table" not in expression_field
+    assert "query_ref" not in expression_field
     assert result.status_code == 200
     body = result.json()["result"]
-    assert body["columns"] == ["subject_id", "sex", "patient_count"]
+    assert body["columns"] == ["sex", "patient_count"]
     assert {row["sex"] for row in body["rows"]} == {"Female", "Male"}
     pie_series = body["echarts_options"]["series"][0]
     assert "itemStyle" not in pie_series
@@ -1477,11 +1464,7 @@ def test_cbioportal_contract_browser_fields_and_categorical_pie_execution(
     assert len(set(slice_colors)) == 2
     assert genotype_bar.status_code == 200
     genotype_body = genotype_bar.json()["result"]
-    assert genotype_body["columns"] == [
-        "variant_id",
-        "genotype",
-        "variant_count",
-    ]
+    assert genotype_body["columns"] == ["genotype", "variant_count"]
     assert genotype_body["rows"][0]["genotype"] == "SOMATIC"
     assert genotype_body["rows"][0]["variant_count"] == 1
     assert expression_table.status_code == 200
@@ -1537,11 +1520,12 @@ def test_insight_and_report_round_trip_execute_and_cache(
     assert created_run.status_code == 201
 
     insight_config = {
-        "version": 1,
-        "analysis": {
+        "version": 2,
+        "query": {
+            "kind": "summary",
             "grain": "run",
-            "values": [
-                {"as": "run_kind", "field": "metadata/run/run_kind"},
+            "group_by": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+            "aggregations": [
                 {
                     "as": "run_count",
                     "field": "metadata/run/run_kind",
@@ -1551,12 +1535,23 @@ def test_insight_and_report_round_trip_execute_and_cache(
         },
         "view": {"kind": "bar", "category": "run_kind"},
     }
+    preview = client.post(
+        "/api/v1/insights/execute",
+        json={
+            "project_id": project_id,
+            "refresh": True,
+            "name": "Runs by kind",
+            **insight_config,
+        },
+    )
+    assert preview.status_code == 200, preview.text
     created_insight = client.post(
         "/api/v1/insights",
         json={
             "insight_id": "runs-by-kind",
             "project_id": project_id,
             "name": "Runs by kind",
+            "preview_fingerprint": preview.json()["result"]["preview_fingerprint"],
             **insight_config,
         },
     )
@@ -1580,7 +1575,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
     fetched_insight_by_slug = client.get(f"/api/v1/insights/{insight_slug}")
     assert fetched_insight_by_slug.status_code == 200
     assert fetched_insight_by_slug.json()["insight_id"] == "runs-by-kind"
-    assert fetched_insight_by_slug.json()["analysis"]["grain"] == "run"
+    assert fetched_insight_by_slug.json()["query"]["grain"] == "run"
 
     insight_rows = client.get(
         "/api/v1/database/metadata/tables/insights/rows",
@@ -1607,9 +1602,26 @@ def test_insight_and_report_round_trip_execute_and_cache(
     )
     assert revision_rows.json()["total"] == 0
 
+    table_preview = client.post(
+        "/api/v1/insights/execute",
+        json={
+            "project_id": project_id,
+            "refresh": True,
+            "name": "Runs by kind",
+            **insight_config,
+            "view": {"kind": "table"},
+        },
+    )
+    assert table_preview.status_code == 200, table_preview.text
     analytical_update = client.patch(
         "/api/v1/insights/runs-by-kind",
-        json={"version": 1, "view": {"kind": "table"}},
+        json={
+            "version": 2,
+            "view": {"kind": "table"},
+            "preview_fingerprint": table_preview.json()["result"][
+                "preview_fingerprint"
+            ],
+        },
     )
     assert analytical_update.status_code == 200
     revision_rows = client.get(
@@ -1645,7 +1657,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
         "/api/v1/reports",
         json={
             "project_id": project_id,
-            "version": 1,
+            "version": 2,
             "insights": report_insights,
         },
     )
@@ -1657,7 +1669,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
             "report_id": "client-owned-id",
             "project_id": project_id,
             "name": "Invalid report identity",
-            "version": 1,
+            "version": 2,
             "insights": report_insights,
         },
     )
@@ -1668,7 +1680,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
         json={
             "project_id": project_id,
             "name": "Duplicate insight report",
-            "version": 1,
+            "version": 2,
             "insights": [report_insights[0], report_insights[0]],
         },
     )
@@ -1680,13 +1692,13 @@ def test_insight_and_report_round_trip_execute_and_cache(
         json={
             "project_id": project_id,
             "name": "Project overview",
-            "version": 1,
+            "version": 2,
             "limit": 1,
             "random": True,
             "insights": report_insights,
         },
     )
-    assert created_report.status_code == 201
+    assert created_report.status_code == 201, created_report.text
     assert "config" not in created_report.json()
     assert created_report.json()["insights"][0]["id"] == "runs-by-kind"
     report_id = created_report.json()["report_id"]
@@ -1729,8 +1741,8 @@ def test_insight_and_report_round_trip_execute_and_cache(
     assert report_insight["layout"] == {"x": 0, "y": 0, "width": 6, "height": 4}
     assert "kind" not in report_insight["result"]
     assert "insight_id" not in report_insight["result"]
-    assert report_insight["result"]["analysis"]["limit"] == 2
-    assert report_insight["result"]["analysis"]["random"] is False
+    assert report_insight["result"]["query"]["limit"] == 2
+    assert "sampling" not in report_insight["result"]["query"]
 
     cached_report_result = client.post(
         f"/api/v1/reports/{report_slug}/execute",
@@ -1792,7 +1804,7 @@ def test_insight_and_report_round_trip_execute_and_cache(
     duplicate_insight_id = duplicated_insight.json()["insight_id"]
     assert duplicate_insight_id != "runs-by-kind"
     assert duplicated_insight.json()["name"] == "Runs by kind (copy)"
-    assert duplicated_insight.json()["analysis"] == analytical_update.json()["analysis"]
+    assert duplicated_insight.json()["query"] == analytical_update.json()["query"]
 
     duplicated_report = client.post(
         f"/api/v1/reports/{report_slug}/duplicate",
@@ -1844,9 +1856,18 @@ def test_insight_and_report_round_trip_execute_and_cache(
 def test_histogram_insight_compiles_numeric_bins() -> None:
     result = compile_insight_result(
         config={
-            "visualization": "histogram",
-            "query": {"y": "value", "bins": 2},
-            "display": {"colors": {"value": "#7c3aed"}},
+            "version": 2,
+            "name": "Value distribution",
+            "query": {
+                "kind": "distribution",
+                "value": {"field": "metadata/file/size_bytes", "as": "value"},
+                "bins": 2,
+            },
+            "view": {
+                "kind": "histogram",
+                "bins": 2,
+                "colors": {"value": "#7c3aed"},
+            },
         },
         columns=["value"],
         rows=[
@@ -1878,29 +1899,19 @@ def test_histogram_insight_compiles_numeric_bins() -> None:
 
 
 def test_histogram_insight_compiles_multiple_numeric_series() -> None:
-    result = compile_insight_result(
-        config={
-            "visualization": "histogram",
-            "query": {"fields": ["age", "tmb"], "bins": 2},
-            "display": {"colors": {"age": "#38bdf8", "tmb": "#7c3aed"}},
-        },
-        columns=["sample_id", "age", "tmb"],
-        rows=[
-            {"sample_id": "S1", "age": 30, "tmb": 1},
-            {"sample_id": "S2", "age": 40, "tmb": 2},
-            {"sample_id": "S3", "age": 50, "tmb": 3},
-            {"sample_id": "S4", "age": 60, "tmb": 4},
-        ],
-        insight_id="two-distributions",
-        computed_at=datetime.now(UTC),
-        cached=False,
-        name="Two distributions",
+    invalid = validate_and_explain_config(
+        {
+            "version": 2,
+            "name": "Two distributions",
+            "query": {
+                "kind": "distribution",
+                "value": {"field": "metadata/file/size_bytes", "as": "age"},
+                "values": [{"field": "metadata/file/size_bytes", "as": "tmb"}],
+            },
+            "view": {"kind": "histogram"},
+        }
     )
-
-    series = result["echarts_options"]["series"]
-    assert [item["name"] for item in series] == ["age", "tmb"]
-    assert [item["itemStyle"]["color"] for item in series] == ["#38bdf8", "#7c3aed"]
-    assert [item["itemStyle"]["opacity"] for item in series] == [0.48, 0.48]
+    assert invalid["valid"] is False
 
 
 def test_insight_capabilities_and_validator_explain_new_config(
@@ -1912,13 +1923,13 @@ def test_insight_capabilities_and_validator_explain_new_config(
         "/api/v1/insights/validate",
         json={
             "project_id": project_id,
-            "version": 1,
-            "analysis": {
-                "grain": "file",
-                "values": [
-                    {"as": "size_x", "field": "metadata/file/size_bytes"},
-                    {"as": "size_y", "field": "metadata/file/size_bytes"},
-                ],
+            "version": 2,
+            "name": "File size relationship",
+            "query": {
+                "kind": "relationship",
+                "x": {"as": "size_x", "field": "metadata/file/size_bytes"},
+                "y": {"as": "size_y", "field": "metadata/file/size_bytes"},
+                "match_by": "file",
             },
             "view": {"kind": "scatter", "x": "size_x", "y": "size_y"},
         },
@@ -1938,7 +1949,7 @@ def test_insight_capabilities_and_validator_explain_new_config(
         "sample",
         "variant",
     }
-    assert body["version"] == 1
+    assert body["version"] == 2
     assert {template["id"] for template in body["templates"]} >= {
         "build_table",
         "compare_two_fields",
@@ -1960,17 +1971,22 @@ def test_insight_capabilities_and_validator_explain_new_config(
     assert validation_body["valid"] is True
     assert "normalized_config" not in validation_body
     assert validation_body["normalized_definition"]["view"]["kind"] == "scatter"
-    assert "values: size_x, size_y" in validation_body["explanation"]
-    assert "matched by file" in validation_body["explanation"]
+    assert "matching observations by file" in validation_body["explanation"]
 
 
 def test_scatter_requires_two_numeric_measures_and_visible_linker() -> None:
-    with pytest.raises(ValueError, match="visible Matched by"):
+    with pytest.raises(ValueError, match="validation error"):
         compile_insight_result(
             config={
-                "visualization": "scatter",
-                "linker": {"kind": "auto"},
-                "query": {"x": "x", "y": "y"},
+                "version": 2,
+                "name": "Invalid relationship",
+                "query": {
+                    "kind": "relationship",
+                    "x": {"field": "metadata/file/size_bytes", "as": "x"},
+                    "y": {"field": "metadata/file/size_bytes", "as": "y"},
+                    "match_by": "auto",
+                },
+                "view": {"kind": "scatter"},
             },
             columns=["sample_id", "x", "y"],
             rows=[{"sample_id": "S1", "x": 1, "y": 2}],
@@ -1982,9 +1998,15 @@ def test_scatter_requires_two_numeric_measures_and_visible_linker() -> None:
     with pytest.raises(ValueError, match="exactly two numeric"):
         compile_insight_result(
             config={
-                "visualization": "scatter",
-                "linker": {"kind": "sample"},
-                "query": {"x": "x", "y": "y"},
+                "version": 2,
+                "name": "Relationship",
+                "query": {
+                    "kind": "relationship",
+                    "x": {"field": "metadata/file/size_bytes", "as": "x"},
+                    "y": {"field": "metadata/file/size_bytes", "as": "y"},
+                    "match_by": "sample",
+                },
+                "view": {"kind": "scatter"},
             },
             columns=["sample_id", "x", "y"],
             rows=[{"sample_id": "S1", "x": 1, "y": "high"}],
@@ -1995,8 +2017,26 @@ def test_scatter_requires_two_numeric_measures_and_visible_linker() -> None:
 
 
 def test_line_area_and_stacked_bar_series_rules() -> None:
+    def chart_config(kind: str, fields: list[str]) -> dict[str, object]:
+        return {
+            "version": 2,
+            "name": f"{kind} chart",
+            "query": {
+                "kind": "rows",
+                "grain": "sample",
+                "columns": [
+                    {
+                        "field": "metadata/file/size_bytes",
+                        "as": field,
+                    }
+                    for field in fields
+                ],
+            },
+            "view": {"kind": kind},
+        }
+
     line = compile_insight_result(
-        config={"visualization": "line"},
+        config=chart_config("line", ["rna", "protein"]),
         columns=["sample_id", "rna", "protein"],
         rows=[
             {"sample_id": "S1", "rna": 1.2, "protein": 3.4},
@@ -2012,7 +2052,7 @@ def test_line_area_and_stacked_bar_series_rules() -> None:
     ]
 
     area = compile_insight_result(
-        config={"visualization": "area"},
+        config=chart_config("area", ["rna"]),
         columns=["sample_id", "rna"],
         rows=[{"sample_id": "S1", "rna": 1.2}],
         insight_id=None,
@@ -2022,10 +2062,7 @@ def test_line_area_and_stacked_bar_series_rules() -> None:
     assert area["echarts_options"]["series"][0]["areaStyle"] == {}
 
     stacked = compile_insight_result(
-        config={
-            "visualization": "stacked_bar",
-            "_runtime": {"series_aliases": ["kras", "kras_2"]},
-        },
+        config=chart_config("stacked_bar", ["kras", "kras_2"]),
         columns=["sample_id", "kras", "kras_2"],
         rows=[{"sample_id": "S1", "kras": 1.0, "kras_2": 2.0}],
         insight_id=None,
@@ -2044,7 +2081,18 @@ def test_line_area_and_stacked_bar_series_rules() -> None:
 def test_invalid_non_numeric_chart_errors_and_pie_validation() -> None:
     with pytest.raises(ValueError, match="line charts require numeric fields"):
         compile_insight_result(
-            config={"visualization": "line"},
+            config={
+                "version": 2,
+                "name": "Status line",
+                "query": {
+                    "kind": "rows",
+                    "grain": "sample",
+                    "columns": [
+                        {"field": "metadata/sample/sample_name", "as": "status"}
+                    ],
+                },
+                "view": {"kind": "line"},
+            },
             columns=["sample_id", "status"],
             rows=[{"sample_id": "S1", "status": "pass"}],
             insight_id=None,
@@ -2054,10 +2102,12 @@ def test_invalid_non_numeric_chart_errors_and_pie_validation() -> None:
 
     invalid = validate_and_explain_config(
         {
-            "version": 1,
-            "analysis": {
+            "version": 2,
+            "name": "Invalid pie",
+            "query": {
+                "kind": "rows",
                 "grain": "sample",
-                "values": [
+                "columns": [
                     {"as": "a", "field": "metadata/sample/sample_name"},
                     {"as": "b", "field": "metadata/sample/sample_name"},
                 ],
@@ -2072,10 +2122,12 @@ def test_invalid_non_numeric_chart_errors_and_pie_validation() -> None:
 def test_public_chart_series_follow_analysis_order_and_hidden_values() -> None:
     result = compile_insight_result(
         config={
-            "version": 1,
-            "analysis": {
+            "version": 2,
+            "name": "Visible values",
+            "query": {
+                "kind": "rows",
                 "grain": "sample",
-                "values": [
+                "columns": [
                     {"as": "first", "field": "metadata/sample/sample_name"},
                     {"as": "middle", "field": "metadata/sample/subject_id"},
                     {"as": "last", "field": "metadata/sample/sample_name"},
@@ -2094,7 +2146,7 @@ def test_public_chart_series_follow_analysis_order_and_hidden_values() -> None:
         "first",
         "last",
     ]
-    assert result["analysis"]["values"][1]["as"] == "middle"
+    assert result["query"]["columns"][1]["as"] == "middle"
     assert result["view"]["hidden_values"] == ["middle"]
 
 
@@ -2116,13 +2168,15 @@ def test_final_result_row_selection_and_export(client: TestClient) -> None:
         json={
             "project_id": project_id,
             "refresh": True,
-            "version": 1,
-            "analysis": {
+            "version": 2,
+            "name": "Limited runs",
+            "query": {
+                "kind": "rows",
                 "grain": "run",
-                "values": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+                "columns": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+                "limit": 3,
             },
             "view": {"kind": "table"},
-            "limit": 3,
         },
     )
     random_rows = client.post(
@@ -2130,14 +2184,16 @@ def test_final_result_row_selection_and_export(client: TestClient) -> None:
         json={
             "project_id": project_id,
             "refresh": True,
-            "version": 1,
-            "analysis": {
+            "version": 2,
+            "name": "Sampled runs",
+            "query": {
+                "kind": "rows",
                 "grain": "run",
-                "values": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+                "columns": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+                "limit": 2,
+                "sampling": {"size": 2, "seed": "test"},
             },
             "view": {"kind": "table"},
-            "limit": 2,
-            "random": True,
         },
     )
     exported = client.post(
@@ -2145,10 +2201,12 @@ def test_final_result_row_selection_and_export(client: TestClient) -> None:
         json={
             "project_id": project_id,
             "refresh": True,
-            "version": 1,
-            "analysis": {
+            "version": 2,
+            "name": "Exported runs",
+            "query": {
+                "kind": "rows",
                 "grain": "run",
-                "values": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
+                "columns": [{"as": "run_kind", "field": "metadata/run/run_kind"}],
             },
             "view": {"kind": "table"},
             "export": True,

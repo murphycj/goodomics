@@ -130,14 +130,12 @@ def test_parse_cbioportal_study_derives_metadata_objects(tmp_path: Path) -> None
     }
     assert {sample.sample_id for sample in parsed.samples} == {"S1", "S2"}
     assert {subject.subject_id for subject in parsed.subjects} == {"S1", "S2"}
-    assert {contract.data_type for contract in parsed.data_contracts} >= {
-        "entity_attributes",
-        "feature_matrix",
-        "feature_calls",
-        "small_variants",
-        "copy_number_segments",
-        "structural_variants",
-        "result_payload",
+    assert {contract.data_shape_id for contract in parsed.data_contracts} >= {
+        "entity",
+        "feature",
+        "variant",
+        "region",
+        "structured",
     }
     contract_ids = {contract.data_contract_id for contract in parsed.data_contracts}
     assert CBIOPORTAL_MRNA_EXPRESSION_CONTINUOUS in contract_ids
@@ -145,7 +143,9 @@ def test_parse_cbioportal_study_derives_metadata_objects(tmp_path: Path) -> None
     assert CBIOPORTAL_COPY_NUMBER_SEGMENTS in contract_ids
     assert CBIOPORTAL_MUTATIONS_MAF in contract_ids
     assert any(
-        field.field_role == "attribute" and field.field_id == "sample:tmb"
+        field.purpose == "annotation"
+        and field.scalar_type == "numeric"
+        and field.field_id == "sample:tmb"
         for field in parsed.data_contract_fields
     )
     expression_field = next(
@@ -155,8 +155,8 @@ def test_parse_cbioportal_study_derives_metadata_objects(tmp_path: Path) -> None
         and field.field_id == "expression"
     )
     assert expression_field.display_name == "Expression"
-    assert expression_field.primary_table == "feature_value_numeric"
-    assert expression_field.query_ref_json["value_column"] == "value"
+    assert expression_field.purpose == "value"
+    assert expression_field.scalar_type == "numeric"
     assert CBIOPORTAL_STRUCTURAL_VARIANTS in contract_ids
     assert CBIOPORTAL_GENERIC_ASSAY_LIMIT_VALUE in contract_ids
     assert CBIOPORTAL_GENE_PANEL_MATRIX in contract_ids

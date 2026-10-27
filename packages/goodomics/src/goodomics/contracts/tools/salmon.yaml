@@ -22,13 +22,6 @@ contracts:
         display_name: Percent mapped
         value_type: numeric
         unit: percent
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: general_stats.salmon_percent_mapped
-          value_column: value_numeric
         metadata_json:
           producer_tool: salmon
           producer_module: general_stats
@@ -38,13 +31,6 @@ contracts:
         display_name: Percent mapped
         value_type: numeric
         unit: percent
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: multiqc_salmon.percent_mapped
-          value_column: value_numeric
         metadata_json:
           producer_tool: salmon
           producer_module: multiqc_salmon
@@ -53,13 +39,6 @@ contracts:
         entity_scope: sample
         display_name: Number processed
         value_type: numeric
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: multiqc_salmon.num_processed
-          value_column: value_numeric
         metadata_json:
           producer_tool: salmon
           producer_module: multiqc_salmon
@@ -68,13 +47,6 @@ contracts:
         entity_scope: sample
         display_name: Number mapped
         value_type: numeric
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: multiqc_salmon.num_mapped
-          value_column: value_numeric
         metadata_json:
           producer_tool: salmon
           producer_module: multiqc_salmon
@@ -83,13 +55,6 @@ contracts:
         entity_scope: sample
         display_name: Salmon version
         value_type: string
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: multiqc_salmon.salmon_version
-          value_column: value_string
         metadata_json:
           producer_tool: salmon
           producer_module: multiqc_salmon

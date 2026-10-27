@@ -2,14 +2,14 @@ import type { AnalyticsPayload, DataContractField } from "../api";
 import { nonEmptyStringValue, recordValue } from "./valueUtils";
 
 export function fieldTypeLabel(field: DataContractField) {
-  if (field.field_role !== "payload") {
-    return field.value_type;
+  if (field.scalar_type !== "json") {
+    return field.scalar_type;
   }
   return resultShapeLabel(field.metadata_json.payload_kind);
 }
 
 export function fieldShapeSummary(field: DataContractField) {
-  if (field.field_role !== "payload") return null;
+  if (field.scalar_type !== "json") return null;
   const schema = recordValue(field.metadata_json.schema_json);
   if (!schema) return null;
   const x = recordValue(schema.x);

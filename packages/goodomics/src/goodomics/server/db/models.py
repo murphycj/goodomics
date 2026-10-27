@@ -93,6 +93,7 @@ class InsightResultCacheRecord(SQLModel, table=True):
     project_id: str | None = Field(default=None, max_length=255, index=True)
     insight_id: str | None = Field(default=None, max_length=255, index=True)
     spec_hash: str = Field(max_length=64, index=True)
+    query_fingerprint: str = Field(max_length=64, index=True)
     source_fingerprint: str = Field(max_length=64, index=True)
     result: dict[str, Any] = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime

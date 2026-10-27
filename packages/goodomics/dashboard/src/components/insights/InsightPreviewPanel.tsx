@@ -1,4 +1,5 @@
 import { Card, CardContent } from "../ui";
+import type { ReactNode } from "react";
 import { InsightPreview } from "../reports/InsightPreview";
 import {
   numberValue,
@@ -12,6 +13,7 @@ export function InsightPreviewPanel({
   result,
   setupWarning,
   tableActions,
+  toolbar,
 }: {
   error: Error | null;
   config: Record<string, unknown>;
@@ -22,10 +24,17 @@ export function InsightPreviewPanel({
     emptyLabel?: string;
     onAddColumn: () => void;
   };
+  toolbar?: ReactNode;
 }) {
   return (
     <Card className="mt-0 h-full min-h-0 overflow-hidden p-0">
       <CardContent className="flex h-full min-h-0 flex-col">
+        {toolbar ? (
+          <div className="flex shrink-0 items-center justify-between border-b border-[#dce3eb] bg-[#fbfcfd] px-3 py-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-[#657082]">Preview</span>
+            {toolbar}
+          </div>
+        ) : null}
         <div className="min-h-0 flex-1 overflow-hidden p-1.5">
           {error ? (
             <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] p-3 text-sm text-[#b42318]">
@@ -53,19 +62,19 @@ function PreviewAuditBar({
   config: Record<string, unknown>;
   result: Record<string, unknown> | null | undefined;
 }) {
-  const analysis = recordValue(result?.analysis) ?? recordValue(config.analysis);
+  const query = recordValue(result?.query) ?? recordValue(config.query);
   const diagnostics = recordValue(result?.diagnostics);
   const resultDiagnostics = Array.isArray(result?.result_selection_diagnostics)
     ? result.result_selection_diagnostics.map(recordValue).filter(Boolean)
     : [];
-  const filters = Array.isArray(analysis?.filters)
-    ? analysis.filters
+  const filters = Array.isArray(query?.filters)
+    ? query.filters
       : [];
   const chips = [
     sampleSelectionLabel(filters),
-    linkerLabel(analysis),
+    linkerLabel(query),
     filters.length ? `${filters.length} filters` : "No filters",
-    resultRowsLabel(analysis, result),
+    resultRowsLabel(query, result),
     diagnosticsLabel(diagnostics),
     ...resultDiagnostics.flatMap((item) => resultDiagnosticLabels(item)),
   ].filter(Boolean);
@@ -137,20 +146,20 @@ function stringArrayValue(value: unknown) {
     : [];
 }
 
-function linkerLabel(analysis: Record<string, unknown> | null) {
-  const kind = stringValue(analysis?.match_by);
+function linkerLabel(query: Record<string, unknown> | null) {
+  const kind = stringValue(query?.match_by) ?? stringValue(query?.grain);
   if (!kind || kind === "none") return null;
   return `Matched by ${kind.replace("_", " ")}`;
 }
 
 function resultRowsLabel(
-  analysis: Record<string, unknown> | null,
+  query: Record<string, unknown> | null,
   result: Record<string, unknown> | null | undefined,
 ) {
-  const limit = numberValue(analysis?.limit);
+  const limit = numberValue(query?.limit);
   const returned = numberValue(result?.row_count);
   const total = numberValue(result?.total_row_count);
-  const prefix = analysis?.random === true ? "Random rows" : "Rows";
+  const prefix = recordValue(query?.sampling) ? "Sampled rows" : "Rows";
   if (returned !== null && total !== null) return `${prefix}: ${returned} of ${total}`;
   return limit === null ? null : `${prefix}: up to ${limit}`;
 }

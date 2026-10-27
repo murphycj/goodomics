@@ -22,13 +22,6 @@ contracts:
         display_name: Percent GC
         value_type: numeric
         unit: percent
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: general_stats.fastqc_raw_percent_gc
-          value_column: value_numeric
         metadata_json:
           producer_tool: fastqc
           producer_module: general_stats
@@ -38,13 +31,6 @@ contracts:
         entity_scope: sample
         display_name: Total sequences
         value_type: numeric
-        primary_table: sample_metrics
-        physical_tables: [sample_metrics]
-        query_ref_json:
-          table: sample_metrics
-          field_column: field_id
-          field_value: general_stats.fastqc_raw_total_sequences
-          value_column: value_numeric
         metadata_json:
           producer_tool: fastqc
           producer_module: general_stats

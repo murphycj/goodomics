@@ -1,60 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { zSavedInsightCreate } from "../api/generated/zod.gen";
-import { reconcileView } from "./insightBuilder";
-import type { AnalysisValue, InsightView } from "./insightSchemas";
+import { compatibleViews, createQuery, emptyInsightDraft, switchQueryFamily } from "./insightBuilder";
 
-const values: AnalysisValue[] = [
-  { field: "metadata/subject/subject_id", aggregation: "raw", filters: [] },
-  { field: "metadata/subject/cohort", aggregation: "raw", filters: [] },
-  { field: "metadata/subject/status", aggregation: "raw", filters: [] },
-];
-
-const tableView: InsightView = {
-  kind: "table",
-  hidden_values: ["metadata/subject/cohort"],
-  sorting: [],
-  null_format: "—",
-  numeric_format: {},
-};
-
-describe("table builder regressions", () => {
-  it("validates a saved three-value subject-grain table", () => {
-    expect(() => zSavedInsightCreate.parse({
-      project_id: "project-1",
-      name: "Subjects",
-      version: 1,
-      analysis: { grain: "subject", values },
-      view: tableView,
-    })).not.toThrow();
+describe("version 2 insight builder", () => {
+  it("switches query families without retaining incompatible properties", () => {
+    const draft = switchQueryFamily(emptyInsightDraft(), "relationship");
+    expect(draft.version).toBe(2);
+    expect(draft.query.kind).toBe("relationship");
+    expect(draft.view.kind).toBe("scatter");
+    expect("columns" in draft.query).toBe(false);
   });
 
-  it("can hide and re-enable a table field without invalidating the draft", () => {
-    const hidden = reconcileView(tableView, values, "subject");
-    expect(hidden.hidden_values).toEqual(["metadata/subject/cohort"]);
-
-    const visible = reconcileView(
-      { ...hidden, hidden_values: [] },
-      values,
-      "subject",
-    );
-    expect(visible.hidden_values).toEqual([]);
-    expect(() => zSavedInsightCreate.parse({
-      name: "Subjects",
-      version: 1,
-      analysis: { grain: "subject", values },
-      view: visible,
-    })).not.toThrow();
+  it("only returns compatible typed-result views", () => {
+    expect(compatibleViews("survival")).toEqual(["survival", "table"]);
+    expect(compatibleViews("matrix")).toEqual(["heatmap", "table"]);
   });
 
-  it("drops removed hidden references and keeps restored fields visible", () => {
-    const withoutCohort = reconcileView(
-      tableView,
-      [values[0], values[2]],
-      "subject",
-    );
-    expect(withoutCohort.hidden_values).toEqual([]);
+  it("starts common table and summary analyses at the sample grain", () => {
+    expect(createQuery("rows")).toMatchObject({ grain: "sample", columns: [] });
+    expect(createQuery("summary")).toMatchObject({ grain: "sample" });
+  });
 
-    const restored = reconcileView(withoutCohort, values, "subject");
-    expect(restored.hidden_values).toEqual([]);
+  it("starts a new draft with the selected analysis family and its default view", () => {
+    const draft = emptyInsightDraft("relationship");
+    expect(draft.query.kind).toBe("relationship");
+    expect(draft.view.kind).toBe("scatter");
   });
 });

@@ -52,13 +52,16 @@ from goodomics.projects import (
 )
 from goodomics.report.html import render_report, render_report_result
 from goodomics.schemas.base import BaseModel
-from goodomics.schemas.field_references import parse_field_reference
+from goodomics.schemas.field_references import (
+    contract_field_reference,
+    parse_field_reference,
+)
 from goodomics.schemas.insights import (
     RESULT_LIMIT_MAX,
-    AnalysisConfig,
     GridLayout,
     InsightFilter,
     InsightView,
+    QueryNode,
     RefreshPolicy,
     ReportInsight,
     ReportInsightLayout,
@@ -70,8 +73,17 @@ from goodomics.schemas.insights import (
     SavedReportPatch,
     SavedReportRead,
     SavedReportSummary,
+    normalize_insight_definition,
+    referenced_fields,
 )
-from goodomics.schemas.models import Run, RunSample, Sample
+from goodomics.schemas.models import (
+    DataContract,
+    DataContractField,
+    Run,
+    RunSample,
+    Sample,
+)
+from goodomics.semantic import BUILT_IN_ADAPTERS
 from goodomics.server.ai import (
     AIProviderNotConfigured,
     ChatMessage,
@@ -106,7 +118,9 @@ from goodomics.server.insights import (
     validate_insight_definition_data,
     validate_report_definition_data,
 )
+from goodomics.server.profiles import ensure_minimal_profile
 from goodomics.server.rate_limits import principal_rate_key
+from goodomics.server.runtime_catalog import RuntimeCatalog
 from goodomics.storage.duckdb import SERIALIZERS_BY_TABLE, DuckDBAnalyticsStore
 from goodomics.storage.sqlalchemy import (
     AnalysisMethodRecord,
@@ -115,6 +129,8 @@ from goodomics.storage.sqlalchemy import (
     DataContractFieldRecord,
     DataContractRecord,
     DataImportRecord,
+    DataShapeRecord,
+    DataShapeVersionRecord,
     FileLinkRecord,
     FileRecord,
     ProjectRecord,
@@ -365,8 +381,8 @@ class InsightExecuteRequest(BaseModel):
     description: str | None = None
     project_id: str | None = None
     refresh: bool = False
-    version: Literal[1] | None = None
-    analysis: AnalysisConfig | None = None
+    version: Literal[2] | None = None
+    query: QueryNode | None = None
     view: InsightView | None = None
     limit: int | None = Field(default=None, ge=1, le=RESULT_LIMIT_MAX)
     random: bool | None = None
@@ -378,7 +394,7 @@ class InsightExecuteRequest(BaseModel):
         return cast(
             dict[str, JsonValue],
             self.model_dump(
-                include={"version", "analysis", "view"},
+                include={"version", "name", "query", "view"},
                 exclude_unset=True,
                 mode="json",
                 by_alias=True,
@@ -398,12 +414,12 @@ class ReportExecuteRequest(BaseModel):
 
 
 class ReportValidationRequest(BaseModel):
-    """Complete project-aware version 1 report definition to validate."""
+    """Complete project-aware version 2 report definition to validate."""
 
     model_config = ConfigDict(extra="forbid")
 
     project_id: str | None = None
-    version: Literal[1]
+    version: Literal[2]
     name: NonBlankName
     description: str | None = None
     filters: list[InsightFilter] = Field(default_factory=list)
@@ -440,7 +456,7 @@ class ReportValidationRead(BaseModel):
     valid: bool
     messages: list[dict[str, JsonValue]]
     normalized_definition: dict[str, JsonValue]
-    capabilities_version: int = 1
+    capabilities_version: int = 2
 
 
 class InsightResultRead(BaseModel):
@@ -480,11 +496,11 @@ class InsightValidationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = None
+    name: NonBlankName
     description: str | None = None
     project_id: str | None = None
-    version: Literal[1]
-    analysis: AnalysisConfig
+    version: Literal[2]
+    query: QueryNode
     view: InsightView
 
     def executable_fields(self) -> dict[str, JsonValue]:
@@ -493,7 +509,7 @@ class InsightValidationRequest(BaseModel):
         return cast(
             dict[str, JsonValue],
             self.model_dump(
-                include={"version", "analysis", "view"},
+                include={"version", "name", "query", "view"},
                 exclude_none=True,
                 mode="json",
                 by_alias=True,
@@ -508,7 +524,7 @@ class InsightValidationRead(BaseModel):
     messages: list[dict[str, JsonValue]]
     normalized_definition: dict[str, JsonValue]
     explanation: str
-    capabilities_version: int = 1
+    capabilities_version: int = 2
 
 
 class InsightResultRowsRead(BaseModel):
@@ -522,13 +538,86 @@ class InsightResultRowsRead(BaseModel):
 class InsightCapabilitiesRead(BaseModel):
     """Server-owned structural capabilities for insight builder controls."""
 
-    version: Literal[1]
+    version: Literal[2]
     analysis_grains: list[dict[str, JsonValue]]
     templates: list[dict[str, JsonValue]]
     charts: list[dict[str, JsonValue]]
+    query_families: list[dict[str, JsonValue]]
     metadata_fields: list[dict[str, JsonValue]]
     aggregations_by_type: dict[str, list[str]]
     result_rows: InsightResultRowsRead
+
+
+class ShapeDraftCreate(BaseModel):
+    """Project-scoped draft shape creation request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    data_shape_id: str
+    name: NonBlankName
+    description: str | None = None
+    definition: dict[str, JsonValue]
+    adapter_key: str
+
+
+class ShapeDraftPatch(BaseModel):
+    """Mutable fields accepted while a shape version remains a draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    definition: dict[str, JsonValue] | None = None
+    adapter_key: str | None = None
+    representative_rows: list[dict[str, JsonValue]] = Field(default_factory=list)
+
+
+class ContractFieldCreate(BaseModel):
+    """Semantic field definition nested in a contract creation request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_id: str
+    display_name: NonBlankName
+    purpose: Literal["key", "value", "coordinate", "annotation"] = "value"
+    scalar_type: Literal[
+        "numeric",
+        "integer",
+        "string",
+        "boolean",
+        "categorical",
+        "date",
+        "datetime",
+        "json",
+    ]
+    semantic_type: str | None = None
+    unit: str | None = None
+    direction: str | None = None
+    description: str | None = None
+    priority: int | None = Field(default=None, ge=0)
+    domain_tags: list[str] = Field(default_factory=list)
+
+
+class DataContractCreate(BaseModel):
+    """Create a project dataset pinned to a published semantic shape."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    data_contract_id: str
+    name: NonBlankName
+    description: str | None = None
+    data_shape_id: str
+    data_shape_version: int = Field(ge=1)
+    bindings: dict[str, JsonValue] = Field(default_factory=dict)
+    search_tags: list[str] = Field(default_factory=list)
+    metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
+    fields: list[ContractFieldCreate] = Field(default_factory=list)
+
+
+class ManagedRecordsReplace(BaseModel):
+    """Complete replacement payload for one application-managed record dataset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[dict[str, JsonValue]]
 
 
 class SavedResourceDuplicateRequest(BaseModel):
@@ -684,38 +773,31 @@ class DatabaseTablePageRead(BaseModel):
 
 
 class DataContractFieldRead(BaseModel):
-    """Queryable field exposed by a data contract."""
+    """Semantic field exposed by a data contract."""
 
+    field: str
     field_id: str
-    field_role: str
-    entity_scope: str | None = None
     display_name: str
-    value_type: str
+    purpose: str
+    scalar_type: str
+    semantic_type: str | None = None
     unit: str | None = None
     direction: str | None = None
     description: str | None = None
-    priority: str | None = None
-    primary_table: str | None = None
-    physical_tables: dict[str, JsonValue] = Field(default_factory=dict)
-    query_ref: dict[str, JsonValue] = Field(default_factory=dict)
-    summary: dict[str, JsonValue] = Field(default_factory=dict)
+    priority: int | None = None
+    domain_tags: list[str] = Field(default_factory=list)
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class DataContractRead(BaseModel):
-    """Data contract contract plus fields available to insight builders."""
+    """Dataset-level semantics plus fields available to insight builders."""
 
     data_contract_id: str
     name: str
-    data_type: str
+    shape_version: dict[str, JsonValue] = Field(default_factory=dict)
+    bindings: dict[str, JsonValue] = Field(default_factory=dict)
+    search_tags: list[str] = Field(default_factory=list)
     compatible_analysis_type_ids: list[str] = Field(default_factory=list)
-    intrinsic_producer_families: dict[str, JsonValue] = Field(default_factory=dict)
-    entity_grain: str | None = None
-    value_semantics: str | None = None
-    summary: dict[str, JsonValue] = Field(default_factory=dict)
-    last_profiled_at: datetime | None = None
-    source_fingerprint: str | None = None
-    query_modes: dict[str, JsonValue] = Field(default_factory=dict)
     description: str | None = None
     metadata_json: dict[str, JsonValue] = Field(default_factory=dict)
     fields: list[DataContractFieldRead] = Field(default_factory=list)
@@ -1774,12 +1856,14 @@ async def list_data_contracts(
         if project_pk is not None:
             contracts = _prefer_project_contract_rows(contracts, project_pk)
         fields_by_contract = await _fields_by_contract(session, contracts)
+        shape_versions = await _contract_shape_versions(session, contracts)
         compatibility = await _contract_analysis_type_labels(session, contracts)
     return [
         _data_contract_read(
             contract,
             fields_by_contract.get(contract.id, []),
             compatibility.get(contract.id, []),
+            shape_versions.get(contract.id, {}),
         )
         for contract in contracts
     ]
@@ -1819,11 +1903,13 @@ async def get_data_contract(
         if contract is None:
             raise HTTPException(status_code=404, detail="Data contract not found")
         fields_by_contract = await _fields_by_contract(session, [contract])
+        shape_versions = await _contract_shape_versions(session, [contract])
         compatibility = await _contract_analysis_type_labels(session, [contract])
     return _data_contract_read(
         contract,
         fields_by_contract.get(contract.id, []),
         compatibility.get(contract.id, []),
+        shape_versions.get(contract.id, {}),
     )
 
 
@@ -2060,6 +2146,479 @@ async def get_insight_capabilities() -> InsightCapabilitiesRead:
     return InsightCapabilitiesRead.model_validate(insight_capabilities())
 
 
+@router.get("/projects/{project_id}/catalog/datasets")
+async def list_catalog_datasets(
+    project_id: str,
+    request: Request,
+    search: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """List datasets in the request-scoped semantic runtime catalog."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        return await RuntimeCatalog(session, project_id).list_datasets(
+            search=search, limit=limit, offset=offset
+        )
+
+
+@router.get("/projects/{project_id}/catalog/datasets/{data_contract_id:path}")
+async def describe_catalog_dataset(
+    project_id: str, data_contract_id: str, request: Request
+) -> dict[str, Any]:
+    """Describe one catalog dataset without physical storage metadata."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        result = await RuntimeCatalog(session, project_id).describe_dataset(
+            data_contract_id
+        )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Data contract not found")
+    return result
+
+
+@router.get("/projects/{project_id}/catalog/fields")
+async def search_catalog_fields(
+    project_id: str,
+    request: Request,
+    search: str | None = Query(default=None),
+    query_kind: str | None = Query(default=None),
+    scalar_type: Annotated[list[str] | None, Query()] = None,
+    purpose: Annotated[list[str] | None, Query()] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Search canonical fields by semantics and typed-query compatibility."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        return await RuntimeCatalog(session, project_id).search_fields(
+            search=search,
+            scalar_types=scalar_type or [],
+            purposes=purpose or [],
+            query_kind=query_kind,
+            limit=limit,
+            offset=offset,
+        )
+
+
+@router.get("/projects/{project_id}/catalog/joins")
+async def list_catalog_joins(
+    project_id: str,
+    request: Request,
+    data_contract_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """List joins using logical identities rather than physical foreign keys."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        catalog = RuntimeCatalog(session, project_id)
+        return {
+            "joins": await catalog.find_joins(data_contract_id),
+            "source_fingerprint": await catalog.source_fingerprint(),
+        }
+
+
+@router.get("/projects/{project_id}/catalog/query-families")
+async def list_catalog_query_families(
+    project_id: str, request: Request
+) -> dict[str, Any]:
+    """List available query families, views, and provider requirements."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        return await RuntimeCatalog(session, project_id).supported_query_families()
+
+
+@router.get("/projects/{project_id}/catalog/field-profile")
+async def get_catalog_field_profile(
+    project_id: str, request: Request, field: str = Query()
+) -> dict[str, Any]:
+    """Read an optional disposable profile for one canonical field."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        profile = await RuntimeCatalog(session, project_id).field_profile(field)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Field profile not available")
+    return profile
+
+
+@router.get("/projects/{project_id}/catalog/field-values")
+async def list_catalog_field_values(
+    project_id: str,
+    request: Request,
+    field: str = Query(),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    """List bounded categorical values from an optional disposable profile."""
+
+    await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        return await RuntimeCatalog(session, project_id).sampled_values(
+            field, limit=limit
+        )
+
+
+@router.post("/projects/{project_id}/catalog/datasets/{data_contract_id:path}/profile")
+async def profile_catalog_dataset(
+    project_id: str, data_contract_id: str, request: Request
+) -> dict[str, Any]:
+    """Lazily recompute a disposable profile when its source fingerprint changes."""
+
+    project = await _require_project(request, project_id)
+    async with _session_context(request) as session:
+        project_row = (
+            await session.exec(
+                select(ProjectRecord).where(ProjectRecord.project_id == project_id)
+            )
+        ).first()
+        if project_row is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        contract = (
+            await session.exec(
+                select(DataContractRecord).where(
+                    DataContractRecord.project_id == project_row.id,
+                    DataContractRecord.data_contract_id == data_contract_id,
+                )
+            )
+        ).first()
+        if contract is None:
+            raise HTTPException(status_code=404, detail="Data contract not found")
+        await ensure_minimal_profile(
+            session=session,
+            analytics_store=_analytics_store_for_project(request, project.project_id),
+            project=project_row,
+            contract=contract,
+        )
+        return cast(
+            dict[str, Any],
+            await RuntimeCatalog(session, project_id).dataset_profile(data_contract_id),
+        )
+
+
+@router.post("/projects/{project_id}/shapes/drafts", status_code=201)
+async def create_shape_draft(
+    project_id: str, payload: ShapeDraftCreate, request: Request
+) -> dict[str, Any]:
+    """Create the next mutable version of a project-owned data shape."""
+
+    project = await _require_project(request, project_id)
+    await require_project_permission(
+        request, _session(request), project, "database.edit"
+    )
+    try:
+        adapter = BUILT_IN_ADAPTERS.get(payload.adapter_key)
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    errors = adapter.validate_definition(payload.definition)
+    if errors:
+        raise HTTPException(status_code=400, detail=errors)
+    async with _session_context(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        existing = (
+            await session.exec(
+                select(DataShapeRecord).where(
+                    DataShapeRecord.data_shape_id == payload.data_shape_id,
+                    cast(Any, DataShapeRecord.project_id) == project_pk,
+                )
+            )
+        ).first()
+        if existing is None:
+            existing = DataShapeRecord(
+                data_shape_id=payload.data_shape_id,
+                project_id=project_pk,
+                built_in=False,
+                name=payload.name,
+                description=payload.description,
+                created_at=datetime.now(UTC),
+            )
+            session.add(existing)
+            await session.flush()
+        versions = (
+            await session.exec(
+                select(DataShapeVersionRecord).where(
+                    DataShapeVersionRecord.data_shape_id == existing.id
+                )
+            )
+        ).all()
+        if any(version.status == "draft" for version in versions):
+            raise HTTPException(
+                status_code=409, detail="A draft version already exists"
+            )
+        version = max((item.version for item in versions), default=0) + 1
+        draft = DataShapeVersionRecord(
+            data_shape_id=cast(int, existing.id),
+            version=version,
+            status="draft",
+            definition_json=payload.definition,
+            adapter_key=payload.adapter_key,
+            created_at=datetime.now(UTC),
+        )
+        session.add(draft)
+        await session.commit()
+        await session.refresh(draft)
+    return _shape_version_payload(existing, draft)
+
+
+@router.patch("/projects/{project_id}/shapes/{data_shape_id}/versions/{version}")
+async def patch_shape_draft(
+    project_id: str,
+    data_shape_id: str,
+    version: int,
+    payload: ShapeDraftPatch,
+    request: Request,
+) -> dict[str, Any]:
+    """Validate and edit a draft while rejecting published-version mutation."""
+
+    project = await _require_project(request, project_id)
+    await require_project_permission(
+        request, _session(request), project, "database.edit"
+    )
+    async with _session_context(request) as session:
+        shape, draft = await _project_shape_version(
+            request, session, project_id, data_shape_id, version
+        )
+        if draft.status != "draft":
+            raise HTTPException(
+                status_code=409, detail="Published shape versions are immutable"
+            )
+        definition = payload.definition or draft.definition_json
+        adapter_key = payload.adapter_key or draft.adapter_key
+        try:
+            errors = BUILT_IN_ADAPTERS.get(adapter_key).validate_definition(definition)
+        except KeyError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if errors:
+            raise HTTPException(status_code=400, detail=errors)
+        draft.definition_json = definition
+        draft.adapter_key = adapter_key
+        session.add(draft)
+        await session.commit()
+    return {
+        **_shape_version_payload(shape, draft),
+        "validation": {
+            "valid": True,
+            "representative_row_count": len(payload.representative_rows),
+        },
+    }
+
+
+@router.post("/projects/{project_id}/shapes/{data_shape_id}/versions/{version}/publish")
+async def publish_shape_version(
+    project_id: str, data_shape_id: str, version: int, request: Request
+) -> dict[str, Any]:
+    """Publish a validated draft as an immutable contract-pinnable version."""
+
+    project = await _require_project(request, project_id)
+    await require_project_permission(
+        request, _session(request), project, "database.edit"
+    )
+    async with _session_context(request) as session:
+        shape, draft = await _project_shape_version(
+            request, session, project_id, data_shape_id, version
+        )
+        if draft.status != "draft":
+            raise HTTPException(
+                status_code=409, detail="Shape version is already published"
+            )
+        errors = BUILT_IN_ADAPTERS.get(draft.adapter_key).validate_definition(
+            draft.definition_json
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail=errors)
+        draft.status = "published"
+        draft.published_at = datetime.now(UTC)
+        session.add(draft)
+        await session.commit()
+    return _shape_version_payload(shape, draft)
+
+
+@router.post("/projects/{project_id}/catalog/datasets", status_code=201)
+async def create_catalog_dataset(
+    project_id: str, payload: DataContractCreate, request: Request
+) -> dict[str, Any]:
+    """Create a dataset pinned to a published shape with semantic-only fields."""
+
+    project = await _require_project(request, project_id)
+    await require_project_permission(
+        request, _session(request), project, "database.edit"
+    )
+    contract_model = DataContract(
+        data_contract_id=payload.data_contract_id,
+        project_id=project_id,
+        name=payload.name,
+        data_shape_id=payload.data_shape_id,
+        data_shape_version=payload.data_shape_version,
+        shape_bindings_json=payload.bindings,
+        search_tags=payload.search_tags,
+        description=payload.description,
+        metadata_json=payload.metadata_json,
+    )
+    field_models = [
+        DataContractField(
+            data_contract_id=payload.data_contract_id,
+            **field.model_dump(),
+        )
+        for field in payload.fields
+    ]
+    if payload.data_shape_id == "records" and not field_models:
+        raise HTTPException(
+            status_code=422,
+            detail="Managed record datasets require at least one typed field.",
+        )
+    async with _session_context(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        shape_rows = (
+            await session.exec(
+                select(DataShapeRecord).where(
+                    DataShapeRecord.data_shape_id == payload.data_shape_id,
+                    or_(
+                        cast(Any, DataShapeRecord.project_id) == project_pk,
+                        cast(Any, DataShapeRecord.project_id).is_(None),
+                    ),
+                )
+            )
+        ).all()
+        shape = next(
+            (item for item in shape_rows if item.project_id == project_pk), None
+        )
+        shape = shape or (shape_rows[0] if shape_rows else None)
+        if shape is None:
+            raise HTTPException(status_code=404, detail="Data shape not found")
+        shape_version = (
+            await session.exec(
+                select(DataShapeVersionRecord).where(
+                    DataShapeVersionRecord.data_shape_id == shape.id,
+                    DataShapeVersionRecord.version == payload.data_shape_version,
+                    DataShapeVersionRecord.status == "published",
+                )
+            )
+        ).first()
+        if shape_version is None:
+            raise HTTPException(
+                status_code=400, detail="Contracts must pin a published shape version"
+            )
+        errors = BUILT_IN_ADAPTERS.get(shape_version.adapter_key).validate_contract(
+            contract_model
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail=errors)
+        duplicate = (
+            await session.exec(
+                select(DataContractRecord).where(
+                    DataContractRecord.project_id == project_pk,
+                    DataContractRecord.data_contract_id == payload.data_contract_id,
+                )
+            )
+        ).first()
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail="Data contract already exists")
+        row = DataContractRecord(
+            data_contract_id=payload.data_contract_id,
+            project_id=project_pk,
+            name=payload.name,
+            data_shape_version_id=cast(int, shape_version.id),
+            shape_bindings_json=payload.bindings,
+            search_tags_json=payload.search_tags,
+            description=payload.description,
+            metadata_json=payload.metadata_json,
+        )
+        session.add(row)
+        await session.flush()
+        session.add_all(
+            [
+                DataContractFieldRecord(
+                    data_contract_id=cast(int, row.id),
+                    field_id=field.field_id,
+                    display_name=field.display_name,
+                    purpose=field.purpose,
+                    scalar_type=field.scalar_type,
+                    semantic_type=field.semantic_type,
+                    unit=field.unit,
+                    direction=field.direction,
+                    description=field.description,
+                    priority=field.priority,
+                    domain_tags_json=field.domain_tags,
+                    metadata_json=field.metadata_json,
+                )
+                for field in field_models
+            ]
+        )
+        await session.commit()
+        if payload.data_shape_id == "records":
+            _analytics_store_for_project(
+                request, project.project_id
+            ).create_managed_record_table(
+                contract_pk=cast(int, row.id),
+                fields={field.field_id: field.scalar_type for field in field_models},
+            )
+        result = await RuntimeCatalog(session, project_id).describe_dataset(
+            payload.data_contract_id
+        )
+    return cast(dict[str, Any], result)
+
+
+@router.put("/projects/{project_id}/catalog/datasets/{data_contract_id:path}/records")
+async def replace_catalog_dataset_records(
+    project_id: str,
+    data_contract_id: str,
+    payload: ManagedRecordsReplace,
+    request: Request,
+) -> dict[str, Any]:
+    """Validate and replace rows in an application-managed record dataset."""
+
+    project = await _require_project(request, project_id)
+    await require_project_permission(
+        request, _session(request), project, "database.edit"
+    )
+    async with _session_context(request) as session:
+        project_pk = await _project_pk(request, project_id, session=session)
+        contract = (
+            await session.exec(
+                select(DataContractRecord).where(
+                    DataContractRecord.project_id == project_pk,
+                    DataContractRecord.data_contract_id == data_contract_id,
+                )
+            )
+        ).first()
+        if contract is None or contract.id is None:
+            raise HTTPException(status_code=404, detail="Data contract not found")
+        shape_version = await session.get(
+            DataShapeVersionRecord, contract.data_shape_version_id
+        )
+        shape = (
+            await session.get(DataShapeRecord, shape_version.data_shape_id)
+            if shape_version is not None
+            else None
+        )
+        if shape is None or shape.data_shape_id != "records":
+            raise HTTPException(
+                status_code=409,
+                detail="Only records-shape datasets accept managed rows",
+            )
+        fields = (
+            await session.exec(
+                select(DataContractFieldRecord).where(
+                    DataContractFieldRecord.data_contract_id == contract.id
+                )
+            )
+        ).all()
+        try:
+            _analytics_store_for_project(
+                request, project.project_id
+            ).replace_managed_record_rows(
+                contract_pk=contract.id,
+                fields={field.field_id: field.scalar_type for field in fields},
+                rows=payload.rows,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"data_contract_id": data_contract_id, "row_count": len(payload.rows)}
+
+
 @router.post("/insights/validate", response_model=InsightValidationRead)
 async def validate_insight_config(
     payload: InsightValidationRequest,
@@ -2117,6 +2676,32 @@ async def create_insight(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        preview = (
+            await session.exec(
+                select(InsightResultCacheRecord).where(
+                    InsightResultCacheRecord.project_id == payload.project_id,
+                    cast(Any, InsightResultCacheRecord.insight_id).is_(None),
+                    InsightResultCacheRecord.query_fingerprint
+                    == payload.preview_fingerprint,
+                )
+            )
+        ).first()
+        expected_fingerprint = hashlib.sha256(
+            json.dumps(
+                {"config": definition.executable_config()},
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+        if preview is None or payload.preview_fingerprint != expected_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Saving requires a successful preview of this exact query "
+                    "fingerprint."
+                ),
+            )
         insight = InsightRecord(
             insight_id=insight_id,
             project_id=payload.project_id,
@@ -2189,6 +2774,35 @@ async def patch_insight(
                     values["config"] = definition.compact_config()
                 except ValueError as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
+                expected_fingerprint = hashlib.sha256(
+                    json.dumps(
+                        {"config": definition.executable_config()},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode()
+                ).hexdigest()
+                preview = (
+                    await session.exec(
+                        select(InsightResultCacheRecord).where(
+                            InsightResultCacheRecord.project_id == insight.project_id,
+                            cast(Any, InsightResultCacheRecord.insight_id).is_(None),
+                            InsightResultCacheRecord.query_fingerprint
+                            == payload.preview_fingerprint,
+                        )
+                    )
+                ).first()
+                if (
+                    preview is None
+                    or payload.preview_fingerprint != expected_fingerprint
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Saving requires a successful preview of this exact "
+                            "query fingerprint."
+                        ),
+                    )
 
             insight_id = insight.insight_id
             updated_at = datetime.now(UTC)
@@ -2300,11 +2914,12 @@ async def execute_adhoc_insight(
         await _require_project(request, payload.project_id)
     analytics_store = _analytics_store_for_project(request, payload.project_id)
     config = payload.executable_fields()
-    if payload.version is None or payload.analysis is None or payload.view is None:
+    if payload.version is None or payload.query is None or payload.view is None:
         raise HTTPException(
             status_code=400,
-            detail="Ad hoc execution requires a complete version 1 insight definition.",
+            detail="Ad hoc execution requires a complete version 2 insight definition.",
         )
+    config.setdefault("name", payload.name or "Untitled insight")
     try:
         async with _session_context(request) as session:
             await validate_insight_definition_data(
@@ -2339,7 +2954,7 @@ async def execute_saved_insight(
     """Execute a saved insight, optionally overriding its config."""
     if (
         payload.version is not None
-        or payload.analysis is not None
+        or payload.query is not None
         or payload.view is not None
         or payload.name is not None
         or payload.description is not None
@@ -3590,19 +4205,71 @@ def _saved_insight_read(row: InsightRecord) -> SavedInsightRead:
     return SavedInsightRead.model_validate(values)
 
 
+async def _project_shape_version(
+    request: Request,
+    session: AsyncSession,
+    project_id: str,
+    data_shape_id: str,
+    version: int,
+) -> tuple[DataShapeRecord, DataShapeVersionRecord]:
+    """Resolve one project-owned shape version or raise a public 404."""
+
+    project_pk = await _project_pk(request, project_id, session=session)
+    shape = (
+        await session.exec(
+            select(DataShapeRecord).where(
+                DataShapeRecord.project_id == project_pk,
+                DataShapeRecord.data_shape_id == data_shape_id,
+            )
+        )
+    ).first()
+    if shape is None:
+        raise HTTPException(status_code=404, detail="Data shape not found")
+    shape_version = (
+        await session.exec(
+            select(DataShapeVersionRecord).where(
+                DataShapeVersionRecord.data_shape_id == shape.id,
+                DataShapeVersionRecord.version == version,
+            )
+        )
+    ).first()
+    if shape_version is None:
+        raise HTTPException(status_code=404, detail="Data shape version not found")
+    return shape, shape_version
+
+
+def _shape_version_payload(
+    shape: DataShapeRecord, version: DataShapeVersionRecord
+) -> dict[str, Any]:
+    """Serialize public shape identity and declarative version state."""
+
+    return {
+        "data_shape_id": shape.data_shape_id,
+        "name": shape.name,
+        "description": shape.description,
+        "built_in": shape.built_in,
+        "version": version.version,
+        "status": version.status,
+        "definition": version.definition_json,
+        "created_at": version.created_at.isoformat(),
+        "published_at": (
+            version.published_at.isoformat()
+            if version.published_at is not None
+            else None
+        ),
+    }
+
+
 def _saved_insight_summary(row: InsightRecord) -> SavedInsightSummary:
     """Return list-safe insight metadata without the full executable definition."""
 
-    analysis = row.config.get("analysis")
-    values = analysis.get("values") if isinstance(analysis, dict) else []
     sources = []
-    if isinstance(values, list):
-        for value in values:
-            if not isinstance(value, dict):
-                continue
-            raw_field = value.get("field")
-            if not isinstance(raw_field, str):
-                continue
+    try:
+        definition = normalize_insight_definition(row.config)
+    except ValueError:
+        definition = None
+    if definition is not None:
+        for raw_field in referenced_fields(definition.query):
             reference = parse_field_reference(raw_field)
             if reference.kind == "contract":
                 sources.append(f"contract:{reference.contract_id}")
@@ -4993,9 +5660,7 @@ async def _fields_by_contract(
             .where(
                 cast(Any, DataContractFieldRecord.data_contract_id).in_(contract_ids)
             )
-            .order_by(
-                DataContractFieldRecord.field_role, DataContractFieldRecord.field_id
-            )
+            .order_by(DataContractFieldRecord.purpose, DataContractFieldRecord.field_id)
         )
     ).all()
     grouped: dict[int | None, list[DataContractFieldRecord]] = {}
@@ -5054,10 +5719,13 @@ def _data_contract_read(
     contract: DataContractRecord,
     fields: list[DataContractFieldRecord],
     compatible_analysis_type_ids: list[str] | None = None,
+    shape_version: dict[str, JsonValue] | None = None,
 ) -> DataContractRead:
     """Convert a data contract definition row into its API response model."""
 
-    field_reads = [_data_contract_field_read(field) for field in fields]
+    field_reads = [
+        _data_contract_field_read(contract.data_contract_id, field) for field in fields
+    ]
     if not field_reads:
         # Some analytics tables are queryable even when no field rows were
         # materialized. Surface synthetic fields so the insight builder can
@@ -5066,19 +5734,54 @@ def _data_contract_read(
     return DataContractRead(
         data_contract_id=contract.data_contract_id,
         name=contract.name,
-        data_type=contract.data_type,
+        shape_version=shape_version or {},
+        bindings=dict(contract.shape_bindings_json),
+        search_tags=list(contract.search_tags_json),
         compatible_analysis_type_ids=compatible_analysis_type_ids or [],
-        intrinsic_producer_families=dict(contract.intrinsic_producer_families_json),
-        entity_grain=contract.entity_grain,
-        value_semantics=contract.value_semantics,
-        summary=dict(contract.summary_json),
-        last_profiled_at=contract.last_profiled_at,
-        source_fingerprint=contract.source_fingerprint,
-        query_modes=dict(contract.query_modes_json),
         description=contract.description,
         metadata_json=dict(contract.metadata_json),
         fields=field_reads,
     )
+
+
+async def _contract_shape_versions(
+    session: AsyncSession,
+    contracts: list[DataContractRecord],
+) -> dict[int | None, dict[str, JsonValue]]:
+    """Resolve semantic shape identities for contract API responses."""
+
+    if not contracts:
+        return {}
+    version_ids = {contract.data_shape_version_id for contract in contracts}
+    versions = (
+        await session.exec(
+            select(DataShapeVersionRecord).where(
+                cast(Any, DataShapeVersionRecord.id).in_(version_ids)
+            )
+        )
+    ).all()
+    shapes = (
+        await session.exec(
+            select(DataShapeRecord).where(
+                cast(Any, DataShapeRecord.id).in_(
+                    {version.data_shape_id for version in versions}
+                )
+            )
+        )
+    ).all()
+    shape_by_id = {shape.id: shape for shape in shapes}
+    version_by_id = {version.id: version for version in versions}
+    result: dict[int | None, dict[str, JsonValue]] = {}
+    for contract in contracts:
+        version = version_by_id.get(contract.data_shape_version_id)
+        shape = shape_by_id.get(version.data_shape_id) if version is not None else None
+        if version is not None and shape is not None:
+            result[contract.id] = {
+                "data_shape_id": shape.data_shape_id,
+                "version": version.version,
+                "status": version.status,
+            }
+    return result
 
 
 def _synthetic_contract_fields(
@@ -5150,51 +5853,48 @@ def _synthetic_contract_fields(
     return [
         DataContractFieldRead(
             field_id=field_id,
-            field_role=field_role,
-            entity_scope=contract.entity_grain,
+            field=contract_field_reference(contract.data_contract_id, field_id),
             display_name=display_name,
-            value_type=value_type,
-            unit=contract.unit if value_type == "numeric" else None,
+            purpose="value" if field_role == "measure" else "annotation",
+            scalar_type=value_type,
+            semantic_type=field_role,
+            unit=None,
             direction=None,
             description=contract.description,
             priority=None,
-            primary_table=table,
-            physical_tables={"tables": [table]} if table else {},
-            query_ref={
-                "table": table,
-                "value_column": value_column,
-                "synthetic": True,
-            },
-            summary=dict(contract.summary_json),
+            domain_tags=[],
             metadata_json={"synthetic": True},
         )
-        for field_id, field_role, display_name, value_type, value_column in fields
+        for field_id, field_role, display_name, value_type, _value_column in fields
     ]
 
 
-def _data_contract_field_read(field: DataContractFieldRecord) -> DataContractFieldRead:
+def _data_contract_field_read(
+    data_contract_id: str, field: DataContractFieldRecord
+) -> DataContractFieldRead:
     """Convert a data contract field definition into its API response model."""
 
     return DataContractFieldRead(
+        field=contract_field_reference(data_contract_id, field.field_id),
         field_id=field.field_id,
-        field_role=field.field_role,
-        entity_scope=field.entity_scope,
         display_name=field.display_name,
-        value_type=field.value_type,
+        purpose=field.purpose,
+        scalar_type=field.scalar_type,
+        semantic_type=field.semantic_type,
         unit=field.unit,
         direction=field.direction,
         description=field.description,
         priority=field.priority,
-        primary_table=field.primary_table,
-        physical_tables=dict(field.physical_tables_json),
-        query_ref=dict(field.query_ref_json),
-        summary=dict(field.summary_json),
+        domain_tags=list(field.domain_tags_json),
         metadata_json=dict(field.metadata_json),
     )
 
 
 def _default_field_table_for_contract(contract: DataContractRecord) -> str | None:
+    observation_kind = str(contract.shape_bindings_json.get("observation_kind") or "")
     return {
+        "generic_metrics": "sample_metrics",
+        "tool_results": "sample_metrics",
         "entity_attributes": "entity_attributes",
         "feature_matrix": "feature_value_numeric",
         "feature_calls": "feature_call",
@@ -5202,7 +5902,7 @@ def _default_field_table_for_contract(contract: DataContractRecord) -> str | Non
         "small_variants": "sample_variant_calls",
         "structural_variants": "sample_structural_variant_calls",
         "result_payload": "result_payloads",
-    }.get(contract.data_type)
+    }.get(observation_kind)
 
 
 async def _file_from_rows_public(

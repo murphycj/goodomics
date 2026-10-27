@@ -53,11 +53,13 @@ def test_insight_contract_separates_requests_reads_and_nullable_fields() -> None
     assert "SavedInsightCreate" in schemas
     assert "SavedInsightPatch" in schemas
     assert "SavedInsightRead" in schemas
-    analysis_value = schemas["AnalysisValue"]["properties"]
-    assert {"as", "label", "scope"} <= analysis_value.keys()
+    field_selection = schemas["FieldSelection"]["properties"]
+    assert {"as", "field", "label", "scope"} <= field_selection.keys()
     assert any(
-        variant.get("type") == "null" for variant in analysis_value["as"]["anyOf"]
+        variant.get("type") == "null" for variant in field_selection["as"]["anyOf"]
     )
+    query = schemas["SavedInsightRead"]["properties"]["query"]
+    assert query["discriminator"]["propertyName"] == "kind"
     insight_view = schemas["SavedInsightRead"]["properties"]["view"]
     assert insight_view["discriminator"]["propertyName"] == "kind"
 

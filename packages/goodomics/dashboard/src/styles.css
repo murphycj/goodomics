@@ -226,18 +226,27 @@ code {
 .react-grid-item > .report-resize-handle {
   z-index: 20;
   display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  background-image: none;
+  color: #39805d;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.react-grid-item > .report-resize-handle > .report-resize-control {
+  display: grid;
   width: 20px;
   height: 20px;
   place-items: center;
-  padding: 0;
   border: 1px solid #bdd8c9;
   border-radius: 5px;
   background: rgb(255 255 255 / 0.96);
-  background-image: none;
-  color: #39805d;
   box-shadow: 0 2px 7px rgb(25 32 43 / 0.1);
   opacity: 0;
-  pointer-events: auto;
+  pointer-events: none;
   transition:
     opacity 120ms ease,
     border-color 120ms ease,
@@ -245,17 +254,23 @@ code {
   transition-delay: 0ms;
 }
 
-.react-grid-item.report-layout-resizable:hover > .report-resize-handle {
+.react-grid-item.report-layout-resizable
+  > .report-resize-handle:hover
+  > .report-resize-control {
   opacity: 1;
-  transition-delay: 420ms, 420ms, 420ms;
+  transition-delay: 120ms, 120ms, 120ms;
 }
 
-.react-grid-item.resizing > .report-resize-handle {
+.react-grid-item.report-layout-resizable.resizing
+  > .report-resize-handle
+  > .report-resize-control {
   opacity: 1;
   transition-delay: 0ms;
 }
 
-.react-grid-item > .report-resize-handle:hover {
+.react-grid-item
+  > .report-resize-handle:hover
+  > .report-resize-control {
   border-color: #7dc9a1;
   box-shadow:
     0 0 0 2px rgb(43 191 122 / 0.08),
@@ -267,25 +282,42 @@ code {
 }
 
 .react-grid-item > .report-resize-handle.react-resizable-handle-e {
-  top: 50%;
+  top: 0;
   right: 0;
   width: 18px;
-  height: 28px;
+  height: 100%;
   margin-top: 0;
-  transform: translate(50%, -50%);
+  transform: translateX(50%);
+}
+
+.react-grid-item
+  > .report-resize-handle.react-resizable-handle-e
+  > .report-resize-control {
+  width: 18px;
+  height: 28px;
 }
 
 .react-grid-item > .report-resize-handle.react-resizable-handle-s {
   bottom: 0;
-  left: 50%;
-  width: 28px;
+  left: 0;
+  width: 100%;
   height: 18px;
   margin-left: 0;
-  transform: translate(-50%, 50%);
+  transform: translateY(50%);
+}
+
+.react-grid-item
+  > .report-resize-handle.react-resizable-handle-s
+  > .report-resize-control {
+  width: 28px;
+  height: 18px;
 }
 
 .react-grid-item > .report-resize-handle.react-resizable-handle-se {
+  z-index: 21;
   right: 0;
   bottom: 0;
+  width: 20px;
+  height: 20px;
   transform: translate(50%, 50%);
 }

@@ -78,8 +78,13 @@ def test_result_resolver_is_contract_compatible_and_ranks_per_sample(
         data_contract_id="rna:expression",
         project_id=project.project_id,
         name="RNA expression",
-        data_type="feature_matrix",
-        entity_grain="sample",
+        data_shape_id="feature",
+        data_shape_version=1,
+        shape_bindings_json={
+            "entity_type": "sample",
+            "feature_domain": "gene",
+            "observation_kind": "feature_matrix",
+        },
     )
     occurrences = [_occurrence(run, contract.data_contract_id) for run in runs]
     availability = [

@@ -124,23 +124,39 @@ class RunRelationship(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
+class DataShape(GoodomicsModel):
+    """Stable identity for one logical analytical data shape."""
+
+    data_shape_id: FieldReferenceSegment
+    project_id: str | None = None
+    built_in: bool = False
+    name: str
+    description: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DataShapeVersion(GoodomicsModel):
+    """Versioned declarative shape definition with immutable publication state."""
+
+    data_shape_id: FieldReferenceSegment
+    version: int = Field(ge=1)
+    status: Literal["draft", "published"] = "draft"
+    definition_json: JsonObject = Field(default_factory=dict)
+    adapter_key: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    published_at: datetime | None = None
+
+
 class DataContract(GoodomicsModel):
-    """Describes a stable semantic analytical data layer."""
+    """Dataset-level semantics pinned to a published data-shape version."""
 
     data_contract_id: FieldReferenceSegment
     project_id: str | None = None
     name: str
-    data_type: str
-    feature_type: str | None = None
-    value_type: str | None = None
-    unit: str | None = None
-    entity_grain: str | None = None
-    value_semantics: str | None = None
-    summary_json: JsonObject = Field(default_factory=dict)
-    last_profiled_at: datetime | None = None
-    source_fingerprint: str | None = None
-    query_modes_json: JsonObject = Field(default_factory=dict)
-    intrinsic_producer_families_json: JsonObject = Field(default_factory=dict)
+    data_shape_id: FieldReferenceSegment
+    data_shape_version: int = Field(default=1, ge=1)
+    shape_bindings_json: JsonObject = Field(default_factory=dict)
+    search_tags: list[str] = Field(default_factory=list)
     description: str | None = None
     metadata_json: JsonObject = Field(default_factory=dict)
 
@@ -182,18 +198,74 @@ class DataContractField(GoodomicsModel):
 
     data_contract_id: FieldReferenceSegment
     field_id: FieldReferenceSegment
-    field_role: str = "metric"
-    entity_scope: str | None = None
     display_name: str
-    value_type: Literal["numeric", "string", "boolean", "date", "json"] = "numeric"
+    purpose: Literal["key", "value", "coordinate", "annotation"] = "value"
+    scalar_type: Literal[
+        "numeric",
+        "integer",
+        "string",
+        "boolean",
+        "categorical",
+        "date",
+        "datetime",
+        "json",
+    ] = "numeric"
+    semantic_type: str | None = None
     unit: str | None = None
     direction: str | None = None
     description: str | None = None
-    priority: str | None = None
-    primary_table: str | None = None
-    physical_tables_json: JsonObject = Field(default_factory=dict)
-    query_ref_json: JsonObject = Field(default_factory=dict)
-    summary_json: JsonObject = Field(default_factory=dict)
+    priority: int | None = Field(default=None, ge=0)
+    domain_tags: list[str] = Field(default_factory=list)
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+    @property
+    def value_type(self) -> str:
+        """Return the scalar type under the historical internal attribute name."""
+
+        return self.scalar_type
+
+
+class DataContractProfile(GoodomicsModel):
+    """Disposable project-scoped discovery profile for one dataset."""
+
+    project_id: str
+    data_contract_id: FieldReferenceSegment
+    source_fingerprint: str
+    profiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    row_count: int = Field(ge=0)
+    distinct_entity_count: int | None = Field(default=None, ge=0)
+    feature_set_coverage_json: JsonObject = Field(default_factory=dict)
+
+
+class DataContractFieldProfile(GoodomicsModel):
+    """Disposable bounded profile for one contract field."""
+
+    project_id: str
+    data_contract_id: FieldReferenceSegment
+    field_id: FieldReferenceSegment
+    source_fingerprint: str
+    profiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    missing_value_count: int = Field(default=0, ge=0)
+    numeric_minimum: float | None = None
+    numeric_maximum: float | None = None
+    categorical_distinct_count: int | None = Field(default=None, ge=0)
+    top_values_json: JsonObject = Field(default_factory=dict)
+
+
+class FeatureSetCoverage(GoodomicsModel):
+    """Eligible feature coverage for one contract occurrence and sample."""
+
+    run_contract_id: str
+    run_sample_id: str
+    feature_set_id: str
+    status: Literal[
+        "altered",
+        "profiled_unaltered",
+        "profiled_empty",
+        "not_profiled",
+        "unavailable",
+    ]
+    covered_feature_ids: list[str] = Field(default_factory=list)
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
@@ -593,6 +665,56 @@ class TimelineEvent(AnalyticalRecord):
     metadata_json: JsonObject = Field(default_factory=dict)
 
 
+class SeriesPoint(AnalyticalRecord):
+    """Ordered measurement point for a sample, run, or other entity."""
+
+    data_contract_id: int
+    run_contract_id: int | None = None
+    run_id: int
+    run_sample_id: int | None = None
+    sample_id: int | None = None
+    series_id: str
+    position: float
+    position_label: str | None = None
+    measurement_id: str
+    value: float
+    source_file_id: int | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
+class AnnotationSpan(AnalyticalRecord):
+    """Transcript or protein annotation span used by positional plots."""
+
+    annotation_span_id: str
+    feature_id: int
+    coordinate_type: Literal["transcript", "protein"]
+    start_pos: int
+    end_pos: int
+    label: str
+    annotation_type: str | None = None
+    source: str | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
+class FeatureSetCoverageObservation(AnalyticalRecord):
+    """Per-occurrence and per-sample feature-set eligibility state."""
+
+    data_contract_id: int
+    run_contract_id: int
+    run_sample_id: int
+    sample_id: int | None = None
+    feature_set_id: int
+    status: Literal[
+        "altered",
+        "profiled_unaltered",
+        "profiled_empty",
+        "not_profiled",
+        "unavailable",
+    ]
+    covered_feature_count: int | None = None
+    metadata_json: JsonObject = Field(default_factory=dict)
+
+
 class ResultPayload(AnalyticalRecord):
     """Logical non-scalar result data attached to a data contract."""
 
@@ -751,6 +873,9 @@ class AnalyticsIngestBatch(MutableGoodomicsModel):
     structural_variant_events: list[Any] = Field(default_factory=list)
     sample_structural_variant_calls: list[Any] = Field(default_factory=list)
     timeline_events: list[Any] = Field(default_factory=list)
+    series_points: list[Any] = Field(default_factory=list)
+    annotation_spans: list[Any] = Field(default_factory=list)
+    feature_set_coverage: list[Any] = Field(default_factory=list)
     result_payloads: list[Any] = Field(default_factory=list)
     gene_alteration_state: list[Any] = Field(default_factory=list)
     sample_group_summaries: list[Any] = Field(default_factory=list)

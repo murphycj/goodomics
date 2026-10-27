@@ -32,13 +32,11 @@ def tool_results_contract(
     data_contract = contract(
         tool_contract_id(normalized_tool),
         name=name or display_base,
-        data_type="tool_results",
-        producer_tool=normalized_tool,
-        feature_type="tool_output",
-        value_type="mixed",
-        entity_grain="sample",
-        query_modes=["sample", "metric", "payload", "sample_group"],
+        data_shape_id="entity",
+        bindings={"entity_type": "sample", "observation_kind": "tool_results"},
+        search_tags=[normalized_tool, "sample", "metric", "payload"],
         description=f"Metrics and result payloads from {display_base} outputs.",
+        metadata_json={"source": normalized_tool},
     )
     return _with_tool_metadata(data_contract, normalized_tool, normalized_context)
 

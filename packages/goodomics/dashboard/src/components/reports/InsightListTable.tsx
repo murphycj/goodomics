@@ -9,10 +9,9 @@ import {
   Trash2,
 } from "lucide-react";
 import type { InsightSummary } from "../../api";
-import { insightViewLabel } from "../../lib/insightViewCatalog";
 import { cn, formatDate, formatRelativeTime } from "../../lib/utils";
+import { InsightViewThumbnail } from "../insights/InsightViewThumbnail";
 import {
-  Badge,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -87,8 +86,6 @@ export function InsightListTable({
               </TableHead>
             ) : null}
             <TableHead>Name</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Store</TableHead>
             <TableHead>Reports</TableHead>
             <TableHead>Created</TableHead>
             <TableHead>Last modified</TableHead>
@@ -125,17 +122,18 @@ export function InsightListTable({
                   </TableCell>
                 ) : null}
                 <TableCell>
-                  <div className="font-semibold">{insight.name}</div>
-                  {insight.description ? (
-                    <div className="mt-1 max-w-[520px] truncate text-xs text-[#657082]">
-                      {insight.description}
+                  <div className="flex min-w-0 items-center gap-3">
+                    <InsightViewThumbnail kind={insight.view_kind} />
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{insight.name}</div>
+                      {insight.description ? (
+                        <div className="mt-1 max-w-[520px] truncate text-xs text-[#657082]">
+                          {insight.description}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
+                  </div>
                 </TableCell>
-                <TableCell>
-                  <Badge variant="secondary">{insightViewLabel(insight.view_kind)}</Badge>
-                </TableCell>
-                <TableCell className="text-[#657082]">{insight.sources.join(", ")}</TableCell>
                 <TableCell className="text-[#657082]">
                   {(reportCounts?.get(insight.insight_id) ?? 0).toLocaleString()}
                 </TableCell>

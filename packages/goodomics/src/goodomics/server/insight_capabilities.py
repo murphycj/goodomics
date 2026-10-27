@@ -2,10 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from goodomics.schemas.field_references import metadata_field_reference
+from goodomics.schemas.insights import (
+    VIEWS_BY_QUERY_KIND,
+    AlterationMatrixQuery,
+    AssociationQuery,
+    DistributionQuery,
+    GenomeProfileQuery,
+    InsightSpec,
+    MatrixQuery,
+    RelationshipQuery,
+    RowsQuery,
+    SeriesQuery,
+    SummaryQuery,
+    SurvivalQuery,
+    TimelineQuery,
+    VariantPositionQuery,
+)
 
 JsonObject = dict[str, Any]
 
@@ -115,6 +131,7 @@ ANALYSIS_GRAINS: dict[str, JsonObject] = {
         ("feature", "Features", "Feature", "feature_id"),
         ("variant", "Variants", "Variant", "variant_id"),
         ("file", "Files", "File", "file_id"),
+        ("row", "Rows", "Row", "row_id"),
     )
 }
 
@@ -183,8 +200,7 @@ OUTPUT_MODES: dict[str, JsonObject] = {
     },
 }
 
-# These mappings remain private execution helpers while the old resolver is
-# incrementally reused under the version 1 value planner.
+# These mappings remain private execution helpers behind typed query runners.
 LINKERS: dict[str, JsonObject] = {
     "sample": {"id": "sample", "column": "sample_id"},
     "subject": {"id": "subject", "column": "entity_id"},
@@ -192,6 +208,7 @@ LINKERS: dict[str, JsonObject] = {
     "feature": {"id": "feature", "column": "feature_id"},
     "variant": {"id": "variant", "column": "variant_id"},
     "file": {"id": "file", "column": "source_file_id"},
+    "row": {"id": "row", "column": "row_id"},
     "auto": {"id": "auto", "column": None},
     "none": {"id": "none", "column": None},
 }
@@ -200,8 +217,9 @@ TEMPLATES: dict[str, JsonObject] = {
         "id": "build_table",
         "label": "Build a table",
         "definition": {
-            "version": 1,
-            "analysis": {"grain": "sample", "values": []},
+            "version": 2,
+            "name": "Untitled table",
+            "query": {"kind": "rows", "grain": "sample", "columns": []},
             "view": {"kind": "table"},
         },
     },
@@ -209,12 +227,11 @@ TEMPLATES: dict[str, JsonObject] = {
         "id": "compare_two_fields",
         "label": "Compare two fields",
         "definition": {
-            "version": 1,
-            "analysis": {
-                "grain": "sample",
-                "values": [],
+            "version": 2,
+            "name": "Untitled relationship",
+            "query": {
+                "kind": "relationship",
                 "match_by": "sample",
-                "join": "inner",
             },
             "view": {"kind": "scatter"},
         },
@@ -263,13 +280,21 @@ def _enriched_metadata_field(
 
 
 def insight_capabilities() -> JsonObject:
-    """Return strict version 1 builder capabilities."""
+    """Return family-specific version 2 builder capabilities."""
 
     return {
-        "version": 1,
+        "version": 2,
         "analysis_grains": list(ANALYSIS_GRAINS.values()),
         "templates": list(TEMPLATES.values()),
         "charts": list(CHARTS.values()),
+        "query_families": [
+            {
+                "kind": kind,
+                "views": sorted(views),
+                "provider_required": kind == "survival",
+            }
+            for kind, views in VIEWS_BY_QUERY_KIND.items()
+        ],
         "metadata_fields": metadata_fields(),
         "aggregations_by_type": AGGREGATIONS_BY_TYPE,
         "result_rows": {
@@ -324,33 +349,110 @@ def chart_rule(chart_id: str) -> JsonObject:
 
 
 def explain_insight_config(config: Mapping[str, Any]) -> str:
-    """Explain a normalized version 1 definition in public terminology."""
+    """Explain a normalized version 2 definition in deterministic plain language."""
 
-    raw_analysis = config.get("analysis")
-    analysis: Mapping[str, Any] = (
-        raw_analysis if isinstance(raw_analysis, Mapping) else {}
-    )
-    raw_values = analysis.get("values")
-    values = raw_values if isinstance(raw_values, Sequence) else []
-    value_labels = [
-        str(value.get("label") or value.get("as") or value.get("field"))
-        for value in values
-        if isinstance(value, Mapping)
-    ]
-    raw_view = config.get("view")
-    view: Mapping[str, Any] = raw_view if isinstance(raw_view, Mapping) else {}
-    return (
-        f"{analysis.get('grain', 'sample')} insight with {view.get('kind', 'table')} "
-        f"view; values: {', '.join(value_labels) or 'none'}; matched by "
-        f"{analysis.get('match_by') or 'none'} using "
-        f"{analysis.get('join') or 'view default'} join; returning up to "
-        f"{analysis.get('limit', PREVIEW_DEFAULT_LIMIT)} final rows"
-        f"{' selected randomly' if analysis.get('random') else ''}."
-    )
+    definition = InsightSpec.model_validate(config)
+    return explain_query(definition.query)
+
+
+def explain_query(query: Any, labels: Mapping[str, str] | None = None) -> str:
+    """Explain every typed query family using resolved labels when available."""
+
+    labels = labels or {}
+
+    def label(selection: Any) -> str:
+        """Resolve a field selection to a display label or canonical reference."""
+
+        field = str(selection.field)
+        return labels.get(field) or selection.label or field
+
+    if isinstance(query, RowsQuery):
+        columns = ", ".join(label(item) for item in query.columns)
+        text = f"Show one row per {query.grain} with {columns}."
+    elif isinstance(query, SummaryQuery):
+        groups = ", ".join(label(item) for item in query.group_by) or "the full cohort"
+        operations = ", ".join(
+            f"{item.aggregation.replace('_', ' ')} of {label(item)} as {item.reference}"
+            for item in query.aggregations
+        )
+        text = f"Group {query.grain}s by {groups} and calculate {operations}."
+        if query.calculations:
+            calculations = ", ".join(
+                f"{item.calculation.replace('_', ' ')} of {item.input} as {item.alias}"
+                for item in query.calculations
+            )
+            text = f"{text[:-1]} and {calculations}."
+    elif isinstance(query, RelationshipQuery):
+        text = (
+            f"Compare {label(query.x)} with {label(query.y)}, matching "
+            f"observations by {query.match_by}."
+        )
+    elif isinstance(query, DistributionQuery):
+        split = (
+            f" split by {', '.join(label(item) for item in query.split_by)}"
+            if query.split_by
+            else ""
+        )
+        text = f"Show the distribution of {label(query.value)}{split}."
+    elif isinstance(query, SeriesQuery):
+        series = ", ".join(label(item) for item in query.series_by)
+        text = (
+            f"Order {', '.join(label(item) for item in query.measurements)} by "
+            f"{label(query.position)}"
+            + (f" with separate series for {series}" if query.series_by else "")
+            + "."
+        )
+    elif isinstance(query, MatrixQuery):
+        text = (
+            f"Build a raw-value matrix with {label(query.rows)} as rows, "
+            f"{label(query.columns)} as columns, and {label(query.value)} as cells."
+        )
+    elif isinstance(query, AlterationMatrixQuery):
+        alterations = ", ".join(label(item) for item in query.alterations)
+        text = (
+            f"Build a coverage-aware alteration matrix for {len(query.features)} "
+            f"features using {alterations}."
+        )
+    elif isinstance(query, VariantPositionQuery):
+        text = (
+            f"Group variants at {label(query.position)} and size recurrent "
+            f"positions by {label(query.frequency)}."
+        )
+    elif isinstance(query, GenomeProfileQuery):
+        text = (
+            f"Lay out {label(query.value)} over {label(query.coordinate)} "
+            "genomic coordinates."
+        )
+    elif isinstance(query, SurvivalQuery):
+        text = (
+            f"Analyze time to event using {label(query.duration)} and "
+            f"{label(query.event)}; "
+            f"execution requires an analysis provider for {query.provider.method}."
+        )
+    elif isinstance(query, TimelineQuery):
+        text = (
+            f"Arrange events for {label(query.subject)} by {label(query.start)} "
+            "on a subject timeline."
+        )
+    elif isinstance(query, AssociationQuery):
+        text = (
+            "Calculate descriptive eligible and co-occurrence counts for "
+            f"{len(query.features)} features without significance testing."
+        )
+    else:
+        raise TypeError(f"Unsupported query type: {type(query).__name__}")
+    filters = getattr(query, "filters", [])
+    if filters:
+        suffix = "s" if len(filters) != 1 else ""
+        text = f"{text[:-1]} after applying {len(filters)} filter{suffix}."
+    return text
 
 
 def validate_config_shape(config: Mapping[str, Any]) -> list[JsonObject]:
-    """Retain the old helper name for callers; Pydantic owns shape validation."""
+    """Return deterministic structural validation diagnostics for a v2 envelope."""
 
-    del config
+    try:
+        InsightSpec.model_validate(config)
+    except ValueError as error:
+        return [{"level": "error", "code": "invalid_definition", "message": str(error)}]
     return []

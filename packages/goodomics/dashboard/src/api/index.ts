@@ -14,6 +14,7 @@ import {
   createProject as sdkCreateProject,
   createProjectSampleGroup as sdkCreateProjectSampleGroup,
   createReport as sdkCreateReport,
+  describeCatalogDataset as sdkDescribeCatalogDataset,
   deleteInsight as sdkDeleteInsight,
   deleteMember as sdkDeleteMember,
   deleteProjectSampleGroup as sdkDeleteProjectSampleGroup,
@@ -36,6 +37,9 @@ import {
   listDatabaseTables as sdkListDatabaseTables,
   listDataContracts as sdkListDataContracts,
   listInsights as sdkListInsights,
+  listCatalogDatasets as sdkListCatalogDatasets,
+  listCatalogJoins as sdkListCatalogJoins,
+  listCatalogQueryFamilies as sdkListCatalogQueryFamilies,
   listMembers as sdkListMembers,
   listProjectRunAnalyticsMetrics,
   listProjectRunAnalyticsPayloads,
@@ -63,6 +67,7 @@ import {
   previewDatabaseTable as sdkPreviewDatabaseTable,
   removeProjectSampleGroupMembers as sdkRemoveProjectSampleGroupMembers,
   searchSamples as sdkSearchSamples,
+  searchCatalogFields as sdkSearchCatalogFields,
   validateInsightConfig as sdkValidateInsightConfig,
   validateReportConfig as sdkValidateReportConfig,
 } from "./generated/sdk.gen";
@@ -126,6 +131,7 @@ import {
   insightDraftToPatch,
   reportDraftToCreate,
   reportDraftToPatch,
+  savedInsightReadSchema,
   savedInsightToDraft,
   savedReportToDraft,
   type InsightDraft,
@@ -154,12 +160,9 @@ export type DatabaseTable = Omit<z.output<typeof zDatabaseTableRead>, "columns">
 export type DatabaseTablePage = z.output<typeof zDatabaseTablePageRead>;
 export type DataContractField = Omit<
   z.output<typeof zDataContractFieldRead>,
-  "metadata_json" | "physical_tables" | "query_ref" | "summary"
+  "metadata_json"
 > & {
   metadata_json: Record<string, unknown>;
-  physical_tables: Record<string, unknown>;
-  query_ref: Record<string, unknown>;
-  summary: Record<string, unknown>;
 };
 export type DataContract = Omit<
   z.output<typeof zDataContractRead>,
@@ -185,16 +188,14 @@ export type ProjectMembership = MembershipRead;
 export type AdminMembership = AdminMembershipRead;
 export type InsightResult = Record<string, unknown>;
 export type ReportResult = Record<string, unknown>;
-export type SavedInsight = Omit<
-  SavedInsightRead,
-  "analysis" | "version" | "view"
-> & InsightDraft;
+export type SavedInsight = Omit<SavedInsightRead, keyof InsightDraft> & InsightDraft;
 export type SavedReport = Omit<
   SavedReportRead,
   keyof ReportDefinition
 > & ReportDefinition;
 
 const throwing = { throwOnError: true } as const;
+const validateSavedInsightResponse = async (data: unknown) => savedInsightReadSchema.parseAsync(data);
 
 export function listRuns({ limit, offset, search }: PageQuery) {
   return sdkListRuns({ query: { limit, offset, search }, ...throwing }).then(
@@ -279,6 +280,31 @@ export const getContractResultOptions = (projectId: string, dataContractId: stri
 export const getInsightCapabilities = () => sdkGetInsightCapabilities(throwing);
 export const validateInsightConfig = (body: InsightDraft & { project_id?: string }) =>
   sdkValidateInsightConfig({ body, ...throwing });
+export const listCatalogDatasets = (projectId: string, search?: string) =>
+  sdkListCatalogDatasets({
+    path: { project_id: projectId }, query: { search }, ...throwing,
+  });
+export const describeCatalogDataset = (projectId: string, dataContractId: string) =>
+  sdkDescribeCatalogDataset({
+    path: { project_id: projectId, data_contract_id: dataContractId }, ...throwing,
+  });
+export const searchCatalogFields = (
+  projectId: string,
+  queryKind: InsightDraft["query"]["kind"],
+  search?: string,
+) => sdkSearchCatalogFields({
+  path: { project_id: projectId },
+  query: { query_kind: queryKind, search, limit: 200 },
+  ...throwing,
+});
+export const listCatalogJoins = (projectId: string, dataContractId?: string) =>
+  sdkListCatalogJoins({
+    path: { project_id: projectId },
+    query: { data_contract_id: dataContractId },
+    ...throwing,
+  });
+export const listCatalogQueryFamilies = (projectId: string) =>
+  sdkListCatalogQueryFamilies({ path: { project_id: projectId }, ...throwing });
 export const listSampleGroups = async (projectId: string, kind?: string) =>
   z.array(zSampleGroupRead).parse(
     await sdkListSampleGroups({ query: { project_id: projectId, kind }, ...throwing }),
@@ -347,15 +373,36 @@ export function previewProjectDatabaseTable({ projectId, store, table, limit, of
 export const listInsights = (projectId: string) =>
   sdkListInsights({ query: { project_id: projectId }, ...throwing });
 export async function getInsight(insightId: string): Promise<SavedInsight> {
-  const saved = await sdkGetInsight({ path: { insight_ref: insightId }, ...throwing });
+  const saved = await sdkGetInsight({
+    path: { insight_ref: insightId },
+    responseValidator: validateSavedInsightResponse,
+    ...throwing,
+  });
   return { ...saved, ...savedInsightToDraft(saved) };
 }
-export const createInsight = (payload: InsightDraft & { insight_id?: string; project_id: string; name: string; description?: string | null }) =>
-  sdkCreateInsight({ body: insightDraftToCreate(payload, payload), ...throwing });
-export const patchInsight = (insightId: string, payload: SavedInsightPatch & InsightDraft) =>
-  sdkPatchInsight({ path: { insight_ref: insightId }, body: insightDraftToPatch(payload, payload), ...throwing });
-export const renameInsight = (insightId: string, name: string) =>
-  sdkPatchInsight({ path: { insight_ref: insightId }, body: { name }, ...throwing });
+export const createInsight = (payload: InsightDraft & {
+  insight_id?: string; project_id: string; description?: string | null;
+  preview_fingerprint: string;
+}) => sdkCreateInsight({
+  body: insightDraftToCreate(payload, payload),
+  responseValidator: validateSavedInsightResponse,
+  ...throwing,
+});
+export const patchInsight = (
+  insightId: string,
+  payload: SavedInsightPatch & InsightDraft & { preview_fingerprint: string },
+) => sdkPatchInsight({
+  path: { insight_ref: insightId },
+  body: insightDraftToPatch(payload, payload),
+  responseValidator: validateSavedInsightResponse,
+  ...throwing,
+});
+export const renameInsight = (insightId: string, name: string) => sdkPatchInsight({
+  path: { insight_ref: insightId },
+  body: { name },
+  responseValidator: validateSavedInsightResponse,
+  ...throwing,
+});
 export const deleteInsight = (insightId: string) =>
   sdkDeleteInsight({ path: { insight_ref: insightId }, ...throwing });
 export const bulkDeleteInsights = (projectId: string, insightRefs: string[]) =>
@@ -367,13 +414,23 @@ export const duplicateInsight = (projectId: string, insightRef: string) =>
   sdkDuplicateInsight({
     path: { insight_ref: insightRef },
     body: { project_id: projectId },
+    responseValidator: validateSavedInsightResponse,
     ...throwing,
   });
 export async function executeInsight({ insightId, projectId, config, name, description, limit, random, exportResult, refresh }: {
   insightId?: string; projectId: string; config?: InsightDraft; name?: string; description?: string | null;
   limit?: number; random?: boolean; exportResult?: boolean; refresh?: boolean;
 }) {
-  const body = { ...(config ?? {}), project_id: projectId, name, description, limit, random, export: exportResult, refresh: Boolean(refresh) };
+  const body = {
+    ...(config ?? {}),
+    project_id: projectId,
+    ...(name !== undefined ? { name } : {}),
+    ...(description !== undefined ? { description } : {}),
+    limit,
+    random,
+    export: exportResult,
+    refresh: Boolean(refresh),
+  };
   const response = insightId
     ? await executeSavedInsight({ path: { insight_ref: insightId }, body, ...throwing })
     : await executeAdhocInsight({ body, ...throwing });
@@ -468,9 +525,6 @@ function materializeContractField(value: DataContractFieldRead): DataContractFie
   return {
     ...field,
     metadata_json: field.metadata_json ?? {},
-    physical_tables: field.physical_tables ?? {},
-    query_ref: field.query_ref ?? {},
-    summary: field.summary ?? {},
   } as DataContractField;
 }
 

@@ -2,8 +2,8 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMemberData, AddMemberErrors, AddMemberResponses, AddProjectSampleGroupMembersData, AddProjectSampleGroupMembersErrors, AddProjectSampleGroupMembersResponses, AddRoleData, AddRoleErrors, AddRoleResponses, AddUserData, AddUserErrors, AddUserResponses, BulkDeleteInsightsData, BulkDeleteInsightsErrors, BulkDeleteInsightsResponses, BulkDeleteReportsData, BulkDeleteReportsErrors, BulkDeleteReportsResponses, ChangePasswordData, ChangePasswordErrors, ChangePasswordResponses, ChatWithAiData, ChatWithAiErrors, ChatWithAiResponses, CreateInsightData, CreateInsightErrors, CreateInsightResponses, CreateProjectData, CreateProjectErrors, CreateProjectResponses, CreateProjectSampleGroupData, CreateProjectSampleGroupErrors, CreateProjectSampleGroupResponses, CreateQcPolicyData, CreateQcPolicyErrors, CreateQcPolicyResponses, CreateReportData, CreateReportErrors, CreateReportResponses, CreateRunData, CreateRunErrors, CreateRunResponses, DeleteInsightData, DeleteInsightErrors, DeleteInsightResponses, DeleteMemberData, DeleteMemberErrors, DeleteMemberResponses, DeleteProjectFileData, DeleteProjectFileErrors, DeleteProjectFileResponses, DeleteProjectSampleGroupData, DeleteProjectSampleGroupErrors, DeleteProjectSampleGroupResponses, DeleteReportData, DeleteReportErrors, DeleteReportResponses, DuplicateInsightData, DuplicateInsightErrors, DuplicateInsightResponses, DuplicateReportData, DuplicateReportErrors, DuplicateReportResponses, ExecuteAdhocInsightData, ExecuteAdhocInsightErrors, ExecuteAdhocInsightResponses, ExecuteSavedInsightData, ExecuteSavedInsightErrors, ExecuteSavedInsightResponses, ExecuteSavedReportData, ExecuteSavedReportErrors, ExecuteSavedReportResponses, ExportInsightJsonData, ExportInsightJsonErrors, ExportInsightJsonResponses, ExportInsightYamlData, ExportInsightYamlErrors, ExportInsightYamlResponses, ExportRenderedReportHtmlData, ExportRenderedReportHtmlErrors, ExportRenderedReportHtmlResponses, ExportReportJsonData, ExportReportJsonErrors, ExportReportJsonResponses, ExportReportYamlData, ExportReportYamlErrors, ExportReportYamlResponses, GetContractResultOptionsData, GetContractResultOptionsErrors, GetContractResultOptionsResponses, GetDatabaseSummaryData, GetDatabaseSummaryErrors, GetDatabaseSummaryResponses, GetDataContractData, GetDataContractErrors, GetDataContractResponses, GetFileContentData, GetFileContentErrors, GetFileContentResponses, GetInsightCapabilitiesData, GetInsightCapabilitiesResponses, GetInsightData, GetInsightErrors, GetInsightResponses, GetProjectData, GetProjectErrors, GetProjectFileContentData, GetProjectFileContentErrors, GetProjectFileContentResponses, GetProjectResponses, GetProjectRunData, GetProjectRunErrors, GetProjectRunResponses, GetProjectSampleData, GetProjectSampleErrors, GetProjectSampleGroupData, GetProjectSampleGroupErrors, GetProjectSampleGroupResponses, GetProjectSampleResponses, GetRenderedReportData, GetRenderedReportErrors, GetRenderedReportResponses, GetRunData, GetRunErrors, GetRunResponses, GetSavedReportData, GetSavedReportErrors, GetSavedReportResponses, HealthData, HealthResponses, ListDatabaseRowsData, ListDatabaseRowsErrors, ListDatabaseRowsResponses, ListDatabaseTablesData, ListDatabaseTablesErrors, ListDatabaseTablesResponses, ListDataContractsData, ListDataContractsErrors, ListDataContractsResponses, ListInsightsData, ListInsightsErrors, ListInsightsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListProjectFilesData, ListProjectFilesErrors, ListProjectFilesResponses, ListProjectRunAnalyticsMetricsData, ListProjectRunAnalyticsMetricsErrors, ListProjectRunAnalyticsMetricsResponses, ListProjectRunAnalyticsPayloadsData, ListProjectRunAnalyticsPayloadsErrors, ListProjectRunAnalyticsPayloadsResponses, ListProjectRunFilesData, ListProjectRunFilesErrors, ListProjectRunFilesResponses, ListProjectRunSampleLinksData, ListProjectRunSampleLinksErrors, ListProjectRunSampleLinksResponses, ListProjectRunSamplesData, ListProjectRunSamplesErrors, ListProjectRunSamplesResponses, ListProjectRunsData, ListProjectRunsErrors, ListProjectRunsResponses, ListProjectSampleFilesData, ListProjectSampleFilesErrors, ListProjectSampleFilesResponses, ListProjectSampleGroupMembersData, ListProjectSampleGroupMembersErrors, ListProjectSampleGroupMembersResponses, ListProjectSampleGroupsData, ListProjectSampleGroupsErrors, ListProjectSampleGroupsResponses, ListProjectSampleRunAnalyticsMetricsData, ListProjectSampleRunAnalyticsMetricsErrors, ListProjectSampleRunAnalyticsMetricsResponses, ListProjectSampleRunFilesData, ListProjectSampleRunFilesErrors, ListProjectSampleRunFilesResponses, ListProjectSampleRunsData, ListProjectSampleRunsErrors, ListProjectSampleRunsResponses, ListProjectSamplesData, ListProjectSamplesErrors, ListProjectSamplesResponses, ListProjectsData, ListProjectsResponses, ListQcPoliciesData, ListQcPoliciesErrors, ListQcPoliciesResponses, ListReportsData, ListReportsErrors, ListReportsResponses, ListRolesData, ListRolesErrors, ListRolesResponses, ListRunAnalyticsMetricsData, ListRunAnalyticsMetricsErrors, ListRunAnalyticsMetricsResponses, ListRunAnalyticsPayloadsData, ListRunAnalyticsPayloadsErrors, ListRunAnalyticsPayloadsResponses, ListRunFilesData, ListRunFilesErrors, ListRunFilesResponses, ListRunSamplesData, ListRunSamplesErrors, ListRunSamplesResponses, ListRunsData, ListRunsErrors, ListRunsResponses, ListSampleGroupsData, ListSampleGroupsErrors, ListSampleGroupsResponses, ListUserMembershipsData, ListUserMembershipsErrors, ListUserMembershipsResponses, ListUsersData, ListUsersResponses, LoginData, LoginErrors, LoginResponses, MeData, MeResponses, PatchDatabaseRowData, PatchDatabaseRowErrors, PatchDatabaseRowResponses, PatchInsightData, PatchInsightErrors, PatchInsightResponses, PatchMemberData, PatchMemberErrors, PatchMemberResponses, PatchProjectData, PatchProjectErrors, PatchProjectResponses, PatchProjectSampleGroupData, PatchProjectSampleGroupErrors, PatchProjectSampleGroupResponses, PatchQcPolicyData, PatchQcPolicyErrors, PatchQcPolicyResponses, PatchReportData, PatchReportErrors, PatchReportResponses, PatchRoleData, PatchRoleErrors, PatchRoleResponses, PatchRunData, PatchRunErrors, PatchRunResponses, PatchUserData, PatchUserErrors, PatchUserResponses, PreviewDatabaseTableData, PreviewDatabaseTableErrors, PreviewDatabaseTableResponses, RemoveProjectSampleGroupMembersData, RemoveProjectSampleGroupMembersErrors, RemoveProjectSampleGroupMembersResponses, RenderStandaloneReportData, RenderStandaloneReportErrors, RenderStandaloneReportResponses, SearchSamplesData, SearchSamplesErrors, SearchSamplesResponses, SetupData, SetupErrors, SetupResponses, SetupStatusData, SetupStatusResponses, SignupData, SignupErrors, SignupResponses, UpdateProfileData, UpdateProfileErrors, UpdateProfileResponses, UploadProjectFileData, UploadProjectFileErrors, UploadProjectFileResponses, ValidateInsightConfigData, ValidateInsightConfigErrors, ValidateInsightConfigResponses, ValidateReportConfigData, ValidateReportConfigErrors, ValidateReportConfigResponses } from './types.gen';
-import { zAddMemberResponse, zAddProjectSampleGroupMembersResponse, zAddRoleResponse, zAddUserResponse, zBulkDeleteInsightsResponse, zBulkDeleteReportsResponse, zChangePasswordResponse, zChatWithAiResponse, zCreateInsightResponse, zCreateProjectResponse, zCreateProjectSampleGroupResponse, zCreateQcPolicyResponse, zCreateReportResponse, zCreateRunResponse, zDeleteInsightResponse, zDeleteMemberResponse, zDeleteProjectFileResponse, zDeleteProjectSampleGroupResponse, zDeleteReportResponse, zDuplicateInsightResponse, zDuplicateReportResponse, zExecuteAdhocInsightResponse, zExecuteSavedInsightResponse, zExecuteSavedReportResponse, zExportInsightJsonResponse, zExportReportJsonResponse, zGetContractResultOptionsResponse, zGetDatabaseSummaryResponse, zGetDataContractResponse, zGetInsightCapabilitiesResponse, zGetInsightResponse, zGetProjectResponse, zGetProjectRunResponse, zGetProjectSampleGroupResponse, zGetProjectSampleResponse, zGetRenderedReportResponse, zGetRunResponse, zGetSavedReportResponse, zHealthResponse, zListDatabaseRowsResponse, zListDatabaseTablesResponse, zListDataContractsResponse, zListInsightsResponse, zListMembersResponse, zListProjectFilesResponse, zListProjectRunAnalyticsMetricsResponse, zListProjectRunAnalyticsPayloadsResponse, zListProjectRunFilesResponse, zListProjectRunSampleLinksResponse, zListProjectRunSamplesResponse, zListProjectRunsResponse, zListProjectSampleFilesResponse, zListProjectSampleGroupMembersResponse, zListProjectSampleGroupsResponse, zListProjectSampleRunAnalyticsMetricsResponse, zListProjectSampleRunFilesResponse, zListProjectSampleRunsResponse, zListProjectSamplesResponse, zListProjectsResponse, zListQcPoliciesResponse, zListReportsResponse, zListRolesResponse, zListRunAnalyticsMetricsResponse, zListRunAnalyticsPayloadsResponse, zListRunFilesResponse, zListRunSamplesResponse, zListRunsResponse, zListSampleGroupsResponse, zListUserMembershipsResponse, zListUsersResponse, zLoginResponse, zMeResponse, zPatchDatabaseRowResponse, zPatchInsightResponse, zPatchMemberResponse, zPatchProjectResponse, zPatchProjectSampleGroupResponse, zPatchQcPolicyResponse, zPatchReportResponse, zPatchRoleResponse, zPatchRunResponse, zPatchUserResponse, zPreviewDatabaseTableResponse, zRemoveProjectSampleGroupMembersResponse, zRenderStandaloneReportResponse, zSearchSamplesResponse, zSetupResponse, zSetupStatusResponse, zSignupResponse, zUpdateProfileResponse, zUploadProjectFileResponse, zValidateInsightConfigResponse, zValidateReportConfigResponse } from './zod.gen';
+import type { AddMemberData, AddMemberErrors, AddMemberResponses, AddProjectSampleGroupMembersData, AddProjectSampleGroupMembersErrors, AddProjectSampleGroupMembersResponses, AddRoleData, AddRoleErrors, AddRoleResponses, AddUserData, AddUserErrors, AddUserResponses, BulkDeleteInsightsData, BulkDeleteInsightsErrors, BulkDeleteInsightsResponses, BulkDeleteReportsData, BulkDeleteReportsErrors, BulkDeleteReportsResponses, ChangePasswordData, ChangePasswordErrors, ChangePasswordResponses, ChatWithAiData, ChatWithAiErrors, ChatWithAiResponses, CreateCatalogDatasetData, CreateCatalogDatasetErrors, CreateCatalogDatasetResponses, CreateInsightData, CreateInsightErrors, CreateInsightResponses, CreateProjectData, CreateProjectErrors, CreateProjectResponses, CreateProjectSampleGroupData, CreateProjectSampleGroupErrors, CreateProjectSampleGroupResponses, CreateQcPolicyData, CreateQcPolicyErrors, CreateQcPolicyResponses, CreateReportData, CreateReportErrors, CreateReportResponses, CreateRunData, CreateRunErrors, CreateRunResponses, CreateShapeDraftData, CreateShapeDraftErrors, CreateShapeDraftResponses, DeleteInsightData, DeleteInsightErrors, DeleteInsightResponses, DeleteMemberData, DeleteMemberErrors, DeleteMemberResponses, DeleteProjectFileData, DeleteProjectFileErrors, DeleteProjectFileResponses, DeleteProjectSampleGroupData, DeleteProjectSampleGroupErrors, DeleteProjectSampleGroupResponses, DeleteReportData, DeleteReportErrors, DeleteReportResponses, DescribeCatalogDatasetData, DescribeCatalogDatasetErrors, DescribeCatalogDatasetResponses, DuplicateInsightData, DuplicateInsightErrors, DuplicateInsightResponses, DuplicateReportData, DuplicateReportErrors, DuplicateReportResponses, ExecuteAdhocInsightData, ExecuteAdhocInsightErrors, ExecuteAdhocInsightResponses, ExecuteSavedInsightData, ExecuteSavedInsightErrors, ExecuteSavedInsightResponses, ExecuteSavedReportData, ExecuteSavedReportErrors, ExecuteSavedReportResponses, ExportInsightJsonData, ExportInsightJsonErrors, ExportInsightJsonResponses, ExportInsightYamlData, ExportInsightYamlErrors, ExportInsightYamlResponses, ExportRenderedReportHtmlData, ExportRenderedReportHtmlErrors, ExportRenderedReportHtmlResponses, ExportReportJsonData, ExportReportJsonErrors, ExportReportJsonResponses, ExportReportYamlData, ExportReportYamlErrors, ExportReportYamlResponses, GetCatalogFieldProfileData, GetCatalogFieldProfileErrors, GetCatalogFieldProfileResponses, GetContractResultOptionsData, GetContractResultOptionsErrors, GetContractResultOptionsResponses, GetDatabaseSummaryData, GetDatabaseSummaryErrors, GetDatabaseSummaryResponses, GetDataContractData, GetDataContractErrors, GetDataContractResponses, GetFileContentData, GetFileContentErrors, GetFileContentResponses, GetInsightCapabilitiesData, GetInsightCapabilitiesResponses, GetInsightData, GetInsightErrors, GetInsightResponses, GetProjectData, GetProjectErrors, GetProjectFileContentData, GetProjectFileContentErrors, GetProjectFileContentResponses, GetProjectResponses, GetProjectRunData, GetProjectRunErrors, GetProjectRunResponses, GetProjectSampleData, GetProjectSampleErrors, GetProjectSampleGroupData, GetProjectSampleGroupErrors, GetProjectSampleGroupResponses, GetProjectSampleResponses, GetRenderedReportData, GetRenderedReportErrors, GetRenderedReportResponses, GetRunData, GetRunErrors, GetRunResponses, GetSavedReportData, GetSavedReportErrors, GetSavedReportResponses, HealthData, HealthResponses, ListCatalogDatasetsData, ListCatalogDatasetsErrors, ListCatalogDatasetsResponses, ListCatalogFieldValuesData, ListCatalogFieldValuesErrors, ListCatalogFieldValuesResponses, ListCatalogJoinsData, ListCatalogJoinsErrors, ListCatalogJoinsResponses, ListCatalogQueryFamiliesData, ListCatalogQueryFamiliesErrors, ListCatalogQueryFamiliesResponses, ListDatabaseRowsData, ListDatabaseRowsErrors, ListDatabaseRowsResponses, ListDatabaseTablesData, ListDatabaseTablesErrors, ListDatabaseTablesResponses, ListDataContractsData, ListDataContractsErrors, ListDataContractsResponses, ListInsightsData, ListInsightsErrors, ListInsightsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListProjectFilesData, ListProjectFilesErrors, ListProjectFilesResponses, ListProjectRunAnalyticsMetricsData, ListProjectRunAnalyticsMetricsErrors, ListProjectRunAnalyticsMetricsResponses, ListProjectRunAnalyticsPayloadsData, ListProjectRunAnalyticsPayloadsErrors, ListProjectRunAnalyticsPayloadsResponses, ListProjectRunFilesData, ListProjectRunFilesErrors, ListProjectRunFilesResponses, ListProjectRunSampleLinksData, ListProjectRunSampleLinksErrors, ListProjectRunSampleLinksResponses, ListProjectRunSamplesData, ListProjectRunSamplesErrors, ListProjectRunSamplesResponses, ListProjectRunsData, ListProjectRunsErrors, ListProjectRunsResponses, ListProjectSampleFilesData, ListProjectSampleFilesErrors, ListProjectSampleFilesResponses, ListProjectSampleGroupMembersData, ListProjectSampleGroupMembersErrors, ListProjectSampleGroupMembersResponses, ListProjectSampleGroupsData, ListProjectSampleGroupsErrors, ListProjectSampleGroupsResponses, ListProjectSampleRunAnalyticsMetricsData, ListProjectSampleRunAnalyticsMetricsErrors, ListProjectSampleRunAnalyticsMetricsResponses, ListProjectSampleRunFilesData, ListProjectSampleRunFilesErrors, ListProjectSampleRunFilesResponses, ListProjectSampleRunsData, ListProjectSampleRunsErrors, ListProjectSampleRunsResponses, ListProjectSamplesData, ListProjectSamplesErrors, ListProjectSamplesResponses, ListProjectsData, ListProjectsResponses, ListQcPoliciesData, ListQcPoliciesErrors, ListQcPoliciesResponses, ListReportsData, ListReportsErrors, ListReportsResponses, ListRolesData, ListRolesErrors, ListRolesResponses, ListRunAnalyticsMetricsData, ListRunAnalyticsMetricsErrors, ListRunAnalyticsMetricsResponses, ListRunAnalyticsPayloadsData, ListRunAnalyticsPayloadsErrors, ListRunAnalyticsPayloadsResponses, ListRunFilesData, ListRunFilesErrors, ListRunFilesResponses, ListRunSamplesData, ListRunSamplesErrors, ListRunSamplesResponses, ListRunsData, ListRunsErrors, ListRunsResponses, ListSampleGroupsData, ListSampleGroupsErrors, ListSampleGroupsResponses, ListUserMembershipsData, ListUserMembershipsErrors, ListUserMembershipsResponses, ListUsersData, ListUsersResponses, LoginData, LoginErrors, LoginResponses, MeData, MeResponses, PatchDatabaseRowData, PatchDatabaseRowErrors, PatchDatabaseRowResponses, PatchInsightData, PatchInsightErrors, PatchInsightResponses, PatchMemberData, PatchMemberErrors, PatchMemberResponses, PatchProjectData, PatchProjectErrors, PatchProjectResponses, PatchProjectSampleGroupData, PatchProjectSampleGroupErrors, PatchProjectSampleGroupResponses, PatchQcPolicyData, PatchQcPolicyErrors, PatchQcPolicyResponses, PatchReportData, PatchReportErrors, PatchReportResponses, PatchRoleData, PatchRoleErrors, PatchRoleResponses, PatchRunData, PatchRunErrors, PatchRunResponses, PatchShapeDraftData, PatchShapeDraftErrors, PatchShapeDraftResponses, PatchUserData, PatchUserErrors, PatchUserResponses, PreviewDatabaseTableData, PreviewDatabaseTableErrors, PreviewDatabaseTableResponses, ProfileCatalogDatasetData, ProfileCatalogDatasetErrors, ProfileCatalogDatasetResponses, PublishShapeVersionData, PublishShapeVersionErrors, PublishShapeVersionResponses, RemoveProjectSampleGroupMembersData, RemoveProjectSampleGroupMembersErrors, RemoveProjectSampleGroupMembersResponses, RenderStandaloneReportData, RenderStandaloneReportErrors, RenderStandaloneReportResponses, ReplaceCatalogDatasetRecordsData, ReplaceCatalogDatasetRecordsErrors, ReplaceCatalogDatasetRecordsResponses, SearchCatalogFieldsData, SearchCatalogFieldsErrors, SearchCatalogFieldsResponses, SearchSamplesData, SearchSamplesErrors, SearchSamplesResponses, SetupData, SetupErrors, SetupResponses, SetupStatusData, SetupStatusResponses, SignupData, SignupErrors, SignupResponses, UpdateProfileData, UpdateProfileErrors, UpdateProfileResponses, UploadProjectFileData, UploadProjectFileErrors, UploadProjectFileResponses, ValidateInsightConfigData, ValidateInsightConfigErrors, ValidateInsightConfigResponses, ValidateReportConfigData, ValidateReportConfigErrors, ValidateReportConfigResponses } from './types.gen';
+import { zAddMemberResponse, zAddProjectSampleGroupMembersResponse, zAddRoleResponse, zAddUserResponse, zBulkDeleteInsightsResponse, zBulkDeleteReportsResponse, zChangePasswordResponse, zChatWithAiResponse, zCreateCatalogDatasetResponse, zCreateInsightResponse, zCreateProjectResponse, zCreateProjectSampleGroupResponse, zCreateQcPolicyResponse, zCreateReportResponse, zCreateRunResponse, zCreateShapeDraftResponse, zDeleteInsightResponse, zDeleteMemberResponse, zDeleteProjectFileResponse, zDeleteProjectSampleGroupResponse, zDeleteReportResponse, zDescribeCatalogDatasetResponse, zDuplicateInsightResponse, zDuplicateReportResponse, zExecuteAdhocInsightResponse, zExecuteSavedInsightResponse, zExecuteSavedReportResponse, zExportInsightJsonResponse, zExportReportJsonResponse, zGetCatalogFieldProfileResponse, zGetContractResultOptionsResponse, zGetDatabaseSummaryResponse, zGetDataContractResponse, zGetInsightCapabilitiesResponse, zGetInsightResponse, zGetProjectResponse, zGetProjectRunResponse, zGetProjectSampleGroupResponse, zGetProjectSampleResponse, zGetRenderedReportResponse, zGetRunResponse, zGetSavedReportResponse, zHealthResponse, zListCatalogDatasetsResponse, zListCatalogFieldValuesResponse, zListCatalogJoinsResponse, zListCatalogQueryFamiliesResponse, zListDatabaseRowsResponse, zListDatabaseTablesResponse, zListDataContractsResponse, zListInsightsResponse, zListMembersResponse, zListProjectFilesResponse, zListProjectRunAnalyticsMetricsResponse, zListProjectRunAnalyticsPayloadsResponse, zListProjectRunFilesResponse, zListProjectRunSampleLinksResponse, zListProjectRunSamplesResponse, zListProjectRunsResponse, zListProjectSampleFilesResponse, zListProjectSampleGroupMembersResponse, zListProjectSampleGroupsResponse, zListProjectSampleRunAnalyticsMetricsResponse, zListProjectSampleRunFilesResponse, zListProjectSampleRunsResponse, zListProjectSamplesResponse, zListProjectsResponse, zListQcPoliciesResponse, zListReportsResponse, zListRolesResponse, zListRunAnalyticsMetricsResponse, zListRunAnalyticsPayloadsResponse, zListRunFilesResponse, zListRunSamplesResponse, zListRunsResponse, zListSampleGroupsResponse, zListUserMembershipsResponse, zListUsersResponse, zLoginResponse, zMeResponse, zPatchDatabaseRowResponse, zPatchInsightResponse, zPatchMemberResponse, zPatchProjectResponse, zPatchProjectSampleGroupResponse, zPatchQcPolicyResponse, zPatchReportResponse, zPatchRoleResponse, zPatchRunResponse, zPatchShapeDraftResponse, zPatchUserResponse, zPreviewDatabaseTableResponse, zProfileCatalogDatasetResponse, zPublishShapeVersionResponse, zRemoveProjectSampleGroupMembersResponse, zRenderStandaloneReportResponse, zReplaceCatalogDatasetRecordsResponse, zSearchCatalogFieldsResponse, zSearchSamplesResponse, zSetupResponse, zSetupStatusResponse, zSignupResponse, zUpdateProfileResponse, zUploadProjectFileResponse, zValidateInsightConfigResponse, zValidateReportConfigResponse } from './zod.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -502,6 +502,134 @@ export const patchProject = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
+ * List Catalog Datasets
+ *
+ * List datasets in the request-scoped semantic runtime catalog.
+ */
+export const listCatalogDatasets = <ThrowOnError extends boolean = false>(options: Options<ListCatalogDatasetsData, ThrowOnError>): RequestResult<ListCatalogDatasetsResponses, ListCatalogDatasetsErrors, ThrowOnError, 'data'> => (options.client ?? client).get<ListCatalogDatasetsResponses, ListCatalogDatasetsErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zListCatalogDatasetsResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/datasets',
+    ...options
+});
+
+/**
+ * Create Catalog Dataset
+ *
+ * Create a dataset pinned to a published shape with semantic-only fields.
+ */
+export const createCatalogDataset = <ThrowOnError extends boolean = false>(options: Options<CreateCatalogDatasetData, ThrowOnError>): RequestResult<CreateCatalogDatasetResponses, CreateCatalogDatasetErrors, ThrowOnError, 'data'> => (options.client ?? client).post<CreateCatalogDatasetResponses, CreateCatalogDatasetErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zCreateCatalogDatasetResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/datasets',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Describe Catalog Dataset
+ *
+ * Describe one catalog dataset without physical storage metadata.
+ */
+export const describeCatalogDataset = <ThrowOnError extends boolean = false>(options: Options<DescribeCatalogDatasetData, ThrowOnError>): RequestResult<DescribeCatalogDatasetResponses, DescribeCatalogDatasetErrors, ThrowOnError, 'data'> => (options.client ?? client).get<DescribeCatalogDatasetResponses, DescribeCatalogDatasetErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zDescribeCatalogDatasetResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}',
+    ...options
+});
+
+/**
+ * Profile Catalog Dataset
+ *
+ * Lazily recompute a disposable profile when its source fingerprint changes.
+ */
+export const profileCatalogDataset = <ThrowOnError extends boolean = false>(options: Options<ProfileCatalogDatasetData, ThrowOnError>): RequestResult<ProfileCatalogDatasetResponses, ProfileCatalogDatasetErrors, ThrowOnError, 'data'> => (options.client ?? client).post<ProfileCatalogDatasetResponses, ProfileCatalogDatasetErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zProfileCatalogDatasetResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/profile',
+    ...options
+});
+
+/**
+ * Replace Catalog Dataset Records
+ *
+ * Validate and replace rows in an application-managed record dataset.
+ */
+export const replaceCatalogDatasetRecords = <ThrowOnError extends boolean = false>(options: Options<ReplaceCatalogDatasetRecordsData, ThrowOnError>): RequestResult<ReplaceCatalogDatasetRecordsResponses, ReplaceCatalogDatasetRecordsErrors, ThrowOnError, 'data'> => (options.client ?? client).put<ReplaceCatalogDatasetRecordsResponses, ReplaceCatalogDatasetRecordsErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zReplaceCatalogDatasetRecordsResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/datasets/{data_contract_id}/records',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Catalog Field Profile
+ *
+ * Read an optional disposable profile for one canonical field.
+ */
+export const getCatalogFieldProfile = <ThrowOnError extends boolean = false>(options: Options<GetCatalogFieldProfileData, ThrowOnError>): RequestResult<GetCatalogFieldProfileResponses, GetCatalogFieldProfileErrors, ThrowOnError, 'data'> => (options.client ?? client).get<GetCatalogFieldProfileResponses, GetCatalogFieldProfileErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zGetCatalogFieldProfileResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/field-profile',
+    ...options
+});
+
+/**
+ * List Catalog Field Values
+ *
+ * List bounded categorical values from an optional disposable profile.
+ */
+export const listCatalogFieldValues = <ThrowOnError extends boolean = false>(options: Options<ListCatalogFieldValuesData, ThrowOnError>): RequestResult<ListCatalogFieldValuesResponses, ListCatalogFieldValuesErrors, ThrowOnError, 'data'> => (options.client ?? client).get<ListCatalogFieldValuesResponses, ListCatalogFieldValuesErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zListCatalogFieldValuesResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/field-values',
+    ...options
+});
+
+/**
+ * Search Catalog Fields
+ *
+ * Search canonical fields by semantics and typed-query compatibility.
+ */
+export const searchCatalogFields = <ThrowOnError extends boolean = false>(options: Options<SearchCatalogFieldsData, ThrowOnError>): RequestResult<SearchCatalogFieldsResponses, SearchCatalogFieldsErrors, ThrowOnError, 'data'> => (options.client ?? client).get<SearchCatalogFieldsResponses, SearchCatalogFieldsErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zSearchCatalogFieldsResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/fields',
+    ...options
+});
+
+/**
+ * List Catalog Joins
+ *
+ * List joins using logical identities rather than physical foreign keys.
+ */
+export const listCatalogJoins = <ThrowOnError extends boolean = false>(options: Options<ListCatalogJoinsData, ThrowOnError>): RequestResult<ListCatalogJoinsResponses, ListCatalogJoinsErrors, ThrowOnError, 'data'> => (options.client ?? client).get<ListCatalogJoinsResponses, ListCatalogJoinsErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zListCatalogJoinsResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/joins',
+    ...options
+});
+
+/**
+ * List Catalog Query Families
+ *
+ * List available query families, views, and provider requirements.
+ */
+export const listCatalogQueryFamilies = <ThrowOnError extends boolean = false>(options: Options<ListCatalogQueryFamiliesData, ThrowOnError>): RequestResult<ListCatalogQueryFamiliesResponses, ListCatalogQueryFamiliesErrors, ThrowOnError, 'data'> => (options.client ?? client).get<ListCatalogQueryFamiliesResponses, ListCatalogQueryFamiliesErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zListCatalogQueryFamiliesResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/catalog/query-families',
+    ...options
+});
+
+/**
  * List Project Files
  *
  * List managed and referenced files linked to a project.
@@ -962,6 +1090,50 @@ export const listProjectSampleRunFiles = <ThrowOnError extends boolean = false>(
     responseValidator: async (data) => await zListProjectSampleRunFilesResponse.parseAsync(data),
     responseStyle: 'data',
     url: '/api/v1/projects/{project_id}/samples/{sample_id}/runs/{run_id}/files',
+    ...options
+});
+
+/**
+ * Create Shape Draft
+ *
+ * Create the next mutable version of a project-owned data shape.
+ */
+export const createShapeDraft = <ThrowOnError extends boolean = false>(options: Options<CreateShapeDraftData, ThrowOnError>): RequestResult<CreateShapeDraftResponses, CreateShapeDraftErrors, ThrowOnError, 'data'> => (options.client ?? client).post<CreateShapeDraftResponses, CreateShapeDraftErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zCreateShapeDraftResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/shapes/drafts',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Patch Shape Draft
+ *
+ * Validate and edit a draft while rejecting published-version mutation.
+ */
+export const patchShapeDraft = <ThrowOnError extends boolean = false>(options: Options<PatchShapeDraftData, ThrowOnError>): RequestResult<PatchShapeDraftResponses, PatchShapeDraftErrors, ThrowOnError, 'data'> => (options.client ?? client).patch<PatchShapeDraftResponses, PatchShapeDraftErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zPatchShapeDraftResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Publish Shape Version
+ *
+ * Publish a validated draft as an immutable contract-pinnable version.
+ */
+export const publishShapeVersion = <ThrowOnError extends boolean = false>(options: Options<PublishShapeVersionData, ThrowOnError>): RequestResult<PublishShapeVersionResponses, PublishShapeVersionErrors, ThrowOnError, 'data'> => (options.client ?? client).post<PublishShapeVersionResponses, PublishShapeVersionErrors, ThrowOnError, 'data'>({
+    responseValidator: async (data) => await zPublishShapeVersionResponse.parseAsync(data),
+    responseStyle: 'data',
+    url: '/api/v1/projects/{project_id}/shapes/{data_shape_id}/versions/{version}/publish',
     ...options
 });
 

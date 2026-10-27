@@ -25,6 +25,16 @@ METADATA_COLUMNS_BY_BATCH_FIELD: dict[str, frozenset[str]] = {
     "sample_variant_calls": _OCCURRENCE_COLUMNS,
     "sample_structural_variant_calls": _OCCURRENCE_COLUMNS,
     "timeline_events": frozenset({"subject_id", "sample_id", "run_sample_id"}),
+    "series_points": _OCCURRENCE_COLUMNS,
+    "annotation_spans": frozenset(),
+    "feature_set_coverage": frozenset(
+        {
+            "data_contract_id",
+            "run_contract_id",
+            "run_sample_id",
+            "sample_id",
+        }
+    ),
     "result_payloads": _OCCURRENCE_COLUMNS | {"field_id"},
     "gene_alteration_state": frozenset(
         {

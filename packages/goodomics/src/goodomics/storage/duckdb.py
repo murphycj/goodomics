@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -16,6 +18,7 @@ from pydantic import BaseModel
 
 from goodomics.schemas.models import (
     AnalyticsIngestBatch,
+    AnnotationSpan,
     CopyNumberSegment,
     DataSource,
     EntityAttribute,
@@ -23,6 +26,7 @@ from goodomics.schemas.models import (
     FeatureAlias,
     FeatureCall,
     FeatureSet,
+    FeatureSetCoverageObservation,
     FeatureSetMember,
     FeatureValueNumeric,
     GeneAlterationState,
@@ -33,6 +37,7 @@ from goodomics.schemas.models import (
     SampleMetric,
     SampleStructuralVariantCall,
     SampleVariantCall,
+    SeriesPoint,
     StructuralVariantEvent,
     TimelineEvent,
     ToolVersion,
@@ -42,6 +47,62 @@ from goodomics.schemas.models import (
 )
 
 RecordT = TypeVar("RecordT", bound=BaseModel)
+
+
+def _managed_record_table_name(contract_pk: int) -> str:
+    """Derive a private deterministic physical name from the internal contract key."""
+
+    digest = hashlib.sha256(str(contract_pk).encode()).hexdigest()[:16]
+    return f"managed_records_{digest}"
+
+
+def _managed_record_column(field_id: str) -> str:
+    """Derive a private column name without embedding the user-owned field ID."""
+
+    digest = hashlib.sha256(field_id.encode()).hexdigest()[:16]
+    return f"field_{digest}"
+
+
+def _managed_scalar_sql(scalar_type: str) -> str:
+    """Map approved semantic scalar types to DuckDB column types."""
+
+    try:
+        return {
+            "numeric": "DOUBLE",
+            "integer": "BIGINT",
+            "string": "TEXT",
+            "categorical": "TEXT",
+            "boolean": "BOOLEAN",
+            "date": "DATE",
+            "datetime": "TIMESTAMP",
+            "json": "JSON",
+        }[scalar_type]
+    except KeyError as error:
+        raise ValueError(
+            f"Unsupported managed-record scalar type: {scalar_type}"
+        ) from error
+
+
+def _coerce_managed_scalar(value: Any, scalar_type: str) -> Any:
+    """Validate one managed-record value against its approved scalar type."""
+
+    if value is None:
+        return None
+    if scalar_type == "integer" and (
+        not isinstance(value, int) or isinstance(value, bool)
+    ):
+        raise ValueError(f"Expected integer value, received {value!r}.")
+    if scalar_type == "numeric" and (
+        not isinstance(value, int | float) or isinstance(value, bool)
+    ):
+        raise ValueError(f"Expected numeric value, received {value!r}.")
+    if scalar_type in {"string", "categorical"} and not isinstance(value, str):
+        raise ValueError(f"Expected string value, received {value!r}.")
+    if scalar_type == "boolean" and not isinstance(value, bool):
+        raise ValueError(f"Expected boolean value, received {value!r}.")
+    if scalar_type == "json":
+        return json.dumps(value, default=str)
+    return value
 
 
 @dataclass(frozen=True)
@@ -359,6 +420,29 @@ SERIALIZERS: tuple[AnalyticalTableSerializer, ...] = (
         TimelineEvent,
         "subject_id, event_type, start_time",
         unique_columns=("event_id",),
+    ),
+    AnalyticalTableSerializer(
+        "series_points",
+        SeriesPoint,
+        "data_contract_id, series_id, measurement_id, position",
+        run_column="run_id",
+    ),
+    AnalyticalTableSerializer(
+        "annotation_spans",
+        AnnotationSpan,
+        "feature_id, coordinate_type, start_pos, end_pos",
+        unique_columns=("annotation_span_id",),
+    ),
+    AnalyticalTableSerializer(
+        "feature_set_coverage",
+        FeatureSetCoverageObservation,
+        "data_contract_id, run_contract_id, run_sample_id, feature_set_id",
+        unique_columns=(
+            "data_contract_id",
+            "run_contract_id",
+            "run_sample_id",
+            "feature_set_id",
+        ),
     ),
     AnalyticalTableSerializer(
         "result_payloads",
@@ -724,6 +808,22 @@ INTEGER_KEYED_TABLES: dict[str, IntegerKeyedTableDefinition] = {
             "sample_id",
             "run_sample_id",
         ),
+        "series_points": (
+            "data_contract_id",
+            "run_contract_id",
+            "run_id",
+            "run_sample_id",
+            "sample_id",
+            "source_file_id",
+        ),
+        "annotation_spans": ("feature_id",),
+        "feature_set_coverage": (
+            "data_contract_id",
+            "run_contract_id",
+            "run_sample_id",
+            "sample_id",
+            "feature_set_id",
+        ),
         "result_payloads": (
             "payload_id",
             "data_contract_id",
@@ -805,6 +905,100 @@ class DuckDBAnalyticsStore:
                 return
             self._initialize_schema()
             self._schema_ready = True
+
+    def table_columns(self, table_name: str) -> tuple[str, ...]:
+        """Return public columns for one registered canonical analytical table."""
+
+        try:
+            return SERIALIZERS_BY_TABLE[table_name].columns
+        except KeyError as error:
+            if not re.fullmatch(r"managed_records_[0-9a-f]{16}", table_name):
+                raise ValueError(f"Unknown analytical table: {table_name}") from error
+        self.ensure_schema()
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"DESCRIBE {_quote_identifier(table_name)}"
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def managed_record_relation(
+        self, *, contract_pk: int, field_ids: Sequence[str] = ()
+    ) -> tuple[str, dict[str, str]]:
+        """Resolve trusted private storage names for a managed record dataset."""
+
+        return _managed_record_table_name(contract_pk), {
+            field_id: _managed_record_column(field_id) for field_id in field_ids
+        }
+
+    def create_managed_record_table(
+        self,
+        *,
+        contract_pk: int,
+        fields: Mapping[str, str],
+    ) -> None:
+        """Create an application-named typed record table from approved scalars."""
+
+        if not fields:
+            raise ValueError("Managed record tables require at least one field.")
+        table_name = _managed_record_table_name(contract_pk)
+        column_sql = ["row_id TEXT PRIMARY KEY"]
+        for field_id, scalar_type in fields.items():
+            column = _managed_record_column(field_id)
+            column_sql.append(
+                f"{_quote_identifier(column)} {_managed_scalar_sql(scalar_type)}"
+            )
+        self.ensure_schema()
+        with self._connect() as connection:
+            connection.execute(
+                f"CREATE TABLE IF NOT EXISTS {_quote_identifier(table_name)} "
+                f"({', '.join(column_sql)})"
+            )
+
+    def replace_managed_record_rows(
+        self,
+        *,
+        contract_pk: int,
+        fields: Mapping[str, str],
+        rows: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Validate and replace rows in one application-managed record table."""
+
+        self.create_managed_record_table(contract_pk=contract_pk, fields=fields)
+        table_name = _managed_record_table_name(contract_pk)
+        field_ids = list(fields)
+        columns = ["row_id", *(_managed_record_column(value) for value in field_ids)]
+        normalized: list[tuple[Any, ...]] = []
+        seen: set[str] = set()
+        for row in rows:
+            unknown = set(row).difference({"row_id", *field_ids})
+            if unknown:
+                raise ValueError(
+                    "Unknown managed record field(s): " + ", ".join(sorted(unknown))
+                )
+            row_id = row.get("row_id")
+            if not isinstance(row_id, str) or not row_id.strip():
+                raise ValueError("Every managed record row requires a nonblank row_id.")
+            if row_id in seen:
+                raise ValueError(f"Duplicate managed record row_id: {row_id}")
+            seen.add(row_id)
+            normalized.append(
+                (
+                    row_id,
+                    *(
+                        _coerce_managed_scalar(row.get(field_id), fields[field_id])
+                        for field_id in field_ids
+                    ),
+                )
+            )
+        placeholders = ", ".join("?" for _ in columns)
+        with self._connect() as connection:
+            connection.execute(f"DELETE FROM {_quote_identifier(table_name)}")
+            if normalized:
+                connection.executemany(
+                    f"INSERT INTO {_quote_identifier(table_name)} "
+                    f"({_column_list(columns)}) VALUES ({placeholders})",
+                    normalized,
+                )
 
     def _initialize_schema(self) -> None:
         """Create analytical tables, dimensions, and views in DuckDB."""

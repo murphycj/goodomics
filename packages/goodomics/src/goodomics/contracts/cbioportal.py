@@ -139,11 +139,13 @@ def _custom_contract(
     return DataContract(
         data_contract_id=data_contract_id,
         name=name,
-        data_type="result_payload",
-        value_type="mixed",
-        entity_grain="sample",
-        query_modes_json={"modes": ["payload"]},
-        intrinsic_producer_families_json={"families": ["cbioportal"]},
+        data_shape_id="structured",
+        data_shape_version=1,
+        shape_bindings_json={
+            "entity_type": "sample",
+            "observation_kind": "result_payload",
+        },
+        search_tags=["payload", "cbioportal"],
         description=(
             values.get("contract_description")
             or values.get("profile_description")
@@ -151,6 +153,7 @@ def _custom_contract(
         ),
         metadata_json={
             "contract_scope": "source_specific_contract",
+            "producer_families": ["cbioportal"],
             "source_format": "cbioportal",
             "source_meta_file": source_meta_file,
             "source_contract_metadata": {

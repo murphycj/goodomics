@@ -10,7 +10,7 @@ import argparse
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import duckdb
 from goodomics.projects import (
@@ -26,6 +26,8 @@ from goodomics.storage.sqlalchemy import (
     DataContractAnalysisTypeRecord,
     DataContractFieldRecord,
     DataContractRecord,
+    DataShapeRecord,
+    DataShapeVersionRecord,
     ProjectRecord,
     RunContractRecord,
     RunContractSampleRecord,
@@ -37,6 +39,7 @@ from goodomics.storage.sqlalchemy import (
     get_record_by_field,
     initialized_store,
 )
+from sqlmodel import select
 
 DEFAULT_GOODOMICS_ROOT = Path(".goodomics")
 DEFAULT_ANALYTICS_PATH = analytics_path_for_project(
@@ -244,31 +247,47 @@ async def _write_metadata_records(
         if analysis_type.id is None or method.id is None:
             raise RuntimeError("Analysis metadatas were not persisted")
 
+        shape_rows = (
+            await session.exec(
+                select(DataShapeRecord, DataShapeVersionRecord)
+                .join(
+                    DataShapeVersionRecord,
+                    cast(Any, DataShapeVersionRecord.data_shape_id)
+                    == DataShapeRecord.id,
+                )
+                .where(cast(Any, DataShapeVersionRecord.version) == 1)
+            )
+        ).all()
+        shape_versions = {
+            shape.data_shape_id: version.id
+            for shape, version in shape_rows
+            if version.id is not None
+        }
         contracts: list[DataContractRecord] = []
-        for contract_id, name, data_type, primary_table in (
+        for contract_id, name, shape_id, observation_kind in (
             (
                 "synthetic_qc",
                 "Synthetic QC metrics",
-                "sample_metrics",
-                "sample_metrics",
+                "entity",
+                "generic_metrics",
             ),
             (
                 "synthetic_expression",
                 "Synthetic gene expression",
-                "feature_value_numeric",
-                "feature_value_numeric",
+                "feature",
+                "feature_matrix",
             ),
         ):
             contract = DataContractRecord(
                 data_contract_id=contract_id,
                 project_id=project.id,
                 name=name,
-                data_type=data_type,
-                value_type="numeric",
-                entity_grain="sample",
-                query_modes_json={"primary_table": primary_table},
-                intrinsic_producer_families_json={"families": ["synthetic"]},
-                last_profiled_at=now,
+                data_shape_version_id=cast(int, shape_versions[shape_id]),
+                shape_bindings_json={
+                    "entity_type": "sample",
+                    "observation_kind": observation_kind,
+                },
+                search_tags_json=["synthetic", "numeric"],
             )
             session.add(contract)
             contracts.append(contract)
@@ -288,11 +307,9 @@ async def _write_metadata_records(
                 data_contract_id=cast(int, contracts[0].id),
                 field_id="qc.metric.01",
                 display_name="Synthetic QC metric",
-                value_type="numeric",
-                entity_scope="sample",
-                primary_table="sample_metrics",
-                physical_tables_json={"tables": ["sample_metrics"]},
-                query_ref_json={"table": "sample_metrics", "field_id": "qc.metric.01"},
+                purpose="value",
+                scalar_type="numeric",
+                semantic_type="measure",
             )
         )
 

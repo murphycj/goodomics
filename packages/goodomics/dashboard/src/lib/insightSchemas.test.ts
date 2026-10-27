@@ -1,78 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { zSavedInsightRead } from "../api/generated/zod.gen";
-import {
-  insightDraftToCreate,
-  reportDraftToCreate,
-  savedInsightToDraft,
-  savedReportToDraft,
-} from "./insightSchemas";
+import { insightDefinitionSchema, savedInsightReadSchema } from "./insightSchemas";
 
-const dates = {
-  created_at: "2026-08-07T12:00:00Z",
-  updated_at: "2026-08-07T12:00:00Z",
-};
-
-describe("generated response validation", () => {
-  it("accepts meaningful nullable optionals at the wire boundary", () => {
-    expect(() => zSavedInsightRead.parse({
-      ...dates,
-      insight_id: "insight-1",
-      url_slug: "insight-1",
-      project_id: "project-1",
-      name: "Subject table",
-      description: null,
-      version: 1,
-      analysis: {
+describe("version 2 insight schema", () => {
+  it("preserves canonical field strings in a discriminated query", () => {
+    const definition = insightDefinitionSchema.parse({
+      version: 2,
+      name: "Cancer types",
+      query: {
+        kind: "summary",
         grain: "subject",
-        values: [
-          { field: "metadata/sample/sample_name", as: null, label: null, scope: null },
-          { field: "metadata/sample/subject_id" },
-          { field: "metadata/sample/sample_id" },
-        ],
+        group_by: [{ field: "cbioportal:clinical:subjects/cancer_type" }],
+        aggregations: [{ field: "metadata/subject/subject_id", aggregation: "count_distinct", as: "subjects" }],
       },
-      view: { kind: "table", hidden_values: [] },
-    })).not.toThrow();
-  });
-});
-
-describe("builder adapters", () => {
-  it("normalizes nullable insight values and excludes read metadata on create", () => {
-    const saved = zSavedInsightRead.parse({
-      ...dates,
-      insight_id: "insight-1",
-      url_slug: "insight-1",
-      project_id: "project-1",
-      name: "Subject table",
-      description: null,
-      version: 1,
-      analysis: {
-        grain: "subject",
-        values: [{ field: "metadata/sample/sample_name", as: null, label: null, scope: null }],
-      },
-      view: { kind: "table", hidden_values: [] },
+      view: { kind: "table" },
     });
-    const draft = savedInsightToDraft(saved);
-    expect(draft.analysis.values[0]).toMatchObject({ aggregation: "raw", filters: [] });
-    expect(draft.analysis.values[0]).not.toHaveProperty("as");
-    const create = insightDraftToCreate(draft, {
-      name: saved.name,
-      project_id: saved.project_id,
-    });
-    expect(create).not.toHaveProperty("created_at");
-    expect(create).not.toHaveProperty("url_slug");
+    expect(definition.query.kind).toBe("summary");
+    if (definition.query.kind === "summary") {
+      expect(definition.query.group_by?.[0]?.field).toBe("cbioportal:clinical:subjects/cancer_type");
+    }
   });
 
-  it("materializes report defaults and produces a generated create contract", () => {
-    const draft = savedReportToDraft({
-      ...dates,
-      report_id: "report-1",
-      url_slug: "report-1",
+  it("parses saved responses with defaulted query and view discriminators", () => {
+    const saved = savedInsightReadSchema.parse({
+      created_at: "2026-08-12T12:00:00Z",
+      description: null,
+      insight_id: "insight-1",
+      name: "Sample table",
       project_id: "project-1",
-      name: "QC report",
-      version: 1,
-      insights: [{ id: "insight-1", layout: { x: 0, y: 0, width: 12, height: 4 } }],
+      query: {
+        kind: "rows",
+        grain: "sample",
+        columns: [{ field: "metadata/sample/sample_id" }],
+      },
+      updated_at: "2026-08-12T12:00:00Z",
+      url_slug: "ins_sample-table",
+      version: 2,
+      view: { kind: "table" },
     });
-    expect(draft.layout).toEqual({ columns: 12, row_height: 64 });
-    expect(reportDraftToCreate(draft, "project-1").project_id).toBe("project-1");
+
+    expect(saved.query.kind).toBe("rows");
+    expect(saved.view.kind).toBe("table");
   });
 });

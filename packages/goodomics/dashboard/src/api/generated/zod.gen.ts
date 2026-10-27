@@ -140,13 +140,13 @@ export const zBodyUploadProjectFile = z.object({
 /**
  * BoxplotView
  *
- * Numeric value bindings grouped by an optional category.
+ * Box or violin rendering for distribution results.
  */
 export const zBoxplotView = z.object({
     category: z.string().nullish(),
     colors: z.record(z.string(), z.string()).optional(),
     hidden_values: z.array(z.string()).optional(),
-    kind: z.literal('boxplot'),
+    kind: z.enum(['boxplot', 'violin']),
     x_axis: zAxisConfig.nullish(),
     y_axis: zAxisConfig.nullish()
 });
@@ -161,9 +161,21 @@ export const zBulkDeleteRead = z.object({
 });
 
 /**
+ * CalculationSpec
+ *
+ * Deterministic calculation over summary outputs.
+ */
+export const zCalculationSpec = z.object({
+    as: z.string(),
+    calculation: z.enum(['percent_of_total', 'percent_of_eligible']),
+    denominator: z.string().nullish(),
+    input: z.string()
+});
+
+/**
  * CategoryChartView
  *
- * Category/value bindings shared by bar, line, area, pie, and donut views.
+ * Bar, line, area, pie, or donut rendering over compatible results.
  */
 export const zCategoryChartView = z.object({
     category: z.string().nullish(),
@@ -212,6 +224,38 @@ export const zAiChatRequest = z.object({
 });
 
 /**
+ * ContractFieldCreate
+ *
+ * Semantic field definition nested in a contract creation request.
+ */
+export const zContractFieldCreate = z.object({
+    description: z.string().nullish(),
+    direction: z.string().nullish(),
+    display_name: z.string().min(1),
+    domain_tags: z.array(z.string()).optional(),
+    field_id: z.string(),
+    priority: z.int().gte(0).nullish(),
+    purpose: z.enum([
+        'key',
+        'value',
+        'coordinate',
+        'annotation'
+    ]).optional().default('value'),
+    scalar_type: z.enum([
+        'numeric',
+        'integer',
+        'string',
+        'boolean',
+        'categorical',
+        'date',
+        'datetime',
+        'json'
+    ]),
+    semantic_type: z.string().nullish(),
+    unit: z.string().nullish()
+});
+
+/**
  * ContractResultOptionsRead
  *
  * Bounded result-scope options compatible with one data contract.
@@ -235,17 +279,24 @@ export const zCredentials = z.object({
 });
 
 /**
- * DataContractFieldRead
+ * DataContractCreate
  *
- * Queryable field exposed by a data contract.
+ * Create a project dataset pinned to a published semantic shape.
  */
-export const zDataContractFieldRead = z.object({
+export const zDataContractCreate = z.object({
+    bindings: z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable()).optional(),
+    data_contract_id: z.string(),
+    data_shape_id: z.string(),
+    data_shape_version: z.int().gte(1),
     description: z.string().nullish(),
-    direction: z.string().nullish(),
-    display_name: z.string(),
-    entity_scope: z.string().nullish(),
-    field_id: z.string(),
-    field_role: z.string(),
+    fields: z.array(zContractFieldCreate).optional(),
     metadata_json: z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
@@ -254,7 +305,23 @@ export const zDataContractFieldRead = z.object({
         z.number(),
         z.boolean()
     ]).nullable()).optional(),
-    physical_tables: z.record(z.string(), z.union([
+    name: z.string().min(1),
+    search_tags: z.array(z.string()).optional()
+});
+
+/**
+ * DataContractFieldRead
+ *
+ * Semantic field exposed by a data contract.
+ */
+export const zDataContractFieldRead = z.object({
+    description: z.string().nullish(),
+    direction: z.string().nullish(),
+    display_name: z.string(),
+    domain_tags: z.array(z.string()).optional(),
+    field: z.string(),
+    field_id: z.string(),
+    metadata_json: z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
         z.string(),
@@ -262,41 +329,20 @@ export const zDataContractFieldRead = z.object({
         z.number(),
         z.boolean()
     ]).nullable()).optional(),
-    primary_table: z.string().nullish(),
-    priority: z.string().nullish(),
-    query_ref: z.record(z.string(), z.union([
-        z.record(z.string(), z.unknown()),
-        z.array(z.unknown()),
-        z.string(),
-        z.int(),
-        z.number(),
-        z.boolean()
-    ]).nullable()).optional(),
-    summary: z.record(z.string(), z.union([
-        z.record(z.string(), z.unknown()),
-        z.array(z.unknown()),
-        z.string(),
-        z.int(),
-        z.number(),
-        z.boolean()
-    ]).nullable()).optional(),
-    unit: z.string().nullish(),
-    value_type: z.string()
+    priority: z.int().nullish(),
+    purpose: z.string(),
+    scalar_type: z.string(),
+    semantic_type: z.string().nullish(),
+    unit: z.string().nullish()
 });
 
 /**
  * DataContractRead
  *
- * Data contract contract plus fields available to insight builders.
+ * Dataset-level semantics plus fields available to insight builders.
  */
 export const zDataContractRead = z.object({
-    compatible_analysis_type_ids: z.array(z.string()).optional(),
-    data_contract_id: z.string(),
-    data_type: z.string(),
-    description: z.string().nullish(),
-    entity_grain: z.string().nullish(),
-    fields: z.array(zDataContractFieldRead).optional(),
-    intrinsic_producer_families: z.record(z.string(), z.union([
+    bindings: z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
         z.string(),
@@ -304,7 +350,10 @@ export const zDataContractRead = z.object({
         z.number(),
         z.boolean()
     ]).nullable()).optional(),
-    last_profiled_at: z.iso.datetime().nullish(),
+    compatible_analysis_type_ids: z.array(z.string()).optional(),
+    data_contract_id: z.string(),
+    description: z.string().nullish(),
+    fields: z.array(zDataContractFieldRead).optional(),
     metadata_json: z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
@@ -314,24 +363,15 @@ export const zDataContractRead = z.object({
         z.boolean()
     ]).nullable()).optional(),
     name: z.string(),
-    query_modes: z.record(z.string(), z.union([
+    search_tags: z.array(z.string()).optional(),
+    shape_version: z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
         z.string(),
         z.int(),
         z.number(),
         z.boolean()
-    ]).nullable()).optional(),
-    source_fingerprint: z.string().nullish(),
-    summary: z.record(z.string(), z.union([
-        z.record(z.string(), z.unknown()),
-        z.array(z.unknown()),
-        z.string(),
-        z.int(),
-        z.number(),
-        z.boolean()
-    ]).nullable()).optional(),
-    value_semantics: z.string().nullish()
+    ]).nullable()).optional()
 });
 
 /**
@@ -389,6 +429,16 @@ export const zDatabaseTableRead = z.object({
 });
 
 /**
+ * DeterministicSampling
+ *
+ * Explicit deterministic sampling applied after query completion.
+ */
+export const zDeterministicSampling = z.object({
+    seed: z.string().optional().default('goodomics'),
+    size: z.int().gte(1).lte(10000)
+});
+
+/**
  * FileRead
  *
  * File metadata plus the metadata link explaining why it is in scope.
@@ -427,28 +477,28 @@ export const zGridLayout = z.object({
 /**
  * HeatmapView
  *
- * Three bindings describing heatmap x, y, and cell values.
+ * Heatmap rendering for matrix-compatible results.
  */
 export const zHeatmapView = z.object({
     colors: z.array(z.string()).optional(),
     hidden_values: z.array(z.string()).optional(),
-    kind: z.literal('heatmap'),
+    kind: z.literal('heatmap').optional().default('heatmap'),
     tooltips: z.array(z.string()).optional(),
-    value: z.string(),
-    x: z.string(),
-    y: z.string()
+    value: z.string().nullish(),
+    x: z.string().nullish(),
+    y: z.string().nullish()
 });
 
 /**
  * HistogramView
  *
- * One or more independently binned numeric distributions.
+ * Histogram rendering for distribution results.
  */
 export const zHistogramView = z.object({
     bins: z.int().gte(1).lte(500).optional().default(20),
     colors: z.record(z.string(), z.string()).optional(),
     hidden_values: z.array(z.string()).optional(),
-    kind: z.literal('histogram'),
+    kind: z.literal('histogram').optional().default('histogram'),
     x_axis: zAxisConfig.nullish(),
     y_axis: zAxisConfig.nullish()
 });
@@ -466,7 +516,7 @@ export const zInsightBulkDeleteRequest = z.object({
 /**
  * InsightFilter
  *
- * A typed predicate applied before aggregation and value joining.
+ * Typed predicate applied before query-family reshaping.
  */
 export const zInsightFilter = z.object({
     field: z.string(),
@@ -549,6 +599,14 @@ export const zInsightCapabilitiesRead = z.object({
         z.number(),
         z.boolean()
     ]).nullable())),
+    query_families: z.array(z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable())),
     result_rows: zInsightResultRowsRead,
     templates: z.array(z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
@@ -558,7 +616,7 @@ export const zInsightCapabilitiesRead = z.object({
         z.number(),
         z.boolean()
     ]).nullable())),
-    version: z.literal(1)
+    version: z.literal(2)
 });
 
 /**
@@ -567,7 +625,7 @@ export const zInsightCapabilitiesRead = z.object({
  * Shared validation/explanation response for UI and AI insight drafting.
  */
 export const zInsightValidationRead = z.object({
-    capabilities_version: z.int().optional().default(1),
+    capabilities_version: z.int().optional().default(2),
     explanation: z.string(),
     messages: z.array(z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
@@ -586,6 +644,22 @@ export const zInsightValidationRead = z.object({
         z.boolean()
     ]).nullable()),
     valid: z.boolean()
+});
+
+/**
+ * ManagedRecordsReplace
+ *
+ * Complete replacement payload for one application-managed record dataset.
+ */
+export const zManagedRecordsReplace = z.object({
+    rows: z.array(z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable()))
 });
 
 /**
@@ -610,7 +684,7 @@ export const zMembershipPatchRequest = z.object({
 /**
  * NumberFormat
  *
- * Portable numeric formatting owned by a view binding.
+ * Portable numeric formatting owned by a view.
  */
 export const zNumberFormat = z.object({
     decimals: z.int().gte(0).lte(12).nullish(),
@@ -741,6 +815,17 @@ export const zProjectRead = z.object({
 });
 
 /**
+ * ProviderSettings
+ *
+ * Explicit external analysis-provider selection and parameters.
+ */
+export const zProviderSettings = z.object({
+    method: z.string(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    provider_id: z.string().nullish()
+});
+
+/**
  * QCPolicyCreate
  *
  * Payload for creating a QC policy definition.
@@ -796,6 +881,16 @@ export const zQcPolicyRead = z.object({
 });
 
 /**
+ * QueryOrder
+ *
+ * Deterministic ordering by a query output alias or grain identity.
+ */
+export const zQueryOrder = z.object({
+    by: z.string(),
+    direction: z.enum(['asc', 'desc']).optional().default('asc')
+});
+
+/**
  * RefreshPolicy
  *
  * Saved report refresh behavior.
@@ -844,7 +939,7 @@ export const zReportExecuteRequest = z.object({
 /**
  * ReportInsightLayout
  *
- * Placement of one report insight in grid coordinates.
+ * Placement of one saved insight in report grid coordinates.
  */
 export const zReportInsightLayout = z.object({
     height: z.int().gt(0),
@@ -856,7 +951,7 @@ export const zReportInsightLayout = z.object({
 /**
  * ReportInsight
  *
- * A uniquely placed saved-insight reference.
+ * Uniquely placed saved-insight reference.
  */
 export const zReportInsight = z.object({
     id: z.string().min(1),
@@ -928,7 +1023,7 @@ export const zReportResultRead = z.object({
  * Report validation result used to gate dashboard persistence.
  */
 export const zReportValidationRead = z.object({
-    capabilities_version: z.int().optional().default(1),
+    capabilities_version: z.int().optional().default(2),
     messages: z.array(z.record(z.string(), z.union([
         z.record(z.string(), z.unknown()),
         z.array(z.unknown()),
@@ -951,7 +1046,7 @@ export const zReportValidationRead = z.object({
 /**
  * ReportValidationRequest
  *
- * Complete project-aware version 1 report definition to validate.
+ * Complete project-aware version 2 report definition to validate.
  */
 export const zReportValidationRequest = z.object({
     description: z.string().nullish(),
@@ -963,13 +1058,13 @@ export const zReportValidationRequest = z.object({
     project_id: z.string().nullish(),
     random: z.boolean().nullish(),
     refresh_policy: zRefreshPolicy.optional(),
-    version: z.literal(1)
+    version: z.literal(2)
 });
 
 /**
  * ResultScope
  *
- * Occurrence-selection constraints for one contract-backed value.
+ * Occurrence-selection constraints for contract-backed fields.
  */
 export const zResultScope = z.object({
     analysis_type_ids: z.array(z.string()).optional(),
@@ -991,43 +1086,147 @@ export const zResultScope = z.object({
 });
 
 /**
- * AnalysisValue
+ * AggregationSpec
  *
- * One selected field addressed through the shared catalog grammar.
+ * Descriptive aggregation over one canonical field.
  */
-export const zAnalysisValue = z.object({
+export const zAggregationSpec = z.object({
     aggregation: z.enum([
-        'raw',
         'count',
         'count_distinct',
         'sum',
         'avg',
         'min',
         'max'
-    ]).optional().default('raw'),
+    ]),
     as: z.string().nullish(),
     field: z.string(),
-    filters: z.array(zInsightFilter).optional(),
     label: z.string().nullish(),
     scope: zResultScope.nullish()
 });
 
 /**
- * AnalysisConfig
+ * FieldSelection
  *
- * Grain, selected values, filters, and cross-value matching behavior.
+ * Canonical field reference with a stable result alias and occurrence scope.
  */
-export const zAnalysisConfig = z.object({
+export const zFieldSelection = z.object({
+    as: z.string().nullish(),
+    field: z.string(),
+    label: z.string().nullish(),
+    scope: zResultScope.nullish()
+});
+
+/**
+ * AlterationMatrixQuery
+ *
+ * Feature-by-entity alteration states with coverage-aware eligibility.
+ */
+export const zAlterationMatrixQuery = z.object({
+    alterations: z.array(zFieldSelection).min(1),
+    cell_limit: z.int().gte(1).lte(1000000).optional().default(250000),
+    entities: z.array(z.string()).optional(),
+    feature_set_ids: z.array(z.string()).optional(),
+    features: z.array(z.string()).min(1),
     filters: z.array(zInsightFilter).optional(),
-    grain: z.enum([
-        'sample',
-        'subject',
-        'run',
-        'feature',
-        'variant',
-        'file'
-    ]).optional().default('sample'),
-    join: z.enum(['outer', 'inner']).nullish(),
+    kind: z.literal('alteration_matrix').optional().default('alteration_matrix'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish()
+});
+
+/**
+ * AssociationQuery
+ *
+ * Coverage-aware descriptive co-occurrence counts and percentages.
+ */
+export const zAssociationQuery = z.object({
+    entities: z.array(z.string()).optional(),
+    feature_set_ids: z.array(z.string()).optional(),
+    features: z.array(z.string()).min(2),
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('association').optional().default('association'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish(),
+    state: z.array(zFieldSelection).min(1)
+});
+
+/**
+ * DistributionQuery
+ *
+ * Raw numeric or categorical distribution with optional splitting.
+ */
+export const zDistributionQuery = z.object({
+    bins: z.int().gte(1).lte(500).nullish(),
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('distribution').optional().default('distribution'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish(),
+    split_by: z.array(zFieldSelection).optional(),
+    summaries: z.array(z.enum([
+        'count',
+        'min',
+        'max',
+        'avg'
+    ])).optional(),
+    value: zFieldSelection
+});
+
+/**
+ * GenomeProfileQuery
+ *
+ * Values laid out over a genomic coordinate domain.
+ */
+export const zGenomeProfileQuery = z.object({
+    coordinate: zFieldSelection,
+    filters: z.array(zInsightFilter).optional(),
+    group_by: z.array(zFieldSelection).optional(),
+    kind: z.literal('genome_profile').optional().default('genome_profile'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish(),
+    value: zFieldSelection
+});
+
+/**
+ * GroupField
+ *
+ * Field used to define groups in a summary query.
+ */
+export const zGroupField = z.object({
+    as: z.string().nullish(),
+    field: z.string(),
+    label: z.string().nullish(),
+    scope: zResultScope.nullish()
+});
+
+/**
+ * MatrixQuery
+ *
+ * Bounded raw-value pivot across row and column identities.
+ */
+export const zMatrixQuery = z.object({
+    cell_limit: z.int().gte(1).lte(1000000).optional().default(250000),
+    columns: zFieldSelection,
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('matrix').optional().default('matrix'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    rows: zFieldSelection,
+    sampling: zDeterministicSampling.nullish(),
+    value: zFieldSelection
+});
+
+/**
+ * RelationshipQuery
+ *
+ * Matched two-measure relationship without inferential modeling.
+ */
+export const zRelationshipQuery = z.object({
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('relationship').optional().default('relationship'),
     limit: z.int().gte(1).lte(10000).optional().default(1000),
     match_by: z.enum([
         'sample',
@@ -1035,10 +1234,13 @@ export const zAnalysisConfig = z.object({
         'run',
         'feature',
         'variant',
-        'file'
-    ]).nullish(),
-    random: z.boolean().optional().default(false),
-    values: z.array(zAnalysisValue).min(1)
+        'file',
+        'row'
+    ]),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish(),
+    x: zFieldSelection,
+    y: zFieldSelection
 });
 
 /**
@@ -1086,6 +1288,29 @@ export const zAdminMembershipRead = z.object({
     project_id: z.string(),
     project_name: z.string(),
     role: zRoleRead
+});
+
+/**
+ * RowsQuery
+ *
+ * Identity-preserving retrieval of selected columns.
+ */
+export const zRowsQuery = z.object({
+    columns: z.array(zFieldSelection).min(1),
+    filters: z.array(zInsightFilter).optional(),
+    grain: z.enum([
+        'sample',
+        'subject',
+        'run',
+        'feature',
+        'variant',
+        'file',
+        'row'
+    ]),
+    kind: z.literal('rows').optional().default('rows'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish()
 });
 
 /**
@@ -1381,7 +1606,7 @@ export const zSampleRunRead = z.object({
 /**
  * SavedInsightSummary
  *
- * Compact insight resource returned by list endpoints.
+ * Compact insight list response.
  */
 export const zSavedInsightSummary = z.object({
     created_at: z.iso.datetime(),
@@ -1398,7 +1623,7 @@ export const zSavedInsightSummary = z.object({
 /**
  * SavedReportCreate
  *
- * Request contract for creating a saved report resource.
+ * Request contract for creating a saved report.
  */
 export const zSavedReportCreate = z.object({
     description: z.string().nullish(),
@@ -1410,13 +1635,13 @@ export const zSavedReportCreate = z.object({
     project_id: z.string().nullish(),
     random: z.boolean().nullish(),
     refresh_policy: zRefreshPolicy.optional(),
-    version: z.literal(1)
+    version: z.literal(2)
 });
 
 /**
  * SavedReportPatch
  *
- * Request contract for patching a saved report resource.
+ * Request contract for patching a saved report.
  */
 export const zSavedReportPatch = z.object({
     description: z.string().nullish(),
@@ -1427,13 +1652,13 @@ export const zSavedReportPatch = z.object({
     name: z.string().min(1).nullish(),
     random: z.boolean().nullish(),
     refresh_policy: zRefreshPolicy.nullish(),
-    version: z.literal(1).nullish()
+    version: z.literal(2).nullish()
 });
 
 /**
  * SavedReportRead
  *
- * Read contract containing persisted metadata and executable fields.
+ * Saved report metadata with its complete definition.
  */
 export const zSavedReportRead = z.object({
     created_at: z.iso.datetime(),
@@ -1449,13 +1674,13 @@ export const zSavedReportRead = z.object({
     report_id: z.string(),
     updated_at: z.iso.datetime(),
     url_slug: z.string(),
-    version: z.literal(1)
+    version: z.literal(2)
 });
 
 /**
  * SavedReportSummary
  *
- * Compact report resource returned by list endpoints.
+ * Compact report list response.
  */
 export const zSavedReportSummary = z.object({
     created_at: z.iso.datetime(),
@@ -1482,16 +1707,16 @@ export const zSavedResourceDuplicateRequest = z.object({
 /**
  * ScatterView
  *
- * Two numeric value bindings rendered as a scatter plot.
+ * Scatter rendering for relationship results.
  */
 export const zScatterView = z.object({
     colors: z.record(z.string(), z.string()).optional(),
     hidden_values: z.array(z.string()).optional(),
-    kind: z.literal('scatter'),
+    kind: z.literal('scatter').optional().default('scatter'),
     tooltips: z.array(z.string()).optional(),
-    x: z.string(),
+    x: z.string().nullish(),
     x_axis: zAxisConfig.nullish(),
-    y: z.string(),
+    y: z.string().nullish(),
     y_axis: zAxisConfig.nullish()
 });
 
@@ -1507,6 +1732,22 @@ export const zSearchResultRead = z.object({
     run_id: z.string().nullish(),
     sample_id: z.string().nullish(),
     sample_name: z.string().nullish()
+});
+
+/**
+ * SeriesQuery
+ *
+ * Ordered measurements over a semantic position domain.
+ */
+export const zSeriesQuery = z.object({
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('series').optional().default('series'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    measurements: z.array(zFieldSelection).min(1),
+    order_by: z.array(zQueryOrder).optional(),
+    position: zFieldSelection,
+    sampling: zDeterministicSampling.nullish(),
+    series_by: z.array(zFieldSelection).optional()
 });
 
 /**
@@ -1561,6 +1802,51 @@ export const zSetupStatusRead = z.object({
 });
 
 /**
+ * ShapeDraftCreate
+ *
+ * Project-scoped draft shape creation request.
+ */
+export const zShapeDraftCreate = z.object({
+    adapter_key: z.string(),
+    data_shape_id: z.string(),
+    definition: z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable()),
+    description: z.string().nullish(),
+    name: z.string().min(1)
+});
+
+/**
+ * ShapeDraftPatch
+ *
+ * Mutable fields accepted while a shape version remains a draft.
+ */
+export const zShapeDraftPatch = z.object({
+    adapter_key: z.string().nullish(),
+    definition: z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable()).nullish(),
+    representative_rows: z.array(z.record(z.string(), z.union([
+        z.record(z.string(), z.unknown()),
+        z.array(z.unknown()),
+        z.string(),
+        z.int(),
+        z.number(),
+        z.boolean()
+    ]).nullable())).optional()
+});
+
+/**
  * SignupRequest
  *
  * Credentials and optional profile name for public account creation.
@@ -1574,11 +1860,71 @@ export const zSignupRequest = z.object({
 /**
  * SortConfig
  *
- * A table sort binding to an identity or value alias.
+ * Table sort binding retained as view formatting.
  */
 export const zSortConfig = z.object({
     by: z.string(),
     direction: z.enum(['asc', 'desc']).optional().default('asc')
+});
+
+/**
+ * SpecializedView
+ *
+ * Domain-aware rendering with bindings supplied by its typed query.
+ */
+export const zSpecializedView = z.object({
+    hidden_values: z.array(z.string()).optional(),
+    kind: z.enum([
+        'oncoprint',
+        'lollipop',
+        'genome_profile',
+        'survival',
+        'timeline',
+        'association_matrix'
+    ]),
+    options: z.record(z.string(), z.unknown()).optional()
+});
+
+/**
+ * SummaryQuery
+ *
+ * Grouped descriptive aggregation with explicit calculations.
+ */
+export const zSummaryQuery = z.object({
+    aggregations: z.array(zAggregationSpec).min(1),
+    calculations: z.array(zCalculationSpec).optional(),
+    filters: z.array(zInsightFilter).optional(),
+    grain: z.enum([
+        'sample',
+        'subject',
+        'run',
+        'feature',
+        'variant',
+        'file',
+        'row'
+    ]),
+    group_by: z.array(zGroupField).optional(),
+    kind: z.literal('summary').optional().default('summary'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish()
+});
+
+/**
+ * SurvivalQuery
+ *
+ * Representable time-to-event input requiring a compatible provider.
+ */
+export const zSurvivalQuery = z.object({
+    duration: zFieldSelection,
+    event: zFieldSelection,
+    filters: z.array(zInsightFilter).optional(),
+    group_by: z.array(zFieldSelection).optional(),
+    kind: z.literal('survival').optional().default('survival'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    provider: zProviderSettings,
+    sampling: zDeterministicSampling.nullish()
 });
 
 /**
@@ -1611,7 +1957,7 @@ export const zDatabaseSummaryRead = z.object({
 /**
  * TableView
  *
- * Table formatting over grain identities and ordered analysis values.
+ * Tabular rendering for row-like typed results.
  */
 export const zTableView = z.object({
     hidden_values: z.array(z.string()).optional(),
@@ -1624,7 +1970,7 @@ export const zTableView = z.object({
 /**
  * Threshold
  *
- * A metric display threshold with a stable severity label.
+ * Metric threshold with a stable label and optional color.
  */
 export const zThreshold = z.object({
     color: z.string().nullish(),
@@ -1635,157 +1981,32 @@ export const zThreshold = z.object({
 /**
  * MetricView
  *
- * One value rendered as a headline metric.
+ * Single descriptive value rendering.
  */
 export const zMetricView = z.object({
     hidden_values: z.array(z.string()).optional(),
-    kind: z.literal('metric'),
+    kind: z.literal('metric').optional().default('metric'),
     number_format: zNumberFormat.nullish(),
     thresholds: z.array(zThreshold).optional(),
-    value: z.string()
+    value: z.string().nullish()
 });
 
 /**
- * InsightExecuteRequest
+ * TimelineQuery
  *
- * Flat payload for executing an ad hoc or saved insight.
+ * Subject events laid out over absolute or relative time.
  */
-export const zInsightExecuteRequest = z.object({
-    analysis: zAnalysisConfig.nullish(),
-    description: z.string().nullish(),
-    export: z.boolean().optional().default(false),
-    limit: z.int().gte(1).lte(10000).nullish(),
-    name: z.string().nullish(),
-    project_id: z.string().nullish(),
-    random: z.boolean().nullish(),
-    refresh: z.boolean().optional().default(false),
-    version: z.literal(1).nullish(),
-    view: z.discriminatedUnion('kind', [
-        zTableView,
-        zScatterView,
-        zMetricView,
-        zHistogramView,
-        zCategoryChartView.extend({ kind: z.literal('area') }),
-        zCategoryChartView.extend({ kind: z.literal('bar') }),
-        zCategoryChartView.extend({ kind: z.literal('donut') }),
-        zCategoryChartView.extend({ kind: z.literal('line') }),
-        zCategoryChartView.extend({ kind: z.literal('pie') }),
-        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
-        zBoxplotView,
-        zHeatmapView
-    ]).nullish()
-});
-
-/**
- * InsightValidationRequest
- *
- * Flat insight definition to validate and explain.
- */
-export const zInsightValidationRequest = z.object({
-    analysis: zAnalysisConfig,
-    description: z.string().nullish(),
-    name: z.string().nullish(),
-    project_id: z.string().nullish(),
-    version: z.literal(1),
-    view: z.discriminatedUnion('kind', [
-        zTableView,
-        zScatterView,
-        zMetricView,
-        zHistogramView,
-        zCategoryChartView.extend({ kind: z.literal('area') }),
-        zCategoryChartView.extend({ kind: z.literal('bar') }),
-        zCategoryChartView.extend({ kind: z.literal('donut') }),
-        zCategoryChartView.extend({ kind: z.literal('line') }),
-        zCategoryChartView.extend({ kind: z.literal('pie') }),
-        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
-        zBoxplotView,
-        zHeatmapView
-    ])
-});
-
-/**
- * SavedInsightCreate
- *
- * Request contract for creating a saved insight resource.
- */
-export const zSavedInsightCreate = z.object({
-    analysis: zAnalysisConfig,
-    description: z.string().nullish(),
-    insight_id: z.string().nullish(),
-    name: z.string().min(1),
-    project_id: z.string().nullish(),
-    version: z.literal(1),
-    view: z.discriminatedUnion('kind', [
-        zTableView,
-        zScatterView,
-        zMetricView,
-        zHistogramView,
-        zCategoryChartView.extend({ kind: z.literal('area') }),
-        zCategoryChartView.extend({ kind: z.literal('bar') }),
-        zCategoryChartView.extend({ kind: z.literal('donut') }),
-        zCategoryChartView.extend({ kind: z.literal('line') }),
-        zCategoryChartView.extend({ kind: z.literal('pie') }),
-        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
-        zBoxplotView,
-        zHeatmapView
-    ])
-});
-
-/**
- * SavedInsightPatch
- *
- * Request contract for patching a saved insight resource.
- */
-export const zSavedInsightPatch = z.object({
-    analysis: zAnalysisConfig.nullish(),
-    description: z.string().nullish(),
-    name: z.string().min(1).nullish(),
-    version: z.literal(1).nullish(),
-    view: z.discriminatedUnion('kind', [
-        zTableView,
-        zScatterView,
-        zMetricView,
-        zHistogramView,
-        zCategoryChartView.extend({ kind: z.literal('area') }),
-        zCategoryChartView.extend({ kind: z.literal('bar') }),
-        zCategoryChartView.extend({ kind: z.literal('donut') }),
-        zCategoryChartView.extend({ kind: z.literal('line') }),
-        zCategoryChartView.extend({ kind: z.literal('pie') }),
-        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
-        zBoxplotView,
-        zHeatmapView
-    ]).nullish()
-});
-
-/**
- * SavedInsightRead
- *
- * Read contract containing persisted metadata and executable fields.
- */
-export const zSavedInsightRead = z.object({
-    analysis: zAnalysisConfig,
-    created_at: z.iso.datetime(),
-    description: z.string().nullish(),
-    insight_id: z.string(),
-    name: z.string(),
-    project_id: z.string().nullish(),
-    updated_at: z.iso.datetime(),
-    url_slug: z.string(),
-    version: z.literal(1),
-    view: z.discriminatedUnion('kind', [
-        zTableView,
-        zScatterView,
-        zMetricView,
-        zHistogramView,
-        zCategoryChartView.extend({ kind: z.literal('area') }),
-        zCategoryChartView.extend({ kind: z.literal('bar') }),
-        zCategoryChartView.extend({ kind: z.literal('donut') }),
-        zCategoryChartView.extend({ kind: z.literal('line') }),
-        zCategoryChartView.extend({ kind: z.literal('pie') }),
-        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
-        zBoxplotView,
-        zHeatmapView
-    ])
+export const zTimelineQuery = z.object({
+    end: zFieldSelection.nullish(),
+    filters: z.array(zInsightFilter).optional(),
+    kind: z.literal('timeline').optional().default('timeline'),
+    label: zFieldSelection.nullish(),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    sampling: zDeterministicSampling.nullish(),
+    start: zFieldSelection,
+    subject: zFieldSelection,
+    track: zFieldSelection.nullish()
 });
 
 /**
@@ -1886,6 +2107,268 @@ export const zValidationError = z.object({
  */
 export const zHttpValidationError = z.object({
     detail: z.array(zValidationError).optional()
+});
+
+/**
+ * VariantPositionQuery
+ *
+ * Variant recurrence over transcript or protein position.
+ */
+export const zVariantPositionQuery = z.object({
+    annotation_contract_ids: z.array(z.string()).optional(),
+    color_by: zFieldSelection.nullish(),
+    filters: z.array(zInsightFilter).optional(),
+    frequency: zFieldSelection,
+    kind: z.literal('variant_position').optional().default('variant_position'),
+    limit: z.int().gte(1).lte(10000).optional().default(1000),
+    order_by: z.array(zQueryOrder).optional(),
+    position: zFieldSelection,
+    sampling: zDeterministicSampling.nullish()
+});
+
+/**
+ * InsightExecuteRequest
+ *
+ * Flat payload for executing an ad hoc or saved insight.
+ */
+export const zInsightExecuteRequest = z.object({
+    description: z.string().nullish(),
+    export: z.boolean().optional().default(false),
+    limit: z.int().gte(1).lte(10000).nullish(),
+    name: z.string().nullish(),
+    project_id: z.string().nullish(),
+    query: z.discriminatedUnion('kind', [
+        zRowsQuery,
+        zSummaryQuery,
+        zRelationshipQuery,
+        zDistributionQuery,
+        zSeriesQuery,
+        zMatrixQuery,
+        zAlterationMatrixQuery,
+        zVariantPositionQuery,
+        zGenomeProfileQuery,
+        zSurvivalQuery,
+        zTimelineQuery,
+        zAssociationQuery
+    ]).nullish(),
+    random: z.boolean().nullish(),
+    refresh: z.boolean().optional().default(false),
+    version: z.literal(2).nullish(),
+    view: z.discriminatedUnion('kind', [
+        zTableView,
+        zScatterView,
+        zMetricView,
+        zHistogramView,
+        zCategoryChartView.extend({ kind: z.literal('area') }),
+        zCategoryChartView.extend({ kind: z.literal('bar') }),
+        zCategoryChartView.extend({ kind: z.literal('donut') }),
+        zCategoryChartView.extend({ kind: z.literal('line') }),
+        zCategoryChartView.extend({ kind: z.literal('pie') }),
+        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
+        zBoxplotView.extend({ kind: z.literal('boxplot') }),
+        zBoxplotView.extend({ kind: z.literal('violin') }),
+        zHeatmapView,
+        zSpecializedView.extend({ kind: z.literal('association_matrix') }),
+        zSpecializedView.extend({ kind: z.literal('genome_profile') }),
+        zSpecializedView.extend({ kind: z.literal('lollipop') }),
+        zSpecializedView.extend({ kind: z.literal('oncoprint') }),
+        zSpecializedView.extend({ kind: z.literal('survival') }),
+        zSpecializedView.extend({ kind: z.literal('timeline') })
+    ]).nullish()
+});
+
+/**
+ * InsightValidationRequest
+ *
+ * Flat insight definition to validate and explain.
+ */
+export const zInsightValidationRequest = z.object({
+    description: z.string().nullish(),
+    name: z.string().min(1),
+    project_id: z.string().nullish(),
+    query: z.discriminatedUnion('kind', [
+        zRowsQuery,
+        zSummaryQuery,
+        zRelationshipQuery,
+        zDistributionQuery,
+        zSeriesQuery,
+        zMatrixQuery,
+        zAlterationMatrixQuery,
+        zVariantPositionQuery,
+        zGenomeProfileQuery,
+        zSurvivalQuery,
+        zTimelineQuery,
+        zAssociationQuery
+    ]),
+    version: z.literal(2),
+    view: z.discriminatedUnion('kind', [
+        zTableView,
+        zScatterView,
+        zMetricView,
+        zHistogramView,
+        zCategoryChartView.extend({ kind: z.literal('area') }),
+        zCategoryChartView.extend({ kind: z.literal('bar') }),
+        zCategoryChartView.extend({ kind: z.literal('donut') }),
+        zCategoryChartView.extend({ kind: z.literal('line') }),
+        zCategoryChartView.extend({ kind: z.literal('pie') }),
+        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
+        zBoxplotView.extend({ kind: z.literal('boxplot') }),
+        zBoxplotView.extend({ kind: z.literal('violin') }),
+        zHeatmapView,
+        zSpecializedView.extend({ kind: z.literal('association_matrix') }),
+        zSpecializedView.extend({ kind: z.literal('genome_profile') }),
+        zSpecializedView.extend({ kind: z.literal('lollipop') }),
+        zSpecializedView.extend({ kind: z.literal('oncoprint') }),
+        zSpecializedView.extend({ kind: z.literal('survival') }),
+        zSpecializedView.extend({ kind: z.literal('timeline') })
+    ])
+});
+
+/**
+ * SavedInsightCreate
+ *
+ * Request contract for creating a saved v2 insight.
+ */
+export const zSavedInsightCreate = z.object({
+    description: z.string().nullish(),
+    insight_id: z.string().nullish(),
+    name: z.string().min(1),
+    preview_fingerprint: z.string().length(64),
+    project_id: z.string().nullish(),
+    query: z.discriminatedUnion('kind', [
+        zRowsQuery,
+        zSummaryQuery,
+        zRelationshipQuery,
+        zDistributionQuery,
+        zSeriesQuery,
+        zMatrixQuery,
+        zAlterationMatrixQuery,
+        zVariantPositionQuery,
+        zGenomeProfileQuery,
+        zSurvivalQuery,
+        zTimelineQuery,
+        zAssociationQuery
+    ]),
+    version: z.literal(2),
+    view: z.discriminatedUnion('kind', [
+        zTableView,
+        zScatterView,
+        zMetricView,
+        zHistogramView,
+        zCategoryChartView.extend({ kind: z.literal('area') }),
+        zCategoryChartView.extend({ kind: z.literal('bar') }),
+        zCategoryChartView.extend({ kind: z.literal('donut') }),
+        zCategoryChartView.extend({ kind: z.literal('line') }),
+        zCategoryChartView.extend({ kind: z.literal('pie') }),
+        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
+        zBoxplotView.extend({ kind: z.literal('boxplot') }),
+        zBoxplotView.extend({ kind: z.literal('violin') }),
+        zHeatmapView,
+        zSpecializedView.extend({ kind: z.literal('association_matrix') }),
+        zSpecializedView.extend({ kind: z.literal('genome_profile') }),
+        zSpecializedView.extend({ kind: z.literal('lollipop') }),
+        zSpecializedView.extend({ kind: z.literal('oncoprint') }),
+        zSpecializedView.extend({ kind: z.literal('survival') }),
+        zSpecializedView.extend({ kind: z.literal('timeline') })
+    ])
+});
+
+/**
+ * SavedInsightPatch
+ *
+ * Request contract for patching a saved v2 insight.
+ */
+export const zSavedInsightPatch = z.object({
+    description: z.string().nullish(),
+    name: z.string().min(1).nullish(),
+    preview_fingerprint: z.string().length(64).nullish(),
+    query: z.discriminatedUnion('kind', [
+        zRowsQuery,
+        zSummaryQuery,
+        zRelationshipQuery,
+        zDistributionQuery,
+        zSeriesQuery,
+        zMatrixQuery,
+        zAlterationMatrixQuery,
+        zVariantPositionQuery,
+        zGenomeProfileQuery,
+        zSurvivalQuery,
+        zTimelineQuery,
+        zAssociationQuery
+    ]).nullish(),
+    version: z.literal(2).nullish(),
+    view: z.discriminatedUnion('kind', [
+        zTableView,
+        zScatterView,
+        zMetricView,
+        zHistogramView,
+        zCategoryChartView.extend({ kind: z.literal('area') }),
+        zCategoryChartView.extend({ kind: z.literal('bar') }),
+        zCategoryChartView.extend({ kind: z.literal('donut') }),
+        zCategoryChartView.extend({ kind: z.literal('line') }),
+        zCategoryChartView.extend({ kind: z.literal('pie') }),
+        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
+        zBoxplotView.extend({ kind: z.literal('boxplot') }),
+        zBoxplotView.extend({ kind: z.literal('violin') }),
+        zHeatmapView,
+        zSpecializedView.extend({ kind: z.literal('association_matrix') }),
+        zSpecializedView.extend({ kind: z.literal('genome_profile') }),
+        zSpecializedView.extend({ kind: z.literal('lollipop') }),
+        zSpecializedView.extend({ kind: z.literal('oncoprint') }),
+        zSpecializedView.extend({ kind: z.literal('survival') }),
+        zSpecializedView.extend({ kind: z.literal('timeline') })
+    ]).nullish()
+});
+
+/**
+ * SavedInsightRead
+ *
+ * Saved insight metadata with its complete v2 envelope.
+ */
+export const zSavedInsightRead = z.object({
+    created_at: z.iso.datetime(),
+    description: z.string().nullish(),
+    insight_id: z.string(),
+    name: z.string(),
+    project_id: z.string().nullish(),
+    query: z.discriminatedUnion('kind', [
+        zRowsQuery,
+        zSummaryQuery,
+        zRelationshipQuery,
+        zDistributionQuery,
+        zSeriesQuery,
+        zMatrixQuery,
+        zAlterationMatrixQuery,
+        zVariantPositionQuery,
+        zGenomeProfileQuery,
+        zSurvivalQuery,
+        zTimelineQuery,
+        zAssociationQuery
+    ]),
+    updated_at: z.iso.datetime(),
+    url_slug: z.string(),
+    version: z.literal(2),
+    view: z.discriminatedUnion('kind', [
+        zTableView,
+        zScatterView,
+        zMetricView,
+        zHistogramView,
+        zCategoryChartView.extend({ kind: z.literal('area') }),
+        zCategoryChartView.extend({ kind: z.literal('bar') }),
+        zCategoryChartView.extend({ kind: z.literal('donut') }),
+        zCategoryChartView.extend({ kind: z.literal('line') }),
+        zCategoryChartView.extend({ kind: z.literal('pie') }),
+        zCategoryChartView.extend({ kind: z.literal('stacked_bar') }),
+        zBoxplotView.extend({ kind: z.literal('boxplot') }),
+        zBoxplotView.extend({ kind: z.literal('violin') }),
+        zHeatmapView,
+        zSpecializedView.extend({ kind: z.literal('association_matrix') }),
+        zSpecializedView.extend({ kind: z.literal('genome_profile') }),
+        zSpecializedView.extend({ kind: z.literal('lollipop') }),
+        zSpecializedView.extend({ kind: z.literal('oncoprint') }),
+        zSpecializedView.extend({ kind: z.literal('survival') }),
+        zSpecializedView.extend({ kind: z.literal('timeline') })
+    ])
 });
 
 export const zChatWithAiBody = zAiChatRequest;
@@ -2194,6 +2677,151 @@ export const zPatchProjectPath = z.object({
  * Successful Response
  */
 export const zPatchProjectResponse = zProjectRead;
+
+export const zListCatalogDatasetsPath = z.object({
+    project_id: z.string()
+});
+
+export const zListCatalogDatasetsQuery = z.object({
+    search: z.string().nullish(),
+    limit: z.int().gte(1).lte(100).optional().default(50),
+    offset: z.int().gte(0).optional().default(0)
+});
+
+/**
+ * Response List Catalog Datasets
+ *
+ * Successful Response
+ */
+export const zListCatalogDatasetsResponse = z.record(z.string(), z.unknown());
+
+export const zCreateCatalogDatasetBody = zDataContractCreate;
+
+export const zCreateCatalogDatasetPath = z.object({
+    project_id: z.string()
+});
+
+/**
+ * Response Create Catalog Dataset
+ *
+ * Successful Response
+ */
+export const zCreateCatalogDatasetResponse = z.record(z.string(), z.unknown());
+
+export const zDescribeCatalogDatasetPath = z.object({
+    project_id: z.string(),
+    data_contract_id: z.string()
+});
+
+/**
+ * Response Describe Catalog Dataset
+ *
+ * Successful Response
+ */
+export const zDescribeCatalogDatasetResponse = z.record(z.string(), z.unknown());
+
+export const zProfileCatalogDatasetPath = z.object({
+    project_id: z.string(),
+    data_contract_id: z.string()
+});
+
+/**
+ * Response Profile Catalog Dataset
+ *
+ * Successful Response
+ */
+export const zProfileCatalogDatasetResponse = z.record(z.string(), z.unknown());
+
+export const zReplaceCatalogDatasetRecordsBody = zManagedRecordsReplace;
+
+export const zReplaceCatalogDatasetRecordsPath = z.object({
+    project_id: z.string(),
+    data_contract_id: z.string()
+});
+
+/**
+ * Response Replace Catalog Dataset Records
+ *
+ * Successful Response
+ */
+export const zReplaceCatalogDatasetRecordsResponse = z.record(z.string(), z.unknown());
+
+export const zGetCatalogFieldProfilePath = z.object({
+    project_id: z.string()
+});
+
+export const zGetCatalogFieldProfileQuery = z.object({
+    field: z.string()
+});
+
+/**
+ * Response Get Catalog Field Profile
+ *
+ * Successful Response
+ */
+export const zGetCatalogFieldProfileResponse = z.record(z.string(), z.unknown());
+
+export const zListCatalogFieldValuesPath = z.object({
+    project_id: z.string()
+});
+
+export const zListCatalogFieldValuesQuery = z.object({
+    field: z.string(),
+    limit: z.int().gte(1).lte(100).optional().default(20)
+});
+
+/**
+ * Response List Catalog Field Values
+ *
+ * Successful Response
+ */
+export const zListCatalogFieldValuesResponse = z.record(z.string(), z.unknown());
+
+export const zSearchCatalogFieldsPath = z.object({
+    project_id: z.string()
+});
+
+export const zSearchCatalogFieldsQuery = z.object({
+    search: z.string().nullish(),
+    query_kind: z.string().nullish(),
+    scalar_type: z.array(z.string()).nullish(),
+    purpose: z.array(z.string()).nullish(),
+    limit: z.int().gte(1).lte(200).optional().default(100),
+    offset: z.int().gte(0).optional().default(0)
+});
+
+/**
+ * Response Search Catalog Fields
+ *
+ * Successful Response
+ */
+export const zSearchCatalogFieldsResponse = z.record(z.string(), z.unknown());
+
+export const zListCatalogJoinsPath = z.object({
+    project_id: z.string()
+});
+
+export const zListCatalogJoinsQuery = z.object({
+    data_contract_id: z.string().nullish()
+});
+
+/**
+ * Response List Catalog Joins
+ *
+ * Successful Response
+ */
+export const zListCatalogJoinsResponse = z.record(z.string(), z.unknown());
+
+export const zListCatalogQueryFamiliesPath = z.object({
+    project_id: z.string()
+});
+
+/**
+ * Response List Catalog Query Families
+ *
+ * Successful Response
+ */
+export const zListCatalogQueryFamiliesResponse = z.record(z.string(), z.unknown());
 
 export const zListProjectFilesPath = z.object({
     project_id: z.string()
@@ -2605,6 +3233,47 @@ export const zListProjectSampleRunFilesPath = z.object({
  * Successful Response
  */
 export const zListProjectSampleRunFilesResponse = z.array(zFileRead);
+
+export const zCreateShapeDraftBody = zShapeDraftCreate;
+
+export const zCreateShapeDraftPath = z.object({
+    project_id: z.string()
+});
+
+/**
+ * Response Create Shape Draft
+ *
+ * Successful Response
+ */
+export const zCreateShapeDraftResponse = z.record(z.string(), z.unknown());
+
+export const zPatchShapeDraftBody = zShapeDraftPatch;
+
+export const zPatchShapeDraftPath = z.object({
+    project_id: z.string(),
+    data_shape_id: z.string(),
+    version: z.int()
+});
+
+/**
+ * Response Patch Shape Draft
+ *
+ * Successful Response
+ */
+export const zPatchShapeDraftResponse = z.record(z.string(), z.unknown());
+
+export const zPublishShapeVersionPath = z.object({
+    project_id: z.string(),
+    data_shape_id: z.string(),
+    version: z.int()
+});
+
+/**
+ * Response Publish Shape Version
+ *
+ * Successful Response
+ */
+export const zPublishShapeVersionResponse = z.record(z.string(), z.unknown());
 
 export const zGetRenderedReportPath = z.object({
     rendered_report_id: z.string()

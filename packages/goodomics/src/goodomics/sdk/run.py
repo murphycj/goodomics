@@ -459,8 +459,8 @@ def _metric_contract_fields(
     """Build data contract field definitions for buffered SDK metrics."""
 
     # The SDK contract is stable, but each metric name becomes a field inside
-    # that contract. Field definitions let report/query builders discover units,
-    # labels, value types, and the analytical column that stores the value.
+    # that contract. Field definitions expose semantics only; the entity adapter
+    # owns canonical sample-metric routing.
     fields: dict[str, DataContractField] = {}
     for metric in metrics:
         field_id = f"{data_contract_id}:{metric.name}"
@@ -472,23 +472,11 @@ def _metric_contract_fields(
             DataContractField(
                 data_contract_id=data_contract_id,
                 field_id=field_id,
-                field_role="metric",
-                entity_scope="sample",
                 display_name=metric.name,
-                value_type=value_type,
+                purpose="value",
+                scalar_type=value_type,
+                semantic_type="metric",
                 unit=metric.unit,
-                primary_table="sample_metrics",
-                physical_tables_json={"tables": ["sample_metrics"]},
-                query_ref_json={
-                    # query_ref_json tells contract-first query compilation how
-                    # to find this field in the generic sample_metrics table.
-                    "table": "sample_metrics",
-                    "field_column": "field_id",
-                    "field_value": field_id,
-                    "value_column": (
-                        "value_numeric" if value_type == "numeric" else "value_string"
-                    ),
-                },
                 metadata_json={"producer_tool": "goodomics-sdk"},
             ),
         )

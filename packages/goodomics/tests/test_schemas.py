@@ -318,12 +318,13 @@ def test_data_contract_specs_materialize_contract_and_field_models() -> None:
 
     assert contract.data_contract_id == "demo:metrics"
     assert contract.description == "Demo metric fields."
-    assert contract.query_modes_json == {"modes": ["sample", "metric"]}
+    assert contract.data_shape_id == "entity"
+    assert contract.shape_bindings_json["observation_kind"] == "generic_metrics"
     assert field.data_contract_id == "demo:metrics"
     assert field.field_id == "demo.value"
     assert field.unit == "count"
-    assert field.primary_table == "sample_metrics"
-    assert field.physical_tables_json == {"tables": ["sample_metrics"]}
+    assert field.purpose == "value"
+    assert field.scalar_type == "numeric"
 
 
 def test_cbioportal_contract_mapping_covers_fixture_formats() -> None:

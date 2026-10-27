@@ -24,37 +24,30 @@ class DataContractProvider(Protocol):
 
     def contracts(self) -> list[DataContract]:
         """Return the contracts this provider can emit."""
-        ...
+
+        raise NotImplementedError
 
 
 def contract(
     data_contract_id: str,
     *,
     name: str,
-    data_type: str,
-    producer_tool: str | None = None,
-    feature_type: str | None = None,
-    value_type: str | None = None,
-    query_modes: Iterable[str],
-    entity_grain: str | None = None,
-    value_semantics: str | None = None,
+    data_shape_id: str,
+    data_shape_version: int = 1,
+    bindings: dict[str, object] | None = None,
+    search_tags: Iterable[str] = (),
     description: str | None = None,
+    metadata_json: dict[str, object] | None = None,
 ) -> DataContract:
-    """Create a reusable semantic data contract."""
-    # Contract records are contracts, not source/run instances; provenance stays
-    # on imports, runs, files, and analytical records.
+    """Create a reusable contract pinned to a published semantic shape."""
+
     return DataContract(
         data_contract_id=data_contract_id,
         name=name,
-        data_type=data_type,
-        feature_type=feature_type,
-        value_type=value_type,
-        entity_grain=entity_grain,
-        value_semantics=value_semantics,
-        query_modes_json={"modes": list(query_modes)},
-        intrinsic_producer_families_json=(
-            {"families": [producer_tool]} if producer_tool else {}
-        ),
+        data_shape_id=data_shape_id,
+        data_shape_version=data_shape_version,
+        shape_bindings_json=bindings or {},
+        search_tags=list(dict.fromkeys(search_tags)),
         description=description,
-        metadata_json={"contract_scope": "semantic_contract"},
+        metadata_json=metadata_json or {},
     )

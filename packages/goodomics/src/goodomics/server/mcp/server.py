@@ -69,6 +69,131 @@ def create_mcp_server(context: QueryToolContext) -> FastMCP:
         )
 
     @mcp.tool()
+    async def search_datasets(
+        project: str,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search the project semantic runtime catalog."""
+
+        return await _logged_tool_call(
+            "search_datasets",
+            {"project": project, "query": query, "limit": limit, "offset": offset},
+            tools.search_datasets(
+                project=project, query=query, limit=limit, offset=offset
+            ),
+        )
+
+    @mcp.tool()
+    async def describe_dataset(project: str, data_contract_id: str) -> dict[str, Any]:
+        """Describe a semantic dataset, fields, joins, and capabilities."""
+
+        return await _logged_tool_call(
+            "describe_dataset",
+            {"project": project, "data_contract_id": data_contract_id},
+            tools.describe_dataset(project=project, data_contract_id=data_contract_id),
+        )
+
+    @mcp.tool()
+    async def search_fields(
+        project: str,
+        query: str | None = None,
+        query_kind: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search canonical fields by typed-query compatibility."""
+
+        return await _logged_tool_call(
+            "search_fields",
+            {
+                "project": project,
+                "query": query,
+                "query_kind": query_kind,
+                "limit": limit,
+                "offset": offset,
+            },
+            tools.search_fields(
+                project=project,
+                query=query,
+                query_kind=query_kind,
+                limit=limit,
+                offset=offset,
+            ),
+        )
+
+    @mcp.tool()
+    async def find_dataset_joins(
+        project: str, data_contract_id: str | None = None
+    ) -> dict[str, Any]:
+        """Find project-visible joins by logical identity."""
+
+        return await _logged_tool_call(
+            "find_dataset_joins",
+            {"project": project, "data_contract_id": data_contract_id},
+            tools.find_dataset_joins(
+                project=project, data_contract_id=data_contract_id
+            ),
+        )
+
+    @mcp.tool()
+    async def list_field_values(
+        project: str, field: str, limit: int = 20
+    ) -> dict[str, Any]:
+        """List bounded observed categorical values for a canonical field."""
+
+        return await _logged_tool_call(
+            "list_field_values",
+            {"project": project, "field": field, "limit": limit},
+            tools.list_field_values(project=project, field=field, limit=limit),
+        )
+
+    @mcp.tool()
+    async def read_field_profile(project: str, field: str) -> dict[str, Any]:
+        """Read an optional disposable profile for one canonical field."""
+
+        return await _logged_tool_call(
+            "read_field_profile",
+            {"project": project, "field": field},
+            tools.read_field_profile(project=project, field=field),
+        )
+
+    @mcp.tool()
+    async def list_query_families(project: str) -> dict[str, Any]:
+        """List valid query families, views, and provider requirements."""
+
+        return await _logged_tool_call(
+            "list_query_families",
+            {"project": project},
+            tools.list_query_families(project=project),
+        )
+
+    @mcp.tool()
+    async def validate_insight_draft(
+        project: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Validate and explain a complete shared version 2 insight draft."""
+
+        return await _logged_tool_call(
+            "validate_insight_draft",
+            {"project": project, "definition": definition},
+            tools.validate_insight_draft(project=project, definition=definition),
+        )
+
+    @mcp.tool()
+    async def preview_insight_draft(
+        project: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute a bounded preview without saving the insight draft."""
+
+        return await _logged_tool_call(
+            "preview_insight_draft",
+            {"project": project, "definition": definition},
+            tools.preview_insight_draft(project=project, definition=definition),
+        )
+
+    @mcp.tool()
     async def resolve_project(reference: str, limit: int = 5) -> dict[str, Any]:
         """Resolve a human-readable project reference to candidates or one match."""
         return await _logged_tool_call(

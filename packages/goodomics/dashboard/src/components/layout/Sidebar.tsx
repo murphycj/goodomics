@@ -37,7 +37,7 @@ const navItems = [
   { suffix: "/runs", label: "Runs", icon: Gauge },
   { suffix: "/reports", label: "Reports", icon: FileText },
   { suffix: "/insights", label: "Insights", icon: BarChart3 },
-  { suffix: "/qc-policies", label: "QC policies", icon: Gauge },
+  // { suffix: "/qc-policies", label: "QC policies", icon: Gauge },
   { suffix: "/database", label: "Database", icon: Database },
   { suffix: "/settings", label: "Settings", icon: SettingsIcon },
 ] as const;

@@ -321,7 +321,7 @@ def _contract_from_meta(
         source_meta_file=meta.path.name,
     )
     updates: dict[str, Any] = {"project_id": project_id}
-    if contract.data_type == "feature_matrix":
+    if contract.shape_bindings_json.get("observation_kind") == "feature_matrix":
         updates["value_semantics"] = _value_semantics_from_meta(meta.values, contract)
     return contract.model_copy(update=updates)
 
@@ -497,26 +497,23 @@ def _add_attribute_definitions(
             DataContractField(
                 data_contract_id=contract.data_contract_id,
                 field_id=field_id,
-                field_role="attribute",
-                entity_scope=entity_scope,
                 display_name=column.replace("_", " ").title(),
-                value_type=value_type,
+                purpose="annotation",
+                scalar_type=value_type,
+                semantic_type="clinical_attribute",
                 description=table.descriptions.get(column),
-                priority=table.priorities.get(column),
-                primary_table="entity_attributes",
-                physical_tables_json={"tables": ["entity_attributes"]},
-                query_ref_json={
-                    "table": "entity_attributes",
-                    "field_column": "field_id",
-                    "field_value": field_id,
-                    "value_column": _attribute_value_column(value_type),
-                },
-                summary_json=_attribute_summary(
-                    value_type,
-                    [row.get(column) for row in table.rows],
+                priority=(
+                    int(table.priorities[column])
+                    if table.priorities.get(column, "").isdigit()
+                    else None
                 ),
+                domain_tags=[entity_scope, value_type],
                 metadata_json={
                     "source": "cbioportal_clinical",
+                    "summary": _attribute_summary(
+                        value_type,
+                        [row.get(column) for row in table.rows],
+                    ),
                 },
             )
         )
@@ -819,6 +816,18 @@ def _parse_gene_panel_matrix(
                         metadata_json={"source": "cbioportal_gene_panel_matrix"},
                     )
                 )
+            sample_run_id = context.run_id_for_sample(sample_id)
+            context.batch.feature_set_coverage.append(
+                UnresolvedAnalyticalRecord(
+                    data_contract_id=contract.data_contract_id,
+                    run_contract_id=f"{sample_run_id}:{contract.data_contract_id}",
+                    run_sample_id=_run_sample_id(sample_run_id, sample_id),
+                    sample_id=sample_id,
+                    feature_set_id=panel_id,
+                    status="profiled_unaltered",
+                    metadata_json={"source": "cbioportal_gene_panel_matrix"},
+                )
+            )
     _add_payload(context, contract, path, source_file_id, "gene_panel_matrix")
 
 
@@ -842,7 +851,9 @@ class FeatureMatrixBulkLoad:
         return not _use_duckdb_matrix_unpivot(self.path)
 
     def load(self, connection: Any) -> None:
-        feature_type = self.contract.feature_type or "generic_entity"
+        feature_type = str(
+            self.contract.shape_bindings_json.get("feature_domain") or "generic_entity"
+        )
         source = _feature_matrix_source_sql(
             self.path,
             feature_type=feature_type,
@@ -1569,18 +1580,10 @@ def _add_payload(
             DataContractField(
                 data_contract_id=payload_contract_id,
                 field_id=field_id,
-                field_role="payload",
-                entity_scope="sample",
                 display_name=path.stem.replace("_", " ").title(),
-                value_type="json",
-                primary_table="result_payloads",
-                physical_tables_json={"tables": ["result_payloads"]},
-                query_ref_json={
-                    "table": "result_payloads",
-                    "field_column": "field_id",
-                    "field_value": field_id,
-                    "value_column": "data_json",
-                },
+                purpose="value",
+                scalar_type="json",
+                semantic_type="structured_payload",
                 metadata_json={
                     "source": "cbioportal",
                     "payload_kind": payload_kind,

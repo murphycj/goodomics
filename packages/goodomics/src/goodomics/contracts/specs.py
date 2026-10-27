@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from importlib import resources
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from pydantic import Field
@@ -35,22 +35,41 @@ class DataContractFieldSpec(GoodomicsModel):
     metadata_json: JsonObject = Field(default_factory=dict)
 
     def to_model(self, data_contract_id: str) -> DataContractField:
+        """Convert a trusted built-in spec into public field semantics."""
+
+        purpose = {
+            "identifier": "key",
+            "key": "key",
+            "coordinate": "coordinate",
+            "annotation": "annotation",
+        }.get(self.field_role, "value")
+        scalar_type = {
+            "call": "categorical",
+            "matrix": "json",
+        }.get(self.value_type, self.value_type)
         return DataContractField(
             data_contract_id=data_contract_id,
             field_id=self.field_id,
-            field_role=self.field_role,
-            entity_scope=self.entity_scope,
             display_name=self.display_name,
-            value_type=self.value_type,
+            purpose=cast(Any, purpose),
+            scalar_type=cast(Any, scalar_type),
+            semantic_type=str(
+                self.metadata_json.get("semantic_type") or self.field_role
+            ),
             unit=self.unit,
             direction=self.direction,
             description=self.description,
-            priority=self.priority,
-            primary_table=self.primary_table,
-            physical_tables_json={"tables": list(self.physical_tables)},
-            query_ref_json=dict(self.query_ref_json),
-            summary_json=dict(self.summary_json),
-            metadata_json=dict(self.metadata_json),
+            priority=_priority_value(self.priority),
+            domain_tags=[
+                str(value)
+                for value in self.metadata_json.get("domain_tags", [])
+                if isinstance(value, str)
+            ],
+            metadata_json={
+                key: value
+                for key, value in self.metadata_json.items()
+                if key not in {"primary_table", "physical_tables", "query_ref"}
+            },
         )
 
 
@@ -75,27 +94,57 @@ class DataContractSpec(GoodomicsModel):
     fields: list[DataContractFieldSpec] = Field(default_factory=list)
 
     def to_model(self) -> DataContract:
+        """Convert a trusted source spec into dataset-level v2 semantics."""
+
+        shape_id = _shape_id_for_data_type(self.data_type)
+        bindings: JsonObject = {
+            "entity_type": _public_entity_grain(self.entity_grain),
+            "observation_kind": self.data_type,
+        }
+        if self.feature_type:
+            bindings["feature_domain"] = self.feature_type
+        if shape_id == "region":
+            bindings["coordinate_system"] = str(
+                self.metadata_json.get("coordinate_system") or "genomic"
+            )
+        if shape_id == "series":
+            bindings["position_domain"] = str(
+                self.metadata_json.get("position_domain") or "ordered"
+            )
+        if shape_id == "timeline":
+            bindings["time_origin"] = str(
+                self.metadata_json.get("time_origin") or "absolute_or_relative"
+            )
+        if shape_id == "records":
+            bindings["row_identity"] = str(
+                self.metadata_json.get("row_identity") or "row_id"
+            )
         return DataContract(
             data_contract_id=self.data_contract_id,
             name=self.name,
-            data_type=self.data_type,
-            feature_type=self.feature_type,
-            value_type=self.value_type,
-            unit=self.unit,
-            entity_grain=self.entity_grain,
-            value_semantics=self.value_semantics,
-            summary_json=dict(self.summary_json),
-            source_fingerprint=self.source_fingerprint,
-            query_modes_json={"modes": list(self.query_modes)},
-            intrinsic_producer_families_json={
-                "families": [
+            data_shape_id=shape_id,
+            data_shape_version=1,
+            shape_bindings_json={
+                key: value for key, value in bindings.items() if value
+            },
+            search_tags=list(
+                dict.fromkeys(
+                    [
+                        self.data_type,
+                        *self.query_modes,
+                        *([self.feature_type] if self.feature_type is not None else []),
+                    ]
+                )
+            ),
+            description=self.description,
+            metadata_json={
+                **self.metadata_json,
+                "producer_families": [
                     value
                     for value in (self.producer_tool, self.producer_pipeline)
                     if value
-                ]
+                ],
             },
-            description=self.description,
-            metadata_json=dict(self.metadata_json),
         )
 
     def field_models(self) -> list[DataContractField]:
@@ -165,3 +214,39 @@ def load_package_data_contract_specs() -> list[DataContractSpecFile]:
     data_contracts_from_specs(spec_files)
     data_contract_fields_from_specs(spec_files)
     return spec_files
+
+
+def _shape_id_for_data_type(data_type: str) -> str:
+    """Map trusted legacy source descriptors onto one built-in semantic shape."""
+
+    if data_type in {"feature_matrix", "feature_calls"}:
+        return "feature"
+    if data_type in {"small_variants", "structural_variants"}:
+        return "variant"
+    if data_type in {"copy_number_segments", "interval_values"}:
+        return "region"
+    if data_type in {"series", "ordered_series"}:
+        return "series"
+    if data_type in {"timeline", "timeline_events"}:
+        return "timeline"
+    if data_type in {"records", "record_table"}:
+        return "records"
+    if data_type in {"result_payload", "structured_result"}:
+        return "structured"
+    return "entity"
+
+
+def _public_entity_grain(value: str | None) -> str:
+    """Normalize internal run-sample storage grain to the public sample identity."""
+
+    return "sample" if value in {None, "run_sample"} else str(value)
+
+
+def _priority_value(value: str | None) -> int | None:
+    """Convert trusted textual priorities into a stable numeric ordering hint."""
+
+    if value is None:
+        return None
+    if value.isdigit():
+        return int(value)
+    return {"high": 100, "medium": 50, "low": 10}.get(value.lower())
