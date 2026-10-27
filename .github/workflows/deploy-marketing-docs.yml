@@ -16,7 +16,7 @@ jobs:
         steps:
             - name: Trigger marketing deployment
               env:
-                  GH_TOKEN: ${{ secrets.MARKETING_WORKFLOW_TOKEN }}
+                  GH_TOKEN: ${{ secrets.GOODOMICS_MARKETING_DEMO }}
               run: |
                   gh api \
                     --method POST \
